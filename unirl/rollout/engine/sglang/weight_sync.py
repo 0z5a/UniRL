@@ -1,21 +1,27 @@
 """Weight sync — the canonical sync ops + LoRA lifecycle, owned by one component.
 
-``WeightSync`` is a plain object the engine constructs over the seam: it takes the
-backend and the LoRA spec explicitly and owns all sync/LoRA state
-(``_lora_loaded`` / ``_active_adapter``). Method names mirror
-the frozen ``base.py`` surface minus ``track_prefix`` (the engine's forwards absorb
-that, along with the per-worker ``Worker.call`` dispatch concern), so a grep for a
+``WeightSync`` is a plain object the engine constructs over the seam: it takes
+the backend explicitly and owns all sync/LoRA state (``_lora_version`` /
+``_lora_loaded`` / ``_active_adapter``). Method names mirror the frozen
+``base.py`` surface minus ``track_prefix`` (the engine's forwards absorb that,
+along with the per-worker ``Worker.call`` dispatch concern), so a grep for a
 trainer-side entry point lands here.
 
-The transports declared are exactly what SGLang supports: tensor-bag, NCCL
-(init/transfer/destroy), LoRA-from-tensors, and the checksum query. There is no
-IPC method — the engine simply doesn't define ``update_weights_from_ipc``, so it
-inherits ``BaseRolloutEngine``'s ``NotImplementedError`` (SGLang has no IPC
-receiver).
+The transports declared are exactly what the predecessor supports: tensor-bag,
+NCCL (init/transfer/destroy), and LoRA-from-tensors. Two deliberate divergences
+from the ``sglang_diffusion`` component:
+
+- ``target_modules`` is NOT accepted or forwarded — the diffusion-side default
+  ``["transformer"]`` doesn't match LLM module naming; omitting the field lets
+  the SRT server accept all incoming weights correctly.
+- LoRA keys go to the wire RAW (HF-native ``model.layers.*``) — there is no
+  ``adapt_lora_for_sglang`` prefix-strip; the SRT LLM LoRA loader consumes the
+  PEFT layout directly.
 
 The "weights released" event: the engine's ``sleep()`` calls
-:meth:`mark_weights_released` after releasing memory (the released tags include the
-transformer weights), so ``lora_dirty`` flips and the next sync re-pushes.
+:meth:`mark_weights_released` after releasing weights, so ``lora_dirty`` flips
+and the next sync re-pushes; :attr:`active_adapter` stops tagging requests until
+then (otherwise SRT would reference a freed adapter).
 """
 
 from __future__ import annotations
@@ -25,8 +31,7 @@ from typing import Dict, List, Optional
 
 import torch
 
-from unirl.rollout.engine.sglang_diffusion.backends import Backend
-from unirl.utils.peft_merge import adapt_lora_for_sglang
+from unirl.rollout.engine.sglang.backends import Backend
 
 logger = logging.getLogger(__name__)
 
@@ -34,22 +39,12 @@ logger = logging.getLogger(__name__)
 class WeightSync:
     """Sync ops + LoRA lifecycle over the seam (one instance per engine)."""
 
-    def __init__(
-        self,
-        backend: Backend,
-        *,
-        pipeline_prefix: str,
-        target_modules: List[str],
-        uses_lora: bool,
-    ) -> None:
+    def __init__(self, backend: Backend, *, uses_lora: bool) -> None:
         self._backend = backend
-        # Pipeline prefix embedded in canonical LoRA wire keys, e.g. "transformer."
-        # for SD3/WAN or "model." for HunyuanImage3 — stripped before SGLang sees them.
-        self._pipeline_prefix = pipeline_prefix
-        self._target_modules = list(target_modules)
-        self._uses_lora = uses_lora
+        self._uses_lora = bool(uses_lora)
         self._active_adapter: Optional[str] = None
         self._lora_loaded = False
+        self._lora_version = 0
 
     # ------------------------------------------------------------------ #
     # Tensor-bag (SGLang one-bag payload per TP rank)
@@ -59,7 +54,6 @@ class WeightSync:
         self,
         *,
         serialized_named_tensors: List[str],
-        target_modules: Optional[List[str]] = None,
         load_format: Optional[str] = None,
         flush_cache: bool = True,
     ) -> None:
@@ -67,7 +61,6 @@ class WeightSync:
             raise ValueError("serialized_named_tensors must be non-empty")
         self._backend.update_from_tensor(
             serialized_named_tensors=serialized_named_tensors,
-            target_modules=list(target_modules or self._target_modules),
             load_format=load_format,
             flush_cache=flush_cache,
         )
@@ -102,17 +95,17 @@ class WeightSync:
         dtypes: List[str],
         shapes: List[List[int]],
         group_name: str,
-        target_modules: Optional[List[str]] = None,
         flush_cache: bool = True,
     ) -> None:
         if not names:
             raise ValueError("names must be non-empty for distributed update")
+        # sglang expects bare dtype strings like "bfloat16", not "torch.bfloat16".
+        clean_dtypes = [d.replace("torch.", "") if isinstance(d, str) else d for d in dtypes]
         self._backend.update_from_distributed(
             names=list(names),
-            dtypes=list(dtypes),
+            dtypes=clean_dtypes,
             shapes=[list(shape) for shape in shapes],
             group_name=str(group_name),
-            target_modules=list(target_modules or self._target_modules),
             flush_cache=flush_cache,
         )
 
@@ -120,7 +113,7 @@ class WeightSync:
         self._backend.destroy_weights_group(group_name=str(group_name))
 
     # ------------------------------------------------------------------ #
-    # LoRA tensor bag — wire-key adaptation
+    # LoRA tensor bag — versioned-nickname rotation
     # ------------------------------------------------------------------ #
 
     def set_lora_from_tensors(
@@ -132,59 +125,52 @@ class WeightSync:
     ) -> None:
         """Push a LoRA adapter from in-memory tensors.
 
-        The nickname is ``adapter_name`` verbatim on every push: SGLang's
-        diffusion ``_register_lora_state_dict`` clears and replaces the registry
-        entry for a re-used nickname and ``set_lora`` always reloads from
-        tensors, so same-name pushes serve fresh weights. Versioned nicknames
-        (the ``sglang`` rotation) leak here instead — the diffusion
-        ``lora_adapters`` registry never evicts other nicknames, so each sync
-        would strand one GPU-resident adapter copy (~34 MB/sync measured).
+        Rotates to a fresh VERSIONED name (``<name>_v<N>``) each sync — the
+        rotation is REQUIRED, not just defensive: upstream sglang hard-rejects
+        a duplicate ``lora_name`` (``lora_manager`` raises "already loaded" →
+        HTTP 400), so a fresh name is the only way to re-push at all. On the
+        legacy fork the failure modes were softer but worse — an explicit
+        /unload of the live adapter can stall for minutes under colocate, and
+        reusing the name can serve STALE weights, so the rollout policy never
+        actually updates (reward stays flat while the FSDP model trains).
+        Generation points at the latest version via :attr:`active_adapter`;
+        stale versions evict via SRT's LRU (``max_loaded_loras``).
         """
-        # Canonical wire keys are "<pipeline_prefix><module>.lora_A.weight"; SGLang's
-        # lora_layers dict is keyed from inside the transformer, so strip the prefix
-        # and inject ".alpha" keys (scale = alpha/rank).
-        stripped = adapt_lora_for_sglang(
-            lora_tensors,
-            pipeline_prefix=self._pipeline_prefix,
-            peft_config=peft_config,
+        nickname = self._next_lora_nickname(adapter_name)
+        self._backend.set_lora(
+            lora_name=nickname,
+            lora_tensors=lora_tensors,
+            config_dict=peft_config,
         )
-        nickname = adapter_name
-        self._backend.set_lora(lora_nickname=nickname, lora_tensors=stripped)
         self._active_adapter = nickname
         self._lora_loaded = True
-
-        layer_names = set()
-        for key in stripped:
-            if key.endswith(".alpha"):
-                continue
-            base = key
-            for suffix in (".lora_A.weight", ".lora_B.weight", ".lora_A", ".lora_B"):
-                if base.endswith(suffix):
-                    base = base[: -len(suffix)]
-                    break
-            layer_names.add(base)
         logger.info(
-            "SGLang LoRA loaded from tensors (adapter=%s, nickname=%s) — %d layers",
+            "sglang: LoRA adapter %r loaded as %r (%d tensor keys)",
             adapter_name,
             nickname,
-            len(layer_names),
+            len(lora_tensors),
         )
 
-    # ------------------------------------------------------------------ #
-    # Checksum query (vllm-omni-shape return)
-    # ------------------------------------------------------------------ #
-
-    def loaded_param_checksums(self, *, names: List[str]) -> Dict[int, List[Dict[str, str]]]:
-        output = self._backend.weights_checksum(module_names=list(names))
-        return {0: [{str(k): str(v) for k, v in output.items()}]}
+    def _next_lora_nickname(self, adapter_name: str) -> str:
+        self._lora_version += 1
+        return f"{adapter_name}_v{self._lora_version}"
 
     # ------------------------------------------------------------------ #
-    # Weights-released event + dirty state
+    # Weights-released event + active-adapter / dirty state
     # ------------------------------------------------------------------ #
 
     def mark_weights_released(self) -> None:
         """The engine released the runtime weights — the loaded LoRA pool is gone."""
         self._lora_loaded = False
+
+    @property
+    def active_adapter(self) -> Optional[str]:
+        """The adapter name generation should tag requests with (None = base).
+
+        Only set once an adapter has been pushed and not since invalidated by a
+        weight release; otherwise SRT serves the base model.
+        """
+        return self._active_adapter if self._lora_loaded else None
 
     @property
     def lora_dirty(self) -> bool:
