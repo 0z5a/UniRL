@@ -6,7 +6,7 @@ import time
 from typing import Any, Dict, Optional, Tuple
 
 import torch
-from hydra.utils import get_class, instantiate
+from hydra.utils import get_class, get_object, instantiate
 from omegaconf import DictConfig
 
 from unirl.distributed.group.placement import placement, remote
@@ -259,7 +259,13 @@ class DiffusionTrainer(BaseTrainer):
         target = getattr(pipeline_cfg, "_target_", None)
         if not isinstance(target, str):
             return None
-        pipeline_cls = get_class(target)
+        # ``_target_`` may point at the pipeline class (e.g. SD3Pipeline) OR at a
+        # factory classmethod (e.g. LTX2Pipeline.from_bundle, whose __init__ needs
+        # pre-built stages). ``get_class`` rejects the latter ("non-class of type
+        # 'method'"), so resolve the dotpath generically with ``get_object`` and
+        # recover the owning class from a bound (class)method via ``__self__``.
+        resolved = get_object(target)
+        pipeline_cls = resolved if isinstance(resolved, type) else getattr(resolved, "__self__", None)
         latent_shape_fn = getattr(pipeline_cls, "latent_shape", None)
         if latent_shape_fn is None:
             return None
