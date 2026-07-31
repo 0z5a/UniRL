@@ -51,3 +51,11 @@ repos:
         language: python
         pass_filenames: false
         always_run: true
+      # Experimental-tier boundaries: core never imports experimental,
+      # packages never import each other, requirements stay additive-only.
+      - id: check-experimental-boundaries
+        name: experimental-tier boundaries hold
+        entry: python scripts/check_experimental_boundaries.py
+        language: python
+        pass_filenames: false
+        always_run: true
