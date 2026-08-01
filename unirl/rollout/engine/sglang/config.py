@@ -18,7 +18,7 @@ from __future__ import annotations
 import random
 import socket
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from unirl.config.require import require
 from unirl.rollout.engine.base import BaseEngineConfig
@@ -174,9 +174,10 @@ class SGLangEngineConfig(BaseEngineConfig):
     samples_pre_expanded: bool = False
 
     # --- VLM multimodal ---
-    # Image token placeholder injected into the chat template at image
-    # positions.  Model-specific: e.g. "<|vision_start|><|image_pad|><|vision_end|>"
-    # for Qwen2.5-VL.  None (default) = text-only mode.
+    # Non-None selects the VLM adapter and loads AutoProcessor. Typed image
+    # content still goes through the checkpoint's official chat template and
+    # processor; this value is not injected as the complete image marker.
+    # None (default) selects text-only mode.
     image_token: Optional[str] = None
 
     # --- LLM sampling (forwarded to SGLang /generate sampling_params) ---
@@ -184,6 +185,10 @@ class SGLangEngineConfig(BaseEngineConfig):
     temperature: float = 0.7
     top_p: float = 0.9
     top_k: int = 0
+    # Exact tokenizer tokens excluded from response sampling via SGLang's
+    # logit_bias. This never changes prompt tokens. A train-side replay path
+    # must exclude the same ids before log-softmax to preserve log-prob parity.
+    response_forbidden_tokens: Optional[List[str]] = None
 
     # --- Chat template ---
     # System message prepended to every prompt (e.g. "/no_think" to suppress

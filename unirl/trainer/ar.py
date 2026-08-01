@@ -11,6 +11,7 @@ from omegaconf import DictConfig
 
 from unirl.distributed.group.placement import placement, remote
 from unirl.distributed.tensor import hydrate
+from unirl.models.qwen3_5.validation import validate_qwen3_5_training_contract
 from unirl.train.stack import TrainStepResult
 from unirl.trainer.base import BaseTrainer, build_sampling_dict, prepare_input_sample
 from unirl.types.sample import Sample
@@ -68,6 +69,12 @@ class ARTrainer(BaseTrainer):
         rollout_anchor_device: Optional[int] = None,
         enable_fsdp_offload: bool = True,
     ) -> None:
+        validate_qwen3_5_training_contract(
+            pipeline_cfg=pipeline_cfg,
+            backend_cfg=backend_cfg,
+            rollout_cfg=rollout_cfg,
+            stack_cfg=stack_cfg,
+        )
         super().__init__(cfg=cfg, logging_cfg=logging_cfg)
         self.batch_size = batch_size
         # "group" (textbook GRPO, default) or "global" (v1 baseline parity).
