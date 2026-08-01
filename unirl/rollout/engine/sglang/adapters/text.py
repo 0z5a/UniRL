@@ -122,7 +122,6 @@ class TextLMAdapter(ModelAdapter):
         return {
             "sampling_params": dict(sampling.block),
             "return_logprob": sampling.return_logprob,
-            "logprob_start_len": 0,
         }
 
     def apply_chat_template(self, messages: List[Dict[str, Any]]) -> List[int]:
