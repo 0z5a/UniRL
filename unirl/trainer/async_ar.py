@@ -19,11 +19,12 @@ slime's thread+asyncio). The async behavior is set by **two numeric knobs**:
   regime). ``>0`` = **off-policy continuous buffer**: generations may run ahead
   across syncs, bounded by eviction; the rollout-anchored DRPO ratio absorbs it.
 
-Generation is launched as **non-blocking Ray futures** by
-``RayGenerationDispatcher`` and reaped by ``AsyncRolloutScheduler`` on the
-single driver thread — no producer thread, no locks. Draining all in-flight
-generations before each weight sync is **mandatory** (the engine corrupts an
-in-flight generation when weights + KV cache update mid-flight); this is the
+Generation runs through :class:`~unirl.rollout.engine.asynchronous.AsyncBatchRolloutEngine`
+(non-blocking Ray futures over the rollout Handle) on the single driver thread —
+no producer thread, no locks; the trainer's ``_next_step`` loop owns the policy
+(launch ceiling, launch-then-reap order). Draining all in-flight generations
+before each weight sync is **mandatory** (the engine corrupts an in-flight
+generation when weights + KV cache update mid-flight); this is the
 single-threaded ``_drain_all`` quiesce.
 
 Subclasses ``ARTrainer`` to reuse ``_build_request_sample``/``evaluate`` and ``BaseTrainer``
@@ -44,12 +45,7 @@ from omegaconf import DictConfig
 from unirl.distributed.group.placement import placement, remote
 from unirl.distributed.tensor import hydrate
 from unirl.models.qwen3_5.validation import validate_qwen3_5_training_contract
-from unirl.rollout.async_runtime import (
-    AsyncRolloutScheduler,
-    BufferedRolloutGroup,
-    InflightGeneration,
-    RayGenerationDispatcher,
-)
+from unirl.rollout.engine.asynchronous import AsyncBatchRolloutEngine
 from unirl.train.stack import TrainStepResult
 from unirl.trainer.ar import ARTrainer
 from unirl.trainer.base import BaseTrainer, build_sampling_dict
@@ -143,12 +139,16 @@ class AsyncARTrainer(ARTrainer):
                 "separate slab; the trainside direct-sampling engine needs the pipeline "
                 "as a local sibling and cannot live cross-slab."
             )
+        # Inherited ``ARTrainer.evaluate`` reads this but only ``ARTrainer.__init__``
+        # sets it, which we skip above. The disaggregated layout is always the SPMD
+        # rollout path — the anchored branch is colocate-only — so None is the
+        # correct value, and it keeps ``evaluate`` on its ``nullcontext``/non-anchored path.
+        self._rollout_anchor_device = None
 
         # ---- async state ----
         self._train_fraction = float(train_fraction)
         self._max_inflight = max(1, int(max_inflight))
         self._buffer_max_staleness = buffer_max_staleness
-        self._weight_version = 0  # driver-tracked policy version (# of weight syncs issued)
         # DP size of the TRAIN slab — the divisor for balance_shards (the parent
         # uses self.num_devices because colocate training spans the whole pool;
         # here training only spans the train slab).
@@ -252,20 +252,16 @@ class AsyncARTrainer(ARTrainer):
         """Consume one data batch and build the request Sample for ``gen_id``."""
         return self._build_request_sample(self.data_source.get_samples(self.batch_size), gen_id)
 
-    def _score_completed(
-        self,
-        job: InflightGeneration,
-        completed: Sample,
-    ) -> List[Sample]:
+    def _score_completed(self, gen_id: int, completed: Sample) -> List[Sample]:
         """Score a completed Sample and split it into tree-complete groups.
 
-        Scoring must precede ``_drop_decoded`` (the reward reads the decoded
-        primitive). Keyed by ``gen_id`` so media panels behave like the old path.
-        The filled ``Sample`` is self-contained (it carries its input Parts), so
-        no request handle is kept on the in-flight record.
+        Runs at reap time inside the engine. Scoring must precede
+        ``_drop_decoded`` (the reward reads the decoded primitive). Keyed by
+        ``gen_id`` so media panels behave like the old path. The filled
+        ``Sample`` is self-contained (it carries its input Parts).
         """
         scored = self.reward.score_and_attach(completed)
-        self._drop_decoded(scored, rollout_id=job.gen_id)
+        self._drop_decoded(scored, rollout_id=gen_id)
         return scored.split()
 
     def _drain_all(self) -> None:
@@ -275,7 +271,7 @@ class AsyncARTrainer(ARTrainer):
         when weights + KV cache update mid-flight), before eval/checkpoint (shared
         engine), and in ``finally`` (no leaked ObjectRefs).
         """
-        self._async_scheduler.drain_all(self._score_completed)
+        self._async_engine.quiesce()
 
     # ------------------------------------------------------------------
     # Train tail (mirrors ar.py:152-182, minus wake/sleep) — reward parity
@@ -356,11 +352,12 @@ class AsyncARTrainer(ARTrainer):
             },
         )
 
-        self._async_scheduler = AsyncRolloutScheduler(
-            RayGenerationDispatcher(self.rollout),
-            groups_per_step=self.batch_size,
+        # gen_id is seeded by start_rollout so launches stay 1:1 with rollout_id.
+        self._async_engine = AsyncBatchRolloutEngine(
+            self.rollout,
+            complete=self._score_completed,
+            start_gen_id=start_rollout,
         )
-        self._async_scheduler.reset(start_rollout)
 
         if resumed and self.weight_sync is not None:
             self.weight_sync.sync()  # push restored weights into the fresh engine
@@ -373,7 +370,7 @@ class AsyncARTrainer(ARTrainer):
                 picked = self._next_step(rollout_id, interval, M, stale, num_rollouts)
                 # Reassemble the drained per-prompt group Samples into one batched
                 # Sample [input(P), gen(P*N)] — the inverse of Sample.split.
-                sample = Sample.concat([item.sample for item in picked])
+                sample = Sample.concat(picked)
                 training_progress = rollout_id / max(1, num_rollouts - 1)
                 result, mean_reward = self._advantage_and_train(
                     sample, training_progress=training_progress, rollout_id=rollout_id, t0=t0
@@ -392,7 +389,7 @@ class AsyncARTrainer(ARTrainer):
                 if step % interval == 0 and self.weight_sync is not None:
                     self._drain_all()  # MANDATORY: weight/KV update corrupts in-flight generations
                     self.weight_sync.sync()
-                    self._weight_version += 1
+                    self._async_engine.bump_weight_version()
         finally:
             # Match BaseTrainer._finish_wandb: cleanup failures must not mask
             # the exception that caused teardown.
@@ -413,23 +410,27 @@ class AsyncARTrainer(ARTrainer):
         M: int,
         stale: int,
         num_rollouts: int,
-    ) -> List[BufferedRolloutGroup]:
+    ) -> List[Sample]:
         """Top up launches, reap completed generations, and return the freshest
-        ``groups_per_step`` (``batch_size``) groups for ``rollout_id`` (blocking
-        on the oldest in-flight generation if the buffer is short).
+        ``batch_size`` scored group Samples for ``rollout_id`` (blocking on the
+        oldest in-flight generation if the buffer is short).
 
         The launch clamp is the load-bearing on-policy guarantee: a generation
         launched now is consumed later, so bound how far ahead we launch to
         ``stale`` weight-syncs. ``stale=0`` ⇒ never launch into a future
         sync-window ⇒ no generation crosses a sync ⇒ ``ratio≈1`` (on-policy).
         """
-        return self._async_scheduler.next_step(
-            rollout_id=rollout_id,
-            sync_interval=interval,
-            max_inflight=M,
-            max_staleness=stale,
-            num_rollouts=num_rollouts,
-            current_version=self._weight_version,
-            build_sample=self._build_async_sample,
-            on_complete=self._score_completed,
-        )
+        engine = self._async_engine
+        while True:
+            ceiling = min(num_rollouts, ((rollout_id // interval) + 1 + stale) * interval)
+            while engine.next_gen_id < ceiling and engine.inflight < M:
+                engine.submit(self._build_async_sample(engine.next_gen_id))
+            engine.poll()
+            picked = engine.drain_freshest(self.batch_size, max_staleness=stale)
+            engine.pop_evicted()  # over-stale groups are discarded on the batch path
+            if picked is not None:
+                return picked
+            if engine.inflight:
+                engine.wait_oldest()
+            else:
+                raise RuntimeError("async rollout buffer underflow with no in-flight generations")

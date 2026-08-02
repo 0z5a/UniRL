@@ -317,6 +317,49 @@ class HandleRef:
     ep_size: int = 1
 
 
+class PendingHandleCall:
+    """Future-like result of :meth:`Handle.launch_nowait`: launched, not yet collected.
+
+    ``ready()`` probes without blocking; ``wait()`` blocks without collecting;
+    ``result()`` blocks if needed, then runs the rebind + collect half of
+    ``handle_fn`` and returns the method's collected value. The collect half
+    runs at most once — rebind registers GC finalizers on the result refs — so
+    a successful ``result()`` caches its value and later calls return it; a
+    ``result()`` that raised may be retried.
+    """
+
+    def __init__(self, handle: "Handle", method_name: str, refs: List[Any], worker_local: bool) -> None:
+        self._handle = handle
+        self._method_name = method_name
+        self._refs = refs
+        self._worker_local = worker_local
+        self._consumed = False
+        self._value: Any = None
+
+    def ready(self) -> bool:
+        """True once every worker's ref is resolved (non-blocking probe)."""
+        done, _ = ray.wait(self._refs, num_returns=len(self._refs), timeout=0)
+        return len(done) == len(self._refs)
+
+    def wait(self) -> None:
+        """Block until every worker finishes, without collecting; re-raises worker errors."""
+        ray.get(self._refs)
+
+    def result(self) -> Any:
+        """Block if needed, then rebind + collect: the method's collected return value."""
+        if self._consumed:
+            return self._value
+        handle = self._handle
+        results = ray.get(self._refs)
+        results = [
+            handle._rebind_tree(r, handle.workers[i], worker_local=self._worker_local) for i, r in enumerate(results)
+        ]
+        _, _, collect_fn, _ = handle._method_configs[self._method_name]
+        self._value = collect_fn(handle, results)
+        self._consumed = True
+        return self._value
+
+
 class Handle:
     """Controller-side SPMD handle.
 
@@ -453,6 +496,7 @@ class Handle:
         )
 
         # Bind @distributed methods as handle functions
+        self._method_configs: Dict[str, tuple] = {}
         self._bind_methods(role_cls)
 
         # Counter for unique call_id generation within enable_grad contexts.
@@ -542,6 +586,7 @@ class Handle:
             else:
                 execute_fn = self._execute_rank_zero
 
+            self._method_configs[name] = (config["dispatch_mode"], dispatch_fn, collect_fn, execute_fn)
             bound = self._make_handle_fn(name, config["dispatch_mode"], dispatch_fn, collect_fn, execute_fn)
             setattr(self, name, bound)
 
@@ -559,6 +604,9 @@ class Handle:
         TensorMetas and append an RPCBackwardNode for later auto-backward.
         grad_mode and call_id are passed as dedicated parameters to Worker.call
         (not via kwargs) so dispatch internals remain unaware of grad state.
+
+        The non-blocking twin is :meth:`launch_nowait` +
+        :meth:`PendingHandleCall.result` below — keep the halves in parity.
         """
 
         def handle_fn(*args, **kwargs):
@@ -627,6 +675,40 @@ class Handle:
         handle_fn.__name__ = method_name
         handle_fn.__doc__ = f"SPMD handle: {method_name} (dispatch={dispatch_fn.__name__})"
         return handle_fn
+
+    # ── Non-blocking launch ──
+
+    def launch_nowait(self, method_name: str, *args, **kwargs) -> PendingHandleCall:
+        """Launch a @distributed method without blocking: the dispatch → localize →
+        execute half of ``handle_fn``, stopping before ``ray.get``.
+
+        Always ``grad_mode=False`` / ``call_id=None`` (a pending call is never
+        valid under a GradContext, so the ``_grad_call_counter`` single-thread
+        assumption is untouched). Kept in line-parity with ``handle_fn`` above —
+        same divisibility gate, same localize. ``result()`` on the returned
+        :class:`PendingHandleCall` runs the collect half.
+        """
+        try:
+            dispatch_mode, dispatch_fn, _, execute_fn = self._method_configs[method_name]
+        except KeyError:
+            raise AttributeError(
+                f"{method_name!r} is not a @distributed method of {_owning_class(self.role_cls).__name__}"
+            ) from None
+
+        batch_size = infer_batch_size(args, kwargs)
+        if (
+            dispatch_mode in (Dispatch.DP_SCATTER, Dispatch.DP_SCATTER_HEAD)
+            and batch_size is not None
+            and batch_size % self.dp_size != 0
+        ):
+            raise ValueError(f"batch_size={batch_size} not divisible by dp_size={self.dp_size}")
+
+        shards = dispatch_fn(self, args, kwargs, batch_size)
+        transport_cls = self.pool.transport_cls
+        worker_local = issubclass(transport_cls, WorkerLocalTransport)
+        shards = transport_cls.localize(shards, self.pool, self.device_ids, self.worker_ids)
+        refs = execute_fn(method_name, shards, grad_mode=False, call_id=None)
+        return PendingHandleCall(self, method_name, refs, worker_local)
 
     # ── Execute strategies ──
 
