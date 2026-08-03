@@ -54,11 +54,6 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
 
-# ---------------------------------------------------------------------------
-# Mechanisms
-# ---------------------------------------------------------------------------
-
-
 class VersionedBuffer(Generic[T]):
     """Payload-agnostic freshness buffer of ``(payload, weight_version, gen_id)`` items.
 
@@ -111,7 +106,6 @@ class VersionedBuffer(Generic[T]):
         return evicted
 
 
-#: Reap-time completion hook: ``(gen_id, weight_version, completed_payload)``.
 Complete = Callable[[int, int, Any], None]
 
 
@@ -119,7 +113,7 @@ Complete = Callable[[int, int, Any], None]
 class _InflightJob:
     gen_id: int
     weight_version: int
-    pending: Any  # PendingHandleCall
+    pending: Any
 
 
 class InflightPool:
@@ -206,11 +200,6 @@ class InflightPool:
             self._jobs[0].pending.wait()
 
 
-# ---------------------------------------------------------------------------
-# Batch engine
-# ---------------------------------------------------------------------------
-
-
 class AsyncBatchRolloutEngine:
     """Batch-granular async engine over a ``SyncRolloutEngine`` slab Handle; buffers ``Sample`` groups.
 
@@ -277,11 +266,6 @@ class AsyncBatchRolloutEngine:
         groups = self._complete(gen_id, completed)  # fallible (scoring) before any buffer put
         for group in groups:
             self._buffer.put(group, weight_version=weight_version, gen_id=gen_id)
-
-
-# ---------------------------------------------------------------------------
-# Agentic engine (driver-side facade over the rank-0 coordinator)
-# ---------------------------------------------------------------------------
 
 
 def root_of(traj: "Sample") -> str:
@@ -370,8 +354,7 @@ class AsyncAgenticRolloutEngine:
                 "finalize_if_drained() to report it done or quiesce() first (a second "
                 "drain would double-pull the coordinator queue)."
             )
-        # Fail closed: the coordinator may start a drive before its call reports
-        # an error, so only finalize_if_drained() or quiesce() may re-arm submit.
+        # Set before RPC so ambiguous submit failures remain guarded.
         self._drive_live = True
         self._rollout.submit(tasks)
 
