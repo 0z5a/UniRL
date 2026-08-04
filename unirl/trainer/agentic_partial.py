@@ -155,8 +155,7 @@ class AgenticPartialTrainer(AgenticTrainer):
     def _drive_partial(self, rollout_id: int, sync_weights: bool, stale: int) -> List[List[Sample]]:
         self.rollout.wake_up()
         if sync_weights and self.weight_sync is not None:
-            self.weight_sync.sync()
-            self._engine.bump_weight_version()
+            self._engine.sync_weights(self.weight_sync)
         tasks = self._build_tasks(self._carried, rollout_id)
         self._carried = []
         self._engine.submit(tasks)

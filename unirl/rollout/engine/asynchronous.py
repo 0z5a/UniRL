@@ -11,7 +11,7 @@ loops live in the trainers):
 - :class:`VersionedBuffer` — payload-agnostic freshness/staleness buffer.
 - :class:`InflightPool` — non-blocking pool of distributed ``generate`` calls.
 
-Engines, sharing one consumer surface (``poll`` / ``drain_freshest`` /
+Engines share one consumer surface (``poll`` / ``drain_freshest`` /
 ``pop_evicted`` / ``quiesce`` + engine-owned ``weight_version``):
 
 - :class:`AsyncBatchRolloutEngine` — batch granularity over a single-turn
@@ -336,8 +336,19 @@ class AsyncAgenticRolloutEngine:
     def weight_version(self) -> int:
         return self._weight_version
 
-    def bump_weight_version(self) -> int:
+    def sync_weights(self, weight_sync: Any) -> int:
+        """Push train weights via *weight_sync* and advance the version ledger.
+
+        The only sanctioned weight-push path — pairing the push with the bump
+        is what keeps the ledger truthful. Raises while a drive is active (a
+        weight push must be decode-idle); a joined ``finalize_if_drained`` or
+        ``quiesce`` ends the drive.
+        """
+        if self._drive_live:
+            raise RuntimeError("sync_weights with a drive active; finalize or quiesce() first")
+        weight_sync.sync()
         self._weight_version += 1
+        logger.info("sync_weights: pushed train weights; weight_version -> %d", self._weight_version)
         return self._weight_version
 
     def submit(self, tasks: List["Sample"]) -> None:
@@ -380,7 +391,7 @@ class AsyncAgenticRolloutEngine:
     def quiesce(self) -> List["Sample"]:
         """Turn-boundary stop: abort, then one final poll for trajectories that
         completed DURING the quiesce (before the next ``submit`` resets worker
-        buffers). Call before ``bump_weight_version`` so those groups carry the
+        buffers). Call before ``sync_weights`` so those groups carry the
         version they completed under."""
         carried = self._rollout.abort()[0]
         self.poll()
