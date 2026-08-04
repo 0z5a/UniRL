@@ -54,13 +54,15 @@ Math mirrors PR #104's ``qwen_image_sampler.py`` / ``forward_denoiser``.
 from __future__ import annotations
 
 from contextlib import nullcontext
-from typing import ClassVar, List, Optional, Set, Tuple
+from typing import Any, ClassVar, Dict, List, Optional, Set, Tuple
 
 import torch
 
+from unirl.models.types.batched_replay import BatchedStepReplayMixin
 from unirl.models.types.diffusion import DiffusionStage, DiffusionStep
 from unirl.models.types.replay_result import ReplayResult
-from unirl.sde.kernels import StepStrategy
+from unirl.sde.kernels import SDEStrategy, StepStrategy
+from unirl.types.conditions import TextEmbedCondition
 from unirl.types.sampling import DiffusionSamplingParams, compute_trajectory_positions
 from unirl.types.segments.latent import LatentSegment
 from unirl.utils.dtypes import parse_torch_dtype
@@ -333,7 +335,7 @@ class QwenImageDiffusionStep(DiffusionStep[QwenImageBundle, QwenImageConditions]
         )
 
 
-class QwenImageDiffusionStage(DiffusionStage[QwenImageConditions]):
+class QwenImageDiffusionStage(BatchedStepReplayMixin, DiffusionStage[QwenImageConditions]):
     """Qwen-Image rollout-level diffusion stage.
 
     Owns the SDE ``strategy`` (stateful strategies like ``DPM2Strategy``
@@ -374,6 +376,7 @@ class QwenImageDiffusionStage(DiffusionStage[QwenImageConditions]):
         logprob_precision: str = "fp32",
         vae_scale_factor: int = 8,
         latent_channels: Optional[int] = None,
+        batch_replay_steps: bool = False,
     ) -> None:
         self.model = model
         self.step = step
@@ -382,6 +385,7 @@ class QwenImageDiffusionStage(DiffusionStage[QwenImageConditions]):
         self.trajectory_dtype = parse_torch_dtype(trajectory_precision, field_name="trajectory_precision")
         self.logprob_dtype = parse_torch_dtype(logprob_precision, field_name="logprob_precision")
         self.vae_scale_factor = vae_scale_factor
+        self.batch_replay_steps = bool(batch_replay_steps)
         if latent_channels is None:
             tx_cfg = getattr(model.transformer, "config", None)
             in_channels = getattr(tx_cfg, "in_channels", 64) if tx_cfg is not None else 64
@@ -560,6 +564,19 @@ class QwenImageDiffusionStage(DiffusionStage[QwenImageConditions]):
             if device.type == "cuda" and self.autocast_dtype in (torch.float16, torch.bfloat16)
             else nullcontext()
         )
+
+        if self.batch_replay_steps and len(target) > 1 and isinstance(self.strategy, SDEStrategy):
+            with autocast_ctx:
+                return self._replay_batched_steps(
+                    conditions,
+                    segment=segment,
+                    params=params,
+                    target=target,
+                    sigmas=sigmas,
+                    sigma_max=sigma_max,
+                    device=device,
+                )
+
         log_probs: List[torch.Tensor] = []
         prev_sample_means: List[torch.Tensor] = []
         with autocast_ctx:
@@ -597,6 +614,28 @@ class QwenImageDiffusionStage(DiffusionStage[QwenImageConditions]):
         log_probs_t = torch.stack(log_probs, dim=1).to(dtype=self.logprob_dtype)
         means_t = torch.stack(prev_sample_means, dim=1).to(dtype=self.trajectory_dtype) if prev_sample_means else None
         return ReplayResult(log_probs=log_probs_t, prev_sample_means=means_t)
+
+    def _batched_step_kwargs(self, segment: LatentSegment, params: DiffusionSamplingParams) -> Dict[str, Any]:
+        """Supply latent geometry and distilled guidance."""
+        return {
+            "latent_h": int(segment.latents.shape[-2]),
+            "latent_w": int(segment.latents.shape[-1]),
+            "distilled_guidance_scale": params.distilled_guidance_scale,
+        }
+
+    @staticmethod
+    def _tile_conditions(conditions: QwenImageConditions, repeats: int) -> QwenImageConditions:
+        def _rep(t: Optional[torch.Tensor]) -> Optional[torch.Tensor]:
+            return t.repeat(repeats, *([1] * (t.dim() - 1))) if t is not None else None
+
+        def _tile(cond: Optional[TextEmbedCondition]) -> Optional[TextEmbedCondition]:
+            if cond is None:
+                return None
+            return TextEmbedCondition(
+                embeds=_rep(cond.embeds), pooled=_rep(cond.pooled), attn_mask=_rep(cond.attn_mask)
+            )
+
+        return QwenImageConditions(text=_tile(conditions.text), negative_text=_tile(conditions.negative_text))
 
     def predict_noise_at_step(
         self,
