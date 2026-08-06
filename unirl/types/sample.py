@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from dataclasses import fields as dc_fields
-from typing import Any, Callable, Dict, List, Literal, Optional, Sequence, Union
+from typing import Any, Callable, Dict, List, Literal, Optional, Sequence
 
 import torch
 
@@ -41,7 +41,7 @@ from unirl.types.advantages import (
 from unirl.types.conditions import Condition
 from unirl.types.media import MediaRefs
 from unirl.types.media_preview import MediaPreview
-from unirl.types.primitives import Audios, Images, Texts, Videos, primitive_modality_key
+from unirl.types.primitives import Images, PrimitiveValue, Texts, primitive_modality_key
 from unirl.types.sample_id import ancestor_id, child_id, parent_id
 from unirl.types.sampling import BaseSamplingParams
 from unirl.types.segments import Segment, TextSegment
@@ -49,7 +49,7 @@ from unirl.utils.shard_balance import lpt_shard_permutation, shard_token_spread
 
 logger = logging.getLogger(__name__)
 
-Primitive = Union[Texts, Images, Videos, Audios, MediaRefs]
+Primitive = PrimitiveValue
 PrimitiveMap = Dict[str, Primitive]
 PrimitiveMetadata = Dict[str, Dict[str, Any]]
 PRIMITIVE_MODALITY_ORDER = ("text", "image", "video", "audio", "media")
@@ -549,7 +549,7 @@ class Sample(Batch):
         :meth:`Part.input_child` so only the head is a root, e.g.::
 
             text = Part.input(ids, primitives={"text": Texts(...)})
-            Sample.request(text, text.input_child({"image": Images(...)}))  # image+text
+            Sample.request(text, text.input_child({"image": Images.from_dense(...)}))  # image+text
 
         :meth:`Sample.conditioning` then surfaces both primitives (text, image)
         in turn order for the gen step. See ``unirl/types/README.md``.
@@ -937,7 +937,7 @@ class Sample(Batch):
         return ts, images
 
     def has_image_input(self) -> bool:
-        """Whether any non-frontier Part carries an ``Images`` primitive — the
+        """Whether any non-frontier Part carries an image primitive — the
         boolean replacement for the retired ``image_input_part`` reject/require
         guards."""
         return any("image" in p.primitives for p in self.parts[:-1])
