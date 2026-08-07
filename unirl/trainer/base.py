@@ -61,10 +61,13 @@ def prepare_input_sample(
         raise ValueError(f"{caller}: unsupported input primitive keys: {sorted(unsupported)}")
 
     namespaced = inputs.map_sample_ids(lambda sample_id: f"r{rollout_id}:{sample_id}")
-    if root_control is None:
-        return namespaced
     root = namespaced.parts[0]
-    root = replace(root, control={**root.control, **root_control})
+    metadata = root.metadata or [{} for _ in root.sample_ids]
+    if len(metadata) != len(root.sample_ids):
+        raise ValueError(f"{caller}: root metadata has {len(metadata)} rows for {len(root.sample_ids)} root samples.")
+    root = replace(root, metadata=[{**(row or {}), "rollout_id": int(rollout_id)} for row in metadata])
+    if root_control is not None:
+        root = replace(root, control={**root.control, **root_control})
     return namespaced.with_parts([root, *namespaced.parts[1:]])
 
 
@@ -86,6 +89,19 @@ def build_sampling_dict(sampling_cfg: DictConfig) -> Dict[str, BaseSamplingParam
         obj = instantiate(sampling_cfg)
         return {"ar" if isinstance(obj, ARSamplingParams) else "diffusion": obj}
     return {key: instantiate(sub) for key, sub in sampling_cfg.items()}
+
+
+def unwrap_replicated_int(value: object, *, name: str) -> int:
+    """Normalize a BROADCAST return and verify all worker replicas agree."""
+    if isinstance(value, (list, tuple)):
+        if not value or any(not isinstance(item, int) for item in value):
+            raise TypeError(f"{name} returned invalid worker values: {value!r}")
+        if any(item != value[0] for item in value[1:]):
+            raise RuntimeError(f"{name} disagrees across workers: {value!r}")
+        return value[0]
+    if not isinstance(value, int):
+        raise TypeError(f"{name} returned {type(value).__name__}, expected int")
+    return value
 
 
 def init_transfer_queue(cfg: DictConfig) -> Optional[dict]:
