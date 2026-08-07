@@ -217,7 +217,7 @@ class AgenticTrainer(ARTrainer):
         )
         if not train_parts:  # pathological: every sampled trajectory failed to generate
             logger.warning("AgenticTrainer rollout %d produced no trainable turns.", rollout_id)
-            return TrainStepResult(0.0, 0.0, 0.0, False, [], {}), mean_reward
+            return TrainStepResult(0.0, 0.0, 0.0, False, [], {}, optimizer_updates=0), mean_reward
 
         train_part = Part.concat(train_parts)
         train_part = self._pad_to_dp_multiple(train_part)
