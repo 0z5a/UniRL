@@ -1,0 +1,156 @@
+# @package _global_
+# Leo2 (HYVideo 2.0 MoE-A12B) T2V FlowGRPO -- in-process (trainside) smoke.
+#
+# Stack (mirrors hunyuan_video_t2v_trainside + minimax_h3 trainside):
+#   - rollout: TrainsideRolloutEngine, forward_batch_size=1 (hymm blobs are batch-1)
+#   - backend: FSDPBackend full-shard over Leo{,Dual,Triple}Layer; LoRA r64/a256
+#     on attention (video+text streams) + shared/dense MLPs; MoE experts frozen
+#   - strategy: FlowSDE (Leo2 velocity feeds noise_pred UN-negated)
+#   - reward: VideoPickScore on first frame
+# Launch (single node smoke):
+#   bash examples/run_experiment_single_node.sh diffusion/leo2/leo2_t2v_trainside
+
+num_devices: 8
+batch_size: 8                 # prompts_per_rollout; must be divisible by num_devices (DP_SCATTER)
+num_rollouts: 100
+adv_use_global_std: true
+
+logging:
+  report_to_wandb: false
+  project_name: ${oc.env:WANDB_PROJECT,unirl-leo2-t2v}
+  run_name: leo2_t2v_trainside_smoke
+  entity: ${oc.env:WANDB_ENTITY,null}
+  tags: [leo2, t2v, flowgrpo, trainside, lora-r64]
+  log_media: true
+  media_max_items: 2
+
+bundle:
+  _target_: unirl.models.leo2.bundle.Leo2Bundle.from_config
+  config:
+    _target_: unirl.models.leo2.config.Leo2PipelineConfig
+    model_precision: bf16
+    autocast_precision: bf16
+    trajectory_precision: bf16
+    logprob_precision: fp32
+    ckpt_path: ${oc.env:LEO2_CKPT_DIR,/apdcephfs_zwfy8/share_305110755/hunyuan/zuhaoding/HYV2.0/ckpts/leo2_moe_a12b_480p/iter_0063300_torch/weights}
+    video_shift: 3.0
+    text_encoder_gpu_transient: true
+
+pipeline:
+  _target_: unirl.models.leo2.pipeline.Leo2Pipeline.from_bundle
+  config: ${bundle.config}
+  strategy:
+    _target_: unirl.sde.kernels.FlowSDEStrategy
+
+backend:
+  _target_: unirl.train.backend.fsdp.FSDPBackend
+  block_class_names: ["LeoLayer", "LeoDualLayer", "LeoTripleLayer"]
+  trainable_attr: model
+  fsdp_cfg:
+    _target_: unirl.train.configs.FSDPConfig
+    param_dtype: bf16
+    master_dtype: bf16   # torch 2.7.1 FSDP2 needs one dtype per shard group; fp32 LoRA masters + bf16 base in one block trips it
+    cpu_offload: false
+    mixed_precision: true
+    fsdp_mode: full
+    reshard_after_forward: true
+    activation_checkpointing: true
+    use_torch_compile: false
+    root_wrap: true    # FSDP2 never reshards a ROOT unit after forward; without a root wrap every block is its own root -> 48 unsharded layers accumulate -> OOM
+  optimizer_cfg:
+    _target_: unirl.train.backend.base.OptimizerConfig
+    learning_rate: 1.0e-4
+    adam_beta1: 0.9
+    adam_beta2: 0.999
+    adam_epsilon: 1.0e-8
+    weight_decay: 0.0
+  scheduler_cfg:
+    _target_: unirl.train.backend.base.LrSchedulerConfig
+    type: constant
+    warmup_steps: 0
+    total_steps: 10000
+  lora_cfg:
+    _target_: unirl.train.configs.LoraConfig
+    rank: 64
+    alpha: 256
+    dropout: 0.0
+    bias: none
+    task_type: FEATURE_EXTRACTION
+    # video + text stream attention, shared expert MLP, text-branch MLP.
+    # MoE routed experts + router + audio branch stay frozen (audio modules are
+    # never exercised in a t2v forward, so adapters there would be dead params).
+    target_modules:
+      - self_attn.q_proj
+      - self_attn.k_proj
+      - self_attn.v_proj
+      - self_attn.o_proj
+      - self_attn.q_proj_txt
+      - self_attn.k_proj_txt
+      - self_attn.v_proj_txt
+      - self_attn.o_proj_txt
+      - shared_mlp.gate_and_up_proj
+      - shared_mlp.down_proj
+      - mlp_txt.gate_and_up_proj
+      - mlp_txt.down_proj
+
+rollout:
+  _target_: unirl.rollout.engine.trainside.engine.TrainsideRolloutEngine
+  stage_attrs: [diffusion]
+  forward_batch_size: 1
+
+reward:
+  _target_: unirl.reward.service.RewardService
+  backend:
+    _target_: unirl.reward.local.video_pickscore.VideoPickScoreScorer
+    base_device: cuda
+    config:
+      _target_: unirl.reward.local.video_pickscore.VideoPickScoreSpec
+      batch_size: 8
+      device: auto
+      processor_id: laion/CLIP-ViT-H-14-laion2B-s32B-b79K
+      model_id: yuvalkirstain/PickScore_v1
+
+algorithm:
+  _target_: unirl.algorithms.flowgrpo.FlowGRPO
+  stage_attr: diffusion
+  clip_range: 1.0e-4
+  clip_schedule: constant
+  old_logp_source: replay
+  max_rollout_replay_logp_absdiff: 1.0e-2
+  rollout_replay_parity_action: warn
+  conditions_cls:
+    _target_: hydra.utils.get_class
+    path: unirl.models.leo2.conditions.Leo2Conditions
+  params: ${sampling}
+
+stack:
+  _target_: unirl.train.stack.TrainStack
+  micro_batch_size: 1
+  max_grad_norm: 1.0
+  num_updates_per_batch: 1
+
+data_source:
+  _target_: unirl.data.data_source.MultimodalRLDataSource
+  args:
+    run:
+      data_path: ${oc.env:LEO2_PROMPT_FILE,/apdcephfs_zwfy8/share_305110755/hunyuan/zuhaoding/HYV2.0/experiments/2026-08-27_leo2-unirl-flowgrpo/data/train.txt}
+      eval_data_path: ${oc.env:LEO2_EVAL_PROMPT_FILE,/apdcephfs_zwfy8/share_305110755/hunyuan/zuhaoding/HYV2.0/experiments/2026-08-27_leo2-unirl-flowgrpo/data/test.txt}
+      seed: ${sampling.seed}
+    algorithm:
+      prompts_per_rollout: ${batch_size}
+
+sampling:
+  _target_: unirl.types.sampling.DiffusionSamplingParams
+  num_inference_steps: 10
+  guidance_scale: 1.0
+  height: 192
+  width: 336
+  num_frames: 49
+  eta: 0.7
+  sde_indices: [0, 3, 6, 9]
+  samples_per_prompt: 4
+  seed: 42
+  init_same_noise: false
+  autocast_precision: bf16
+  trajectory_precision: bf16
+  logprob_precision: fp32
