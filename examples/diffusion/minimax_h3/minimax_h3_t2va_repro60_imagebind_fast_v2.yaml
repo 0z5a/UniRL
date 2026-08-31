@@ -1,0 +1,17 @@
+# @package _global_
+# v2 of the accelerated ImageBind arm. v1 (lr 5e-5) proved the signal chain
+# works -- eval moved +6% in 60 rollouts -- but oscillated after ~60 and
+# diverged at ~150 (gn spikes, reward collapse, parity stop-loss). Single
+# change: halve the learning rate; keep 6 transitions + 2 optimizer steps,
+# so the per-rollout learning volume stays ~2x the original recipe.
+defaults:
+  - minimax_h3_t2va_repro60_imagebind_fast
+  - _self_
+
+backend:
+  optimizer_cfg:
+    learning_rate: 2.5e-5
+
+logging:
+  run_name: h3-repro60-imagebind-fast-v2
+  tags: [minimax-h3, verlomni-repro, flowgrpo, imagebind, k16, same-noise, c2-normalized, hsdp4x8, lora64, fastv2-lr2.5e5]

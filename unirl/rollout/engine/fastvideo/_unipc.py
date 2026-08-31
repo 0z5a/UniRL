@@ -143,7 +143,7 @@ class FastVideoUniPCPlan:
 
 
 def _strategy_from_plan(scheduler: Any, plan: FastVideoUniPCPlan) -> UniPCStrategy:
-    """Build the canonical strategy from the plan spec after validating the live worker scheduler contract."""
+    """Build the canonical strategy from the model-owned spec after verifying the checkpoint scheduler agrees."""
     config = scheduler.config
     prediction_type = str(getattr(config, "prediction_type", ""))
     if prediction_type != "flow_prediction":
@@ -154,7 +154,19 @@ def _strategy_from_plan(scheduler: Any, plan: FastVideoUniPCPlan) -> UniPCStrate
         raise RuntimeError("FastVideo UniPC does not support thresholding=True")
     if getattr(scheduler, "solver_p", None) is not None:
         raise RuntimeError("FastVideo UniPC does not support a nested solver_p")
-    # The checkpoint solver spec is verified engine-side at init (README: Solver SSOT).
+
+    scheduler_spec = UniPCSpec(
+        solver_order=int(getattr(config, "solver_order", 2)),
+        solver_type=str(getattr(config, "solver_type", "bh2")),
+        lower_order_final=bool(getattr(config, "lower_order_final", True)),
+        disable_corrector=tuple(int(i) for i in getattr(scheduler, "disable_corrector", ())),
+    )
+    if scheduler_spec != plan.spec:
+        raise RuntimeError(
+            "FastVideo checkpoint scheduler solver config does not match the model-owned UniPC "
+            f"spec: scheduler={scheduler_spec}, model_config={plan.spec}. Align model_config.unipc_* "
+            "with the checkpoint scheduler."
+        )
     return UniPCStrategy(config=plan.spec)
 
 
@@ -209,11 +221,8 @@ def _patch_scheduler_set_timesteps() -> None:
             raise ValueError("FastVideo canonical sigmas must all be finite")
         if np.any(external < 0.0) or np.any(external > 1.0):
             raise ValueError("FastVideo canonical sigmas must be normalized to [0, 1]")
-        if np.any(external[1:] >= external[:-1]):
-            raise ValueError(
-                "FastVideo canonical sigmas must be strictly decreasing; duplicate adjacent "
-                "sigmas alias to one index_for_timestep slot and break UniPC dispatch"
-            )
+        if np.any(external[1:] > external[:-1]):
+            raise ValueError("FastVideo canonical sigmas must be monotonically non-increasing")
         if external[-1] == 0.0:
             raise ValueError("FastVideo external sigmas must omit the terminal zero")
         if num_inference_steps is not None and int(num_inference_steps) != int(external.size):
@@ -349,7 +358,9 @@ def _patch_denoising_step() -> None:
             step_index=step_index,
         )
 
-        # Shape-compatible zero log-prob; the engine slices real SDE columns off (README: Dispatch).
+        # FastVideo stacks one log-prob value per helper invocation. The adapter
+        # slices the real SDE columns before building LatentSegment, so use a
+        # shape-compatible placeholder for deterministic UniPC columns.
         placeholder_logp = torch.zeros(
             sample.shape[0],
             device=sample.device,

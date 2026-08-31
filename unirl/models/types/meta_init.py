@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Callable, Optional, Tuple
+from typing import Callable, Optional, Sequence, Tuple
 
 import torch
 from torch import nn
@@ -175,11 +175,31 @@ def recover_rope_inv_freq(model: nn.Module) -> int:
     return n
 
 
-def finalize_meta_init(transformer: nn.Module, *, dtype: torch.dtype) -> nn.Module:
+def _pin_fp32(transformer: nn.Module, keep_in_fp32: Sequence[str]) -> int:
+    """Re-cast params/buffers whose name matches ``keep_in_fp32`` back to fp32."""
+    patterns = tuple(keep_in_fp32)
+    pinned = 0
+    for name, tensor in list(transformer.named_parameters()) + list(transformer.named_buffers()):
+        if tensor.dtype == torch.float32 or not tensor.dtype.is_floating_point:
+            continue
+        if any(pattern in name for pattern in patterns):
+            tensor.data = tensor.data.to(torch.float32)
+            pinned += 1
+    return pinned
+
+
+def finalize_meta_init(
+    transformer: nn.Module,
+    *,
+    dtype: torch.dtype,
+    keep_in_fp32: Optional[Sequence[str]] = None,
+) -> nn.Module:
     """Apply the shared post-build contract for a meta transformer."""
     if not any(param.is_meta for param in transformer.parameters()):
         raise ValueError("finalize_meta_init requires a transformer with meta parameters.")
     transformer = transformer.to(dtype)
+    if keep_in_fp32:
+        _pin_fp32(transformer, keep_in_fp32)
     transformer.init_weights = lambda: None
     return transformer
 
@@ -188,6 +208,7 @@ def build_meta_init_transformer(
     factory: Callable[[], nn.Module],
     *,
     dtype: torch.dtype,
+    keep_in_fp32: Optional[Sequence[str]] = None,
 ) -> Tuple[nn.Module, dict]:
     """Build ``factory()`` on meta, capturing init-computed non-persistent state."""
     from accelerate import init_empty_weights
@@ -195,7 +216,7 @@ def build_meta_init_transformer(
     with init_empty_weights(include_buffers=False):
         transformer = factory()
     captured = capture_init_state(transformer)
-    transformer = finalize_meta_init(transformer, dtype=dtype)
+    transformer = finalize_meta_init(transformer, dtype=dtype, keep_in_fp32=keep_in_fp32)
     return transformer, captured
 
 

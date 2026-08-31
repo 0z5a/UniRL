@@ -252,9 +252,14 @@ class CPSSDEStrategy(SDEStrategy):
         self,
         prev_sample: torch.Tensor,
         prev_sample_mean: torch.Tensor,
+        std_var: torch.Tensor,
         **kwargs,
     ) -> torch.Tensor:
-        return -((prev_sample.detach() - prev_sample_mean) ** 2)
+        # Gaussian log-density up to the -log(std)+const terms, which carry no
+        # parameter gradient and cancel in ratios. Without the 1/(2*std^2)
+        # normalization the surrogate re-weights each SDE step by 2*std^2,
+        # suppressing low-sigma transitions by up to ~7x across the sigma bands.
+        return -((prev_sample.detach() - prev_sample_mean) ** 2) / (2 * std_var**2)
 
     def _std_dev_t(
         self,

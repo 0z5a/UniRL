@@ -1,0 +1,20 @@
+# @package _global_
+# Formal 200-rollout recipe: the validated fast_v2 stack (lr 2.5e-5, 6 sigma-band
+# transitions, 2 optimizer steps/batch, LoRA r64, HSDP4x8, ImageBind, normalized
+# CPS log-prob, parity 1e-2) with per-sample fresh x_T (user decision 08-25):
+# eval draws per-sample seeds, so train/eval now share one noise convention.
+defaults:
+  - minimax_h3_t2va_repro60_imagebind_fast_v2
+  - _self_
+
+num_rollouts: 200
+save_interval: 10
+eval_interval: 5
+save_dir: ${oc.env:H3_SAVE_DIR,checkpoints/h3-repro200-fresh}
+
+sampling:
+  init_same_noise: false
+
+logging:
+  run_name: h3-repro200-imagebind-fresh
+  tags: [minimax-h3, verlomni-repro, flowgrpo, imagebind, k16, fresh-noise, c2-normalized, hsdp4x8, lora64, lr2.5e5-sde6-up2]

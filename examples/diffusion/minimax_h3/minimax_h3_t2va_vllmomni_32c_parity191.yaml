@@ -1,0 +1,31 @@
+# @package _global_
+# Reproduce rollout 191 from checkpoint-190 after mixed-precision and strict
+# trajectory-contract fixes. The run must fail if max rollout/replay drift
+# remains above 1e-3.
+
+defaults:
+  - minimax_h3_t2va_vllmomni_32c_pickscore_diverse200
+  - _self_
+
+num_rollouts: 191
+load_dir: ${oc.env:H3_LOAD_DIR}
+save_interval: 0
+eval_interval: 0
+
+data_source:
+  args:
+    run:
+      start_batch: 0
+
+sampling:
+  sampler_kwargs:
+    capture_transition_means: true
+
+sync:
+  verify: true
+
+logging:
+  report_to_wandb: true
+  log_media: false
+  run_name: h3-parity-checkpoint190-step191-post-generate-active
+  tags: [minimax-h3, parity, checkpoint190, mixed-precision, transition-means, post-generate-active-verify]

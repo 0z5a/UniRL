@@ -1,0 +1,17 @@
+# @package _global_
+# Formal 200: the fast_v2 stack unchanged (shared x_T + independent SDE
+# exploration). The fresh-noise A/B (repro200_fresh) collapsed by rollout 61
+# (-0.021 eval, parity stop-loss) while this exact stack rose +0.0147/60 —
+# within-group x_T luck is ~5/6 of fresh-mode spread and poisons the advantage.
+defaults:
+  - minimax_h3_t2va_repro60_imagebind_fast_v2
+  - _self_
+
+num_rollouts: 200
+save_interval: 10
+eval_interval: 5
+save_dir: ${oc.env:H3_SAVE_DIR,checkpoints/h3-repro200-shared}
+
+logging:
+  run_name: h3-repro200-imagebind-shared
+  tags: [minimax-h3, verlomni-repro, flowgrpo, imagebind, k16, same-noise, c2-normalized, hsdp4x8, lora64, lr2.5e5-sde6-up2, formal200]

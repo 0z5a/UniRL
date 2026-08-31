@@ -1,0 +1,45 @@
+# @package _global_
+# verl-omni issue#396 reproduction arm: FlowGRPO + every verified fix from the
+# 2026-08-22 triage, 60-rollout test cycle on our dedicated 32-card cluster.
+#
+# Deployment (user-specified): trainer HSDP shard4 x replicate8; rollout
+# 8 x (DiT TP2xUP2, encoder TP4, VAE local); RM DP32 PickScore.
+# Fixes on this tree: normalized CPS log-prob (C2), per-request SDE exploration
+# seeds (S1 bug), sigma-band transition selection, fp32 trajectory/master.
+
+defaults:
+  - minimax_h3_t2va_vllmomni_32c_pickscore_visual200_tp2_up2
+  - _self_
+
+num_rollouts: 60
+save_interval: 10
+eval_interval: 5
+save_dir: ${oc.env:H3_SAVE_DIR,checkpoints/h3-repro60}
+
+backend:
+  fsdp_cfg:
+    # hybrid<N> = shard degree N, replicate world/N (patched wrap.py).
+    fsdp_mode: hybrid4
+  lora_cfg:
+    rank: 64
+    alpha: 128
+
+algorithm:
+  # Replay-anchored old log-probs: the cross-engine parity fail-fast threshold
+  # is scale-mismatched with the new sigma bands (35-104x amplification at
+  # indices 21/22); verl-omni likewise anchors on actor recompute.
+  old_logp_source: replay
+  # C2 normalization rescales |dlogp| by 1/(2*std^2) (0.9x-6.5x per band).
+  # With one update per batch the ratio is 1 and clipping is inert; widen it so
+  # future multi-update runs are not silently strangled at the old scale.
+  clip_range: 2.0e-2
+
+sampling:
+  # S1 verdict: fresh x_T contributes ~82% of within-group reward variance.
+  # Share x_T inside each group; SDE exploration stays per-sibling (fixed seed
+  # derivation from request_id).
+  init_same_noise: true
+
+logging:
+  run_name: h3-repro60-flowgrpo
+  tags: [minimax-h3, verlomni-repro, flowgrpo, pickscore, k16, same-noise, c2-normalized, hsdp4x8, lora64]

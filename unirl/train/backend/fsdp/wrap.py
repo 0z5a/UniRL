@@ -240,12 +240,23 @@ _SHARD_DEGREE: Dict[str, Optional[int]] = {"full": None, "hybrid": 8, "no_shard"
 
 def _create_device_mesh(fsdp_mode: str) -> Optional[object]:
     mode = str(fsdp_mode).strip().lower()
+    # "hybrid<N>" (e.g. hybrid4) overrides the default hybrid shard degree so
+    # HSDP geometry is a recipe knob instead of a code constant.
+    shard_override: Optional[int] = None
+    if mode.startswith("hybrid") and mode != "hybrid":
+        suffix = mode[len("hybrid"):]
+        require(
+            suffix.isdigit() and int(suffix) > 1,
+            f"training.fsdp.fsdp_mode={fsdp_mode!r}: hybrid<N> requires an integer shard degree > 1.",
+        )
+        shard_override = int(suffix)
+        mode = "hybrid"
     require(
         mode in _SHARD_DEGREE,
         f"training.fsdp.fsdp_mode={fsdp_mode!r} is not one of {sorted(_SHARD_DEGREE)}; "
         "an unrecognized mode would silently fall back to full sharding.",
     )
-    shard_size = _SHARD_DEGREE[mode]
+    shard_size = shard_override if shard_override is not None else _SHARD_DEGREE[mode]
     if shard_size is None:
         return None
 

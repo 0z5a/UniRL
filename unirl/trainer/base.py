@@ -4,7 +4,7 @@ import logging
 import os
 import sys
 from dataclasses import replace
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Dict, Optional
 
 from hydra.utils import instantiate
 from omegaconf import DictConfig
@@ -115,19 +115,15 @@ class BaseTrainer:
         *,
         cfg: DictConfig,
         logging_cfg: Optional[DictConfig] = None,
-        worker_max_concurrency: Optional[int | Sequence[int]] = None,
     ) -> None:
         self.num_devices = cfg.num_devices
-        if worker_max_concurrency is None:
-            configured_concurrency = cfg.get("worker_max_concurrency")
-            worker_max_concurrency = 1 if configured_concurrency is None else int(configured_concurrency)
         self.pool = DevicePool(
             num_devices=cfg.num_devices,
             devices_per_node=int(cfg.get("devices_per_node", 8)),
             workers_per_device=int(cfg.get("workers_per_device", 1)),
             transport_kind=cfg.get("transport_kind", "colocate_store"),
             tq_handoff=init_transfer_queue(cfg),
-            worker_max_concurrency=worker_max_concurrency,
+            worker_max_concurrency=int(cfg.get("worker_max_concurrency", 1)),
         )
         self.pool.setup()
 
@@ -323,6 +319,13 @@ class BaseTrainer:
         if self._memory_monitor is not None:
             self._memory_monitor.boundary("ckpt_save:begin", self.backend)
         self.backend.save(path, step=step, mode=save_mode)
+        self._wait_for_checkpoints()
+        model_artifacts = ("checkpoint.pt", "metadata.pt", ".metadata")
+        if not any(os.path.exists(os.path.join(path, name)) for name in model_artifacts):
+            raise RuntimeError(
+                f"Checkpoint backend returned without writing model state under {path}; "
+                f"expected one of {model_artifacts}."
+            )
         if self._memory_monitor is not None:
             self._memory_monitor.boundary("ckpt_save:end", self.backend)
         trainer_state_path = os.path.join(path, "trainer_state.json")
@@ -330,8 +333,6 @@ class BaseTrainer:
         with open(trainer_state_tmp, "w") as f:
             json.dump({"wandb_run_id": self.wandb_logger.run_id, "optimizer_step": self.wandb_logger.optimizer_step}, f)
         os.replace(trainer_state_tmp, trainer_state_path)
-        if step >= num_rollouts:
-            self._wait_for_checkpoints()
 
     def maybe_load_checkpoint(self, load_dir: Optional[str], *, num_rollouts: Optional[int] = None) -> int:
         """Restore training state from ``load_dir``; return the rollout step to resume from."""

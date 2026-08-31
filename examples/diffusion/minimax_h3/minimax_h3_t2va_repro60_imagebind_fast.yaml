@@ -1,0 +1,38 @@
+# @package _global_
+# Accelerated ImageBind arm: ~4x learning per rollout vs repro60_imagebind so a
+# 60-rollout cycle carries the judgement power of ~250 baseline rollouts.
+# Changes: lr 2e-5 -> 5e-5 (diverse200 ran 5e-5 for 200 rollouts, stable);
+# 3 -> 6 SDE transitions (the three bands split into six mutually exclusive
+# narrow bands over the same sigma range, one index drawn from each);
+# 1 -> 2 optimizer updates per batch (PPO ratio/clip become live; clip 0.02).
+defaults:
+  - minimax_h3_t2va_repro60_imagebind
+  - _self_
+
+backend:
+  optimizer_cfg:
+    learning_rate: 5.0e-5
+
+algorithm:
+  # The C2-normalized log-prob rescales |dlogp| by 1/(2*std^2): up to ~6.5x at
+  # sigma-band indices 21/22, so the legacy 1e-3 parity threshold false-fires
+  # (observed 0.0010159 at rollout ~25). 1e-2 still catches order-of-magnitude
+  # forward mismatches at the new scale.
+  max_rollout_replay_logp_absdiff: 1.0e-2
+
+stack:
+  num_updates_per_batch: 2
+
+sampling:
+  scheduler:
+    sigma_bands:
+      - [0.920, 0.930]
+      - [0.895, 0.915]
+      - [0.850, 0.890]
+      - [0.790, 0.840]
+      - [0.690, 0.780]
+      - [0.500, 0.650]
+
+logging:
+  run_name: h3-repro60-imagebind-fast
+  tags: [minimax-h3, verlomni-repro, flowgrpo, imagebind, k16, same-noise, c2-normalized, hsdp4x8, lora64, fast-lr5e5-sde6-up2]

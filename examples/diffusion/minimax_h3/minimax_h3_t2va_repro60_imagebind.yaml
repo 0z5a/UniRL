@@ -1,0 +1,20 @@
+# @package _global_
+# Arm B of the verl-omni reproduction: identical recipe to repro60 except the
+# reward switches from PickScore to ImageBind (audio-video / text-audio /
+# text-video alignment, internal weights 0.5/0.25/0.25) after PickScore showed
+# no clear rise within the 60-rollout test cycle (+0.003, noise-level).
+defaults:
+  - minimax_h3_t2va_repro60
+  - _self_
+
+reward:
+  backend:
+    config:
+      weights:
+        imagebind: 1.0
+        videopickscore: 0.0
+        clap: 0.0
+
+logging:
+  run_name: h3-repro60-imagebind
+  tags: [minimax-h3, verlomni-repro, flowgrpo, imagebind, k16, same-noise, c2-normalized, hsdp4x8, lora64]

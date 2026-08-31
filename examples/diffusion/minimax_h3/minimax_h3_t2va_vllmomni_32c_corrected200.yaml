@@ -1,0 +1,23 @@
+# @package _global_
+# Continue the corrected qualification from checkpoint-20 to a total budget of
+# 200 optimizer steps.
+
+defaults:
+  - minimax_h3_t2va_vllmomni_32c_corrected20
+  - _self_
+
+num_rollouts: 200
+save_interval: 10
+eval_interval: 10
+load_dir: ${oc.env:H3_LOAD_DIR,null}
+save_dir: ${oc.env:H3_SAVE_DIR,checkpoints/minimax-h3-corrected200}
+
+data_source:
+  args:
+    run:
+      start_batch: ${oc.decode:${oc.env:H3_START_BATCH,0}}
+
+logging:
+  media_log_interval: 10
+  run_name: h3-corrected200-hsdp4-up4
+  tags: [minimax-h3, corrected200, hsdp4, up4, rollout-logprob, multimodal-reward]

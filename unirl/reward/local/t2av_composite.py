@@ -19,9 +19,15 @@ class T2AVCompositeScorer(RewardBackend):
 
     def __init__(self, *, config: "T2AVCompositeSpec", base_device: str) -> None:
         super().__init__(model_name="t2av_composite", batch_size=config.batch_size)
-        self.weights: Dict[str, float] = dict(config.weights or {})
+        # A zero-weight component must be operationally disabled, not merely
+        # multiplied by zero after loading and inference. This lets recipes
+        # switch off expensive modalities without retaining their model or
+        # allowing a failed/NaN scorer to poison the composite.
+        self.weights: Dict[str, float] = {
+            str(name): float(weight) for name, weight in dict(config.weights or {}).items() if float(weight) != 0.0
+        }
         if not self.weights:
-            raise ValueError("T2AVCompositeScorer requires a non-empty `weights` dict (scorer_name -> weight).")
+            raise ValueError("T2AVCompositeScorer requires at least one non-zero weight.")
 
         self._scorers: Dict[str, RewardBackend] = {}
         for name in self.weights:
@@ -30,7 +36,9 @@ class T2AVCompositeScorer(RewardBackend):
             inner_spec = inner_spec_cls()
             import dataclasses
 
-            overrides = {f: getattr(config, f) for f in ("device", "batch_size") if hasattr(inner_spec, f)}
+            # Propagate only fields BOTH the composite and the inner spec declare.
+            shared = ("device", "batch_size", "frame_selection", "num_score_frames")
+            overrides = {f: getattr(config, f) for f in shared if hasattr(inner_spec, f) and hasattr(config, f)}
             if overrides:
                 inner_spec = dataclasses.replace(inner_spec, **overrides)
             self._scorers[name] = inner_cls(config=inner_spec, base_device=base_device)
@@ -45,11 +53,27 @@ class T2AVCompositeScorer(RewardBackend):
             total = torch.zeros(bs, dtype=torch.float32)
             for name, scorer in self._scorers.items():
                 resp = scorer.compute_rewards(request)
+                if len(resp.successes) != bs or len(resp.errors) != bs:
+                    raise RuntimeError(
+                        f"T2AVCompositeScorer: inner scorer {name!r} returned "
+                        f"{len(resp.successes)} success flags and {len(resp.errors)} errors for a batch of {bs}."
+                    )
+                failed = [(i, error) for i, (ok, error) in enumerate(zip(resp.successes, resp.errors)) if not ok]
+                if failed:
+                    raise RuntimeError(
+                        f"T2AVCompositeScorer: inner scorer {name!r} failed "
+                        f"{len(failed)} of {bs} samples; first few: {failed[:3]}"
+                    )
                 comp = torch.tensor(list(resp.rewards), dtype=torch.float32)
                 if comp.numel() != bs:
                     raise RuntimeError(
                         f"T2AVCompositeScorer: inner scorer {name!r} returned {comp.numel()} rewards "
                         f"for a batch of {bs}."
+                    )
+                if not torch.isfinite(comp).all():
+                    bad = (~torch.isfinite(comp)).nonzero(as_tuple=False).flatten().tolist()
+                    raise RuntimeError(
+                        f"T2AVCompositeScorer: inner scorer {name!r} returned non-finite rewards at indices {bad[:8]}"
                     )
                 component_rewards[name] = comp.tolist()
                 total = total + float(self.weights[name]) * comp
@@ -95,4 +119,9 @@ class T2AVCompositeSpec(BaseRewardComponentSpec):
 
     batch_size: int = 8
     device: str = "auto"
+    # Forwarded to inner scorers that declare it (videopickscore). "first"
+    # keeps the historical behaviour; "middle" avoids scoring a blank opening
+    # frame on clips that fade or reveal in.
+    frame_selection: str = "first"
+    num_score_frames: int = 1
     weights: Dict[str, float] = field(default_factory=lambda: {"videopickscore": 0.5, "clap": 0.5})
