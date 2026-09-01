@@ -6,10 +6,10 @@ H=/apdcephfs_zwfy8/share_305110755/hunyuan/zuhaoding/HYV2.0
 X=$H/experiments/2026-08-27_leo2-unirl-flowgrpo
 U=$X/code/UniRL-leo2
 source $H/env/leo2-venv/bin/activate
-# hymm repo on PYTHONPATH for the *driver* and reward actors too: the rollout
+# hymm runtime on PYTHONPATH for the *driver* and reward actors too: the rollout
 # Sample carries Leo2Conditions.hymm blobs whose pickles reference hymm classes
 # (R13: driver died unpickling them with "No module named 'hymm'").
-C=$H/code/hunyuan_multimodal_gen_ar
+C=$U/unirl/models/leo2/vendor/gen_ar
 export PYTHONPATH=$H/env/leo2-venv/lib/python3.12/site-packages:$U:$C:$C/deps/hy_parallelism:$C/deps/IndexKits:$PYTHONPATH
 export TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1
 export ASSETS_BASE=$H/assets/hymm_ar_assets

@@ -11,7 +11,7 @@ set -x
 H=/apdcephfs_zwfy8/share_305110755/hunyuan/zuhaoding/HYV2.0
 X=$H/experiments/2026-08-27_leo2-unirl-flowgrpo
 U=$X/code/UniRL-leo2
-C=$H/code/hunyuan_multimodal_gen_ar
+C=$U/unirl/models/leo2/vendor/gen_ar
 source $H/env/leo2-venv/bin/activate
 export PYTHONPATH=$H/env/leo2-venv/lib/python3.12/site-packages:$U:$C:$C/deps/hy_parallelism:$C/deps/IndexKits:$PYTHONPATH
 export TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1

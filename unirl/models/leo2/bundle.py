@@ -1,22 +1,4 @@
-"""Leo2 bundle -- bootstraps the external hymm stack and holds the weights.
-
-Loading strategy (smoke-grade, correctness first):
-  1. bootstrap hymm: sys.path + yaml->args (same parser the verified sampler
-     entry uses) + global args + single-process ParallelState (EP=1: UniRL FSDP
-     hosts the 64 experts locally through the non-fused path)
-  2. build the model EAGERLY on CPU (empty weights, bf16 + fp32-kept modules)
-  3. dcp.load the torch-dcp checkpoint into the state dict in place (ranged
-     reads; keys live under the 'model.' prefix in the checkpoint, handled by
-     nesting the state dict one level)
-  4. build tokenizer / text encoder (CPU-parked) / video VAE (GPU) and the
-     hymm diffusion pipeline object whose encode_prompt / channel-cond helpers
-     the stages reuse.
-
-The trainable module handed to UniRL's FSDPBackend is the whole LeoModelHF --
-its block classes (LeoLayer / LeoDualLayer / LeoTripleLayer) are what
-``backend.block_class_names`` must list. text encoder / VAE live in
-``model_dict`` (a plain dict), so FSDP never touches them.
-"""
+"""Leo2 bundle bootstrap and weight holder."""
 
 from __future__ import annotations
 
@@ -71,7 +53,23 @@ def _bootstrap_hymm(config: Leo2PipelineConfig):
     """Import hymm, parse args from the yaml, set globals. Idempotent."""
     global _HYMM_BOOTSTRAPPED
 
-    repo = config.hymm_repo_path
+    repo = os.path.abspath(config.hymm_repo_path)
+    config_yaml = os.path.abspath(config.config_yaml)
+    required_paths = {
+        "hymm runtime": os.path.join(repo, "hymm"),
+        "processors runtime": os.path.join(repo, "processors"),
+        "hy_parallelism dependency": os.path.join(repo, "deps", "hy_parallelism", "hy_parallelism"),
+        "IndexKits dependency": os.path.join(repo, "deps", "IndexKits", "index_kits"),
+    }
+    missing = [f"{label}: {path}" for label, path in required_paths.items() if not os.path.isdir(path)]
+    if missing:
+        raise FileNotFoundError(
+            "Leo2 hymm runtime is incomplete; set hymm_repo_path to a complete runtime. Missing: "
+            + "; ".join(missing)
+        )
+    if not os.path.isfile(config_yaml):
+        raise FileNotFoundError(f"Leo2 config_yaml does not exist: {config_yaml}")
+
     if repo not in sys.path:
         sys.path.insert(0, repo)
         for dep in ("deps/hy_parallelism", "deps/IndexKits"):
@@ -91,7 +89,7 @@ def _bootstrap_hymm(config: Leo2PipelineConfig):
         return global_vars.get_args()
 
     argv = [
-        "--config-path", config.config_yaml,
+        "--config-path", config_yaml,
         "--ckpt", config.ckpt_path,
         "--task-id", "unirl-leo2",
         "--framework", "fsdp",

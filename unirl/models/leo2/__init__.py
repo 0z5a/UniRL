@@ -1,9 +1,4 @@
-"""Leo2 (HYVideo 2.0, MoE-A12B) model package for UniRL trainside FlowGRPO.
-
-Local-only integration: the model implementation stays in the external
-hunyuan_multimodal_gen_ar repo (see config.hymm_repo_path); this package holds
-just the UniRL bundle / pipeline / stage adapters. t2v only.
-"""
+"""Leo2 model package with its vendored gen-ar runtime."""
 
 from .bundle import Leo2Bundle
 from .conditions import Leo2Conditions

@@ -9,7 +9,7 @@ the LoRA update — no separate inference engine, no weight sync.
 
 | Path | What |
 |---|---|
-| `unirl/models/leo2/` | model package: `bundle.py` (hymm bootstrap, DCP load, FSDP-ready placement), `text_embed.py` (capture-based conditioning through hymm's own `generate_video` input pipeline), `diffusion.py` (`Leo2DiffusionStage`: predict_noise / generate / replay), `vae.py` (3D-VAE decode → `Videos`), `pipeline.py`, `conditions.py`, `config.py` |
+| `unirl/models/leo2/` | model package and vendored gen-ar runtime: `bundle.py` (hymm bootstrap, DCP load, FSDP-ready placement), `vendor/`, `text_embed.py`, `diffusion.py`, `vae.py`, `pipeline.py`, `conditions.py`, `config.py` |
 | `examples/diffusion/leo2/leo2_t2v_trainside.yaml` | base recipe (FSDP2 + LoRA r64, FlowSDE, PickScore, FlowGRPO) |
 | `examples/diffusion/leo2/scripts/` | cluster launchers (`unirl_longrun*.sh`, `unirl_smoke.sh`), one-rollout probes, ops helpers, `perf_table.py` |
 | `examples/diffusion/leo2/docs/DESIGN.md` | decision log R1–R27 (every pitfall and its fix) |

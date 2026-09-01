@@ -1,14 +1,9 @@
-"""Leo2 pipeline config -- shared between bundle / pipeline / stages.
-
-Leo2 model code lives OUTSIDE this repo (the hymm package inside
-hunyuan_multimodal_gen_ar); we import it via ``hymm_repo_path`` instead of
-vendoring: the tree is far too large to vendor and this experiment is
-local-only anyway.
-"""
+"""Leo2 pipeline configuration."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import List, Optional
 
 LEO2_VAE_LATENT_CHANNELS = 48
@@ -16,17 +11,15 @@ LEO2_VAE_SPATIAL = 16
 LEO2_VAE_TEMPORAL = 4
 LEO2_TIMESTEP_SCALE = 1000.0
 
+_VENDORED_GEN_AR_ROOT = Path(__file__).resolve().parent / "vendor" / "gen_ar"
+_DEFAULT_LEO2_CONFIG = _VENDORED_GEN_AR_ROOT / "hymm/configs/leo2/leo2_moe_v1_1_a12b_muon_wzd_256p_stage2_part2.yaml"
+
 
 @dataclass
 class Leo2PipelineConfig:
     # --- code + weights ---
-    hymm_repo_path: str = (
-        "/apdcephfs_zwfy8/share_305110755/hunyuan/zuhaoding/HYV2.0/code/hunyuan_multimodal_gen_ar"
-    )
-    config_yaml: str = (
-        "/apdcephfs_zwfy8/share_305110755/hunyuan/zuhaoding/HYV2.0/code/hunyuan_multimodal_gen_ar/"
-        "hymm/configs/leo2/leo2_moe_v1_1_a12b_muon_wzd_256p_stage2_part2.yaml"
-    )
+    hymm_repo_path: str = str(_VENDORED_GEN_AR_ROOT)
+    config_yaml: str = str(_DEFAULT_LEO2_CONFIG)
     ckpt_path: str = (
         "/apdcephfs_zwfy8/share_305110755/hunyuan/zuhaoding/HYV2.0/ckpts/leo2_moe_a12b_480p/"
         "iter_0063300_torch/weights"

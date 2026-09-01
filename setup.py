@@ -1,4 +1,4 @@
-from setuptools import find_packages, setup
+from setuptools import find_namespace_packages, setup
 
 setup(
     name="unirl",
@@ -6,7 +6,7 @@ setup(
     description="Unified multimodal RL training framework",
     python_requires=">=3.12",
     include_package_data=True,
-    packages=find_packages(
+    packages=find_namespace_packages(
         where=".",
         include=(
             "unirl",
