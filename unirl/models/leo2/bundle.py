@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import math
 import os
 import sys
 from typing import Any, Optional
@@ -209,6 +210,29 @@ def _patch_router_dtype(model: nn.Module) -> None:
     print(f"[leo2 bundle] router dtype-follow patch applied to {n} gate.wg modules", flush=True)
 
 
+def _make_inference_cache_config(config: Leo2PipelineConfig) -> Any | None:
+    """Validate Leo2 inference-cache options and build the Diffusers config."""
+    if not isinstance(config.inference_cache_method, str):
+        raise TypeError("Leo2 inference_cache_method must be a string.")
+    method = config.inference_cache_method.strip().lower()
+    if method == "none":
+        return None
+    if method != "first_block":
+        raise ValueError(
+            "Leo2 inference_cache_method must be 'none' or 'first_block', "
+            f"got {config.inference_cache_method!r}."
+        )
+    if not isinstance(config.inference_cache_threshold, (int, float)):
+        raise TypeError("Leo2 inference_cache_threshold must be numeric.")
+    threshold = float(config.inference_cache_threshold)
+    if not math.isfinite(threshold) or threshold < 0:
+        raise ValueError("Leo2 inference_cache_threshold must be finite and non-negative.")
+
+    from diffusers import FirstBlockCacheConfig
+
+    return FirstBlockCacheConfig(threshold=threshold)
+
+
 class Leo2Bundle(Bundle):
     """Loaded Leo2 components."""
 
@@ -235,6 +259,7 @@ class Leo2Bundle(Bundle):
 
     @classmethod
     def from_config(cls, config: Leo2PipelineConfig) -> "Leo2Bundle":
+        inference_cache_config = _make_inference_cache_config(config)
         args = _bootstrap_hymm(config)
 
         local_rank = int(os.environ.get("LOCAL_RANK", os.environ.get("RAY_LOCAL_RANK", 0)))
@@ -291,6 +316,8 @@ class Leo2Bundle(Bundle):
 
         model.load_generation_config(config.generation_config_path)
         model.build_diffusion_pipeline()
+        if inference_cache_config is not None:
+            model.enable_cache(inference_cache_config)
 
         return cls(model=model, hymm_args=args, dtype=dtype, device=device, config=config)
 

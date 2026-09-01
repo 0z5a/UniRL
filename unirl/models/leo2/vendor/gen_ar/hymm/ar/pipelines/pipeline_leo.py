@@ -1,4 +1,5 @@
 import inspect
+from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union, TYPE_CHECKING
 
@@ -817,7 +818,9 @@ class Leo2Pipeline(DiffusionPipeline):
         num_warmup_steps = len(main_timesteps) - num_inference_steps * main_scheduler.order
         self._num_timesteps = len(main_timesteps)
 
-        with self.progress_bar(total=num_inference_steps) as progress_bar:
+        cache_context = getattr(self.model, "cache_context", None)
+        cache_context = cache_context("denoise") if cache_context is not None else nullcontext()
+        with cache_context, self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, (t, at) in enumerate(zip(timesteps, audio_timesteps)):
 
                 # expand the channel

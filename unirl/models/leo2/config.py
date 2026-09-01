@@ -49,6 +49,12 @@ class Leo2PipelineConfig:
     # --- schedule ---
     video_shift: float = 3.0
 
+    # --- native inference acceleration ---
+    # This is intentionally inactive in UniRL rollout/replay: only hymm's
+    # request-scoped diffusion pipeline enters the model cache context.
+    inference_cache_method: str = "none"
+    inference_cache_threshold: float = 0.05
+
     # --- placement ---
     # Qwen3.5-9B (18 GB bf16) parked on CPU; moved to GPU transiently for the
     # once-per-rollout encode when this is true, then moved back.

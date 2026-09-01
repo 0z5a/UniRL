@@ -16,6 +16,45 @@ the LoRA update — no separate inference engine, no weight sync.
 | `examples/diffusion/leo2/docs/R15_perf_report.html` | timing / memory / deployment measurements (with erratum) |
 | `examples/diffusion/leo2/data/` | the 32 training prompts + 8 held-out prompts |
 
+## Native inference first-block cache
+
+Leo2's vendored hymm pipeline supports the same user-facing lifecycle as
+Diffusers `FirstBlockCacheConfig`: disabled by default, enabled on the model,
+scoped to one denoising request, and reset even when generation raises.
+
+```python
+from unirl.models.leo2 import Leo2Bundle, Leo2PipelineConfig
+
+config = Leo2PipelineConfig(
+    inference_cache_method="first_block",
+    inference_cache_threshold=0.05,
+)
+bundle = Leo2Bundle.from_config(config)
+output = bundle.model.generate_video(prompt="A red panda walking in the snow")
+print(bundle.model.cache_stats())
+bundle.model.disable_cache()
+```
+
+For an already loaded model, the direct Diffusers-style API is also available:
+
+```python
+from diffusers import FirstBlockCacheConfig
+
+bundle.model.enable_cache(FirstBlockCacheConfig(threshold=0.05))
+```
+
+The cache always runs Leo block 0 and compares its residual with the last full
+step. When the normalized change is below the threshold, it reuses the residual
+of blocks 1..N. Higher thresholds usually skip more work but can reduce quality.
+Only hymm's native `generate_image` / `generate_video` path opens a cache
+context; UniRL rollout and gradient replay remain exact. CP statistics are
+combined before the decision, and the maximum score is synchronized over the
+block's actual FSDP shard group for the supported EP=ETP=TP=PP=1 topology.
+Other parallel topologies, uninitialized distributed parallel state, or an
+unresolvable shard group conservatively fall back to a full forward. The
+decision remains eager code; whole-model `torch.compile(fullgraph=True)` is not
+supported.
+
 ## Recipe that learns (v3, mirrors the native pure-torch GRPO run)
 
 ```

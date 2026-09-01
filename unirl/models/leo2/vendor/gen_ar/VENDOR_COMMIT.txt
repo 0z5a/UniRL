@@ -31,6 +31,10 @@ Local integration:
     roots into sys.path, preserving hymm's upstream absolute imports.
   - unirl.models.leo2.config resolves the default hymm root and Leo2 YAML from
     this tree. User-supplied paths continue to override those defaults.
+  - hymm/models/basic/rope_cache.py carries UniRL's exact input-signature cache
+    key, explicit reset, and hit/miss counters.
+  - hymm/models/diffusion/leo_cache.py plus the Leo model/pipeline integration
+    carry UniRL's request-scoped Diffusers-style first-block inference cache.
 
 To re-vendor: export the source commit and IndexKits commit above, obtain the
 hy_parallelism gitlink source (or document its replacement), replace this tree
