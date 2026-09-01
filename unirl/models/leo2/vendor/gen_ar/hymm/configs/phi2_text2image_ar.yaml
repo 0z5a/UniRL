@@ -1,0 +1,124 @@
+training_config:
+  trainer_name: Text2ImageARTrainer
+  micro_batch_size: 4
+  gradient_accumulation_steps: 1
+  global_batch_size: null
+  global_seed: 1
+  reproduce: False
+  profile: False
+  zero_stage: 2
+  log_every: 10
+  tensorboard: True
+  training_parts: null
+  gradient_checkpoint: False
+  gradient_checkpoint_layers: -1
+
+  use_ema: False
+  distributed_ema: False
+  ema_precision: bf16
+  ema_warmup: True
+  ema_decay: null
+  ema_warmup_power: null
+
+  max_epochs: 10
+  max_training_steps: 1_000_000_000
+  ckpt_every: 5000
+
+  init_save: False
+  final_save: True
+
+  resume: null
+  resume_dataloader: False
+  no_load_optim_states: False
+  no_load_ema: False
+  default_rank0_ss: False
+  fix_lr_scheduler: False
+
+  validation_at_steps: [100]
+  validation_every: 5000
+  validation_metrics: null # metrics will be calculated during train
+  validation_metrics_save_image: False
+
+sampling_config:
+  ckpt: null
+  load_key: module
+  metric_image_size: 256
+  metric_batch_size: 1
+  evaluation_metrics: [fid@coco30k, clip_score@coco30k, hpsv2@coco30k]
+  sample_image_size: 256
+  sample_batch_size: 1
+  rerank: 1
+  seed_type: auto
+  seed: 123456
+  logits_processors_cfg:
+  - SliceVocabLogitsWarper:
+      vocab_start: 51200  # equals to padded_vocab_size
+      vocab_end: 313344  # equals to padded_vocab_size + media_vocab_size
+  - CfgLogitsWarper:
+      guidance_scale: 6.0
+  - TemperatureLogitsWarper:
+      temperature: 1.0
+  - TopKLogitsWarper:
+      top_k: 1024
+  - TopPLogitsWarper:
+      top_p: 0.9
+
+model_config:
+  model_name: phi-2
+  pretrained_ckpt: phi-2
+  load_llm_to_mllm: True
+  expand_keys: ["transformer.wte.weight", "lm_head.weight", "lm_head.bias"]
+  model_precision: fp32
+  autocast_dtype: bf16
+  media_vocab_size: 262144
+
+extra_model_config:
+  vae_type: 88-magvitv2-hy_240930
+  vae_precision: bf16
+
+optimizer_config:
+  optimizer_name: AdamW
+  gradient_clipping: 1.0
+  optimizer_params:
+    lr: 0.0001
+    betas: [0.9, 0.95]
+    eps: 0.000001
+    weight_decay: 0.01
+
+lr_scheduler_config:
+  lr_scheduler_name: WarmupCosineLR
+  lr_scheduler_params:
+    warmup_num_steps: 5000
+    total_num_steps: -1
+    cos_min_ratio: 0.01
+
+dataloader_config:
+  index_file: /apdcephfs_cq8/share_1367250/milesjyang/small_image_arrow_dataset/debug_set_cq8.json
+  training_image_size: 256 # training image size is used in non-multireso mode
+  image_token_length: 1024  # must be largest length of image token sequence in multireso mode
+  image_token_offset: 51200  # equals to padded_vocab_size
+  use_pre_extracted_token: False
+  text_token_length: 256
+  uncond_p: 0.0
+  tokenizer_name: phi-2
+  multireso: False
+  add_iw_ih_token: False
+  mix_scale: False
+  anchor_size: 256
+  shuffle_by: dataset
+  fast_shuffle: True
+  debug: False
+  index_kwargs:
+    image_caption_rate: 0.5
+    image_text_arrow_suffix: _trans
+    image_text_col: trans
+    image_caption_arrow_suffix: _caption
+    image_caption_col: llava_caption
+    index_strategy: uniform
+    index_probability: null
+    caption_sample_ratio: null
+  dataloader_params:
+    num_workers: 4
+    pin_memory: True
+    prefetch_factor: 2
+  

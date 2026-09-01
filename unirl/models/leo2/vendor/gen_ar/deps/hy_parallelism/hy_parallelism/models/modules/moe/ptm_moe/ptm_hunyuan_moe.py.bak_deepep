@@ -1,0 +1,900 @@
+from functools import partial
+from einops import rearrange, reduce
+from transformers.activations import ACT2FN
+
+import torch
+from torch import nn
+import torch.distributed as dist
+import torch.nn.functional as F
+import time
+import logging
+
+from hy_parallelism.parallel_states import get_parallel_state
+
+# from hymm.utils.torch_utils import _Timer
+
+MIN_EXPERT_CAPACITY = 4
+
+from torch.utils.checkpoint import detach_variable
+from torch.autograd.variable import Variable
+
+from typing import Callable, Dict, TYPE_CHECKING, Any, Optional, Tuple, Union, cast
+import time
+from time import perf_counter
+import torch
+from torch import Tensor
+import torch.distributed as dist
+from torch.nn import Module, ModuleList
+import torch.nn.functional as F
+# from .mlp import GroupedMLP, MLP, GroupedMLP_v2
+from einops import rearrange, repeat
+# from .fp8_a2a import FP8ShareAlltoAll, FP8AlltoAll
+from .fused_moe.fused_moe_loss import fused_calculate_aux_loss
+from .fused_moe.fused_router import fused_aux_loss_router
+from .fused_moe.fused_permutation import fused_permute, fused_unpermute
+from .ptm_moe_helper import PTMHunYuanMLP, GroupedMLP, _router_z_loss, _capacity, einsum
+
+from ..moe_config import MOEConfig as MoeConfig
+
+
+if TYPE_CHECKING:
+    Base = Module[Tensor]
+else:
+    Base = Module
+
+uniform_map: Dict[torch.device, Callable] = {}
+gumbel_map: Dict[torch.device, Callable] = {}
+exp_selection_uniform_map: Dict[torch.device, Callable] = {}
+    
+
+def gumbel_rsample(shape: Tuple, device: torch.device) -> Tensor:
+    gumbel = gumbel_map.get(device)
+    if gumbel is None:
+        one = torch.tensor(1.0, device=device)
+        zero = torch.tensor(0.0, device=device)
+        gumbel = torch.distributions.gumbel.Gumbel(zero, one).rsample  # type: ignore
+        gumbel_map[device] = gumbel
+    return gumbel(shape)
+
+
+class Experts(torch.nn.Module):
+    def __init__(self, config, num_local_experts=1, expert_group_name=None):
+        super(Experts, self).__init__()
+        self.config = config
+        # hardcode use GroupedMLP
+        self.deepspeed_experts = GroupedMLP(num_local_experts, config, expert_group_name)
+        self.num_local_experts = num_local_experts
+
+    def forward(self, inputs, num_tokens_per_local_expert=None):
+     
+        # if self.config.fused_ffn_expert and self.num_local_experts >1:
+        if True:
+            if num_tokens_per_local_expert is None:
+                ep_size, num_local_experts, capacity, _ = inputs.shape
+                tokens_per_expert = torch.full(
+                    (num_local_experts,), capacity * ep_size, dtype=torch.long
+                )
+            else:
+                tokens_per_expert = num_tokens_per_local_expert
+            
+            global_output_tokens = self.deepspeed_experts(inputs, tokens_per_expert)
+
+            if num_tokens_per_local_expert is None:
+                global_output_tokens = global_output_tokens.reshape(num_local_experts, ep_size, capacity, -1).transpose(0, 1)
+            
+            return global_output_tokens
+        else:
+            if num_tokens_per_local_expert is not None:
+                # use_deepep 的情况下输入已经切成 chunk 了
+                chunks = torch.split(inputs, num_tokens_per_local_expert.tolist())
+            else:
+                chunks = inputs.chunk(self.num_local_experts, dim=1)
+            expert_outputs = []
+            for expert_idx, (chunk, expert) in enumerate(zip(chunks, self.deepspeed_experts)):
+                out = expert(chunk)
+                if type(out) is tuple:
+                    out = out[0]  # Ignore the bias term for now
+                expert_outputs += [out]
+
+            cat_dim = 0 if num_tokens_per_local_expert is not None else 1
+            expert_output = torch.cat(expert_outputs, dim=cat_dim)
+            return expert_output
+
+
+class Share_AllToAll(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx: Any,
+                group: dist.ProcessGroup,
+                shared_run_function: Callable,
+                input: Tensor,
+                shared_input: Tensor) -> Tensor:  # type: ignore
+        ctx.group = group
+        input = input.contiguous()
+        output = torch.empty_like(input)
+
+        # # sync all_gather befor all2all, only for zero-cache
+        # glob_queue.sync_allgather_before_all2all() # hardcode comment by youngfyang
+
+        handle = dist.all_to_all_single(output, input, group=group, async_op=True)
+        detached_inputs = detach_variable((shared_input,))
+        with torch.enable_grad():
+            hidden_states_mlp, _ = shared_run_function(detached_inputs[0])
+           # hidden_states_clone = hidden_states_mlp.clone()
+            #hidden_states_clone.data = torch.empty((1,), device=hidden_states_clone.device, dtype=hidden_states_clone.dtype,)
+        handle.wait()
+        #ctx.save_for_backward(hidden_states_clone, detached_inputs[0])
+        ctx.save_for_backward(hidden_states_mlp, detached_inputs[0])
+
+        return output, hidden_states_mlp.detach()
+    @staticmethod
+    def backward(ctx: Any, *grad_output: Tensor) -> Tuple[None, Tensor]:
+        group = ctx.group
+        input = grad_output[0].contiguous()
+        output = torch.empty_like(input)
+
+        # # sync all_gather befor all2all, only for zero-cache
+        # glob_queue.sync_allgather_before_all2all() # hardcode comment by youngfyang
+
+        handle = dist.all_to_all_single(output, input, group=group, async_op=True)
+        mlp_out, detached_inputs = ctx.saved_tensors
+        Variable._execution_engine.run_backward(
+            tensors=(mlp_out, ),
+            grad_tensors=(grad_output[1],),
+            keep_graph=False,
+            create_graph=False,
+            inputs=tuple(),
+            allow_unreachable=True,
+            accumulate_grad=True,
+        )
+        grads = tuple(
+            inp.grad if isinstance(inp, torch.Tensor) else inp
+            for inp in [detached_inputs]
+        )
+        handle.wait()
+        return (None, None, output) + grads
+    
+# Based on https://github.com/pytorch/pytorch/pull/40762
+class _AllToAll(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx: Any,
+                group: dist.ProcessGroup,
+                input: Tensor) -> Tensor:  # type: ignore
+        ctx.group = group
+        input = input.contiguous()
+        output = torch.empty_like(input)
+
+        # # sync all_gather befor all2all, only for zero-cache
+        # glob_queue.sync_allgather_before_all2all() # hardcode comment by youngfyang
+        dist.all_to_all_single(output, input, group=group)
+        return output
+
+    @staticmethod
+    def backward(ctx: Any, *grad_output: Tensor) -> Tuple[None, Tensor]:
+        return (None, _AllToAll.apply(ctx.group, *grad_output))
+
+
+def topkgating(logits: Tensor,
+               topk: int,
+               capacity_factor: float,
+               min_capacity: int,
+               used_token: Tensor = None,
+               noisy_gate_policy: Optional[str] = None,
+               drop_tokens: bool = True,
+               use_rts: bool = True,
+               gather_seq:bool = False,
+               use_z_loss: bool = False,
+               use_deepep: bool = False,
+               group_limited_greedy: bool = False,
+               n_group: int = 8,
+               topk_group: int = 3,
+               norm_topk_prob: bool = True,
+               routed_scaling_factor: float = 1.0,
+               scoring_func: str = "softmax",
+               e_score_correction_bias=None) -> Tuple[Tensor,
+                                                 Tensor,
+                                                 Tensor,
+                                                 Tensor]:
+    # TODO: FIXME: add parallel group
+    if use_z_loss:
+        z_loss = _router_z_loss(logits=logits, importance=used_token)
+    else:
+        z_loss = torch.tensor(0.0, dtype=logits.dtype).cuda(non_blocking=True)
+
+    if noisy_gate_policy == 'RSample':
+        logits_w_noise = logits + gumbel_rsample(logits.shape, device=logits.device)
+    if scoring_func == "softmax": # True, only support softmax
+        gates = F.softmax(logits, dim=1)
+    elif scoring_func == "sigmoid":
+        gates = logits.sigmoid()
+    else:
+        raise RuntimeError("unsurpport scoring func type")
+    
+    if gather_seq: # False
+        from deepspeed.runtime.activation_checkpointing.checkpointing import mpu
+        gates = mpu.gather_from_sequence_parallel_region(gates, tensor_parallel_output_grad=False)
+    
+    if e_score_correction_bias is not None: # False
+        gates_for_choice = gates.detach() + e_score_correction_bias
+    else:
+        gates_for_choice = gates
+
+    if group_limited_greedy: # False
+        group_shape = list(gates.shape[:-1])+[n_group, gates.shape[-1] // n_group]  # (num_tokens, n_group, experts_per_group)
+        if e_score_correction_bias is None:
+            group_scores = (
+                gates_for_choice.view(group_shape).max(dim=-1).values
+            )  # [n, n_group]
+        else:
+            group_scores = gates_for_choice.view(group_shape).topk(2, dim=-1)[0].sum(dim=-1)
+        # group_scores: (num_tokens, n_group)
+        group_idx = torch.topk(
+            group_scores, topk_group, dim=-1, sorted=False
+        )[1]  # [n, top_k_group]
+        group_mask = torch.zeros_like(group_scores)  # [n, n_group]
+        group_mask.scatter_(1, group_idx, 1)  # [n, n_group]
+        score_mask = (
+            group_mask.unsqueeze(-1)
+            .expand(
+                group_shape
+            )
+            .reshape(list(gates.shape))
+        )  # [n, e]
+        gates_for_choice = gates_for_choice.masked_fill(~score_mask.bool(), 0.0)
+    
+    expert_capacity = topk * _capacity(gates,
+                         torch.tensor(capacity_factor),
+                         torch.tensor(min_capacity))
+    num_experts = int(gates.shape[1])
+    tokens_per_group = int(gates.shape[0])
+
+    # Top-k router probability and corresponding expert indices for each token.
+    # Shape: [tokens_per_group, num_selected_experts].
+    expert_gate, expert_index = torch.topk(logits_w_noise if noisy_gate_policy == 'RSample' else gates_for_choice, topk)
+    expert_mask = F.one_hot(expert_index, num_experts)
+    # mask only used tokens
+    if used_token is not None:
+        expert_mask = expert_mask.reshape(tokens_per_group, -1)
+        expert_mask = einsum("s,se->se", used_token, expert_mask)
+        expert_mask = expert_mask.reshape(tokens_per_group, -1, num_experts)
+        if use_deepep:
+            # pad_token 的位置赋值为 -1
+            expert_index = expert_index.masked_fill(~used_token.bool().reshape(-1, 1), -1)
+
+    # For a given token, determine if it was routed to a given expert.
+    # Shape: [tokens_per_group, num_experts]
+    expert_mask_aux= expert_mask.max(dim=-2)[0]
+    tokens_per_group_and_expert = torch.mean(expert_mask_aux.float(), dim=-2)
+    router_prob_per_group_and_expert = torch.mean(gates.float(), dim=-2)
+    l_aux = num_experts**2 * torch.mean(tokens_per_group_and_expert * router_prob_per_group_and_expert)
+
+    if norm_topk_prob and topk > 1:
+        gates_s = torch.clamp(torch.matmul(expert_mask.float(), gates.unsqueeze(-1)).sum(dim=1), min=torch.finfo(gates.dtype).eps)
+        router_probs = gates / gates_s
+    else:
+        router_probs = gates
+    router_probs = router_probs * routed_scaling_factor
+
+    if use_deepep:
+        exp_counts = expert_mask.transpose(0, 1).reshape(-1, num_experts).to(torch.int32).sum(dim=0).detach()
+        topk_weight, _ = torch.topk(router_probs, topk)
+        # Capacity rate 会在 dispatch 之后再计算
+        return [l_aux, z_loss, torch.tensor(1.0).cuda(non_blocking=True)], topk_weight, expert_index, exp_counts
+
+    # Make num_selected_experts the leading axis to ensure that top-1 choices
+    # have priority over top-2 choices, which have priority over top-3 choices,
+    # etc.
+    expert_index = torch.transpose(expert_index, 0, 1)
+    # Shape: [num_selected_experts * tokens_per_group]
+    expert_index = expert_index.reshape(-1)
+
+    # Create mask out of indices.
+    # Shape: [tokens_per_group * num_selected_experts, num_experts].
+    expert_mask = expert_mask.transpose(0,1).reshape(-1, num_experts).to(torch.int32)
+    exp_counts = torch.sum(expert_mask, dim=0).detach()
+    if not drop_tokens:
+        new_capacity = torch.max(exp_counts.sum(dim=0))
+        dist.all_reduce(new_capacity, op=dist.ReduceOp.MAX, group=dist.group.WORLD)
+        expert_capacity = new_capacity
+
+    # Experts have a fixed capacity that we cannot exceed. A token's priority
+    # within the expert's buffer is given by the masked, cumulative capacity of
+    # its target expert.
+    # Shape: [tokens_per_group * num_selected_experts, num_experts].
+    token_priority = torch.cumsum(expert_mask, dim=0) * expert_mask - 1
+    # Shape: [num_selected_experts, tokens_per_group, num_experts].
+    token_priority = token_priority.reshape((topk, -1, num_experts))
+    # Shape: [tokens_per_group, num_selected_experts, num_experts].
+    token_priority = torch.transpose(token_priority, 0, 1)
+    # For each token, across all selected experts, select the only non-negative
+    # (unmasked) priority. Now, for group G routing to expert E, token T has
+    # non-negative priority (i.e. token_priority[G,T,E] >= 0) if and only if E
+    # is its targeted expert.
+    # Shape: [tokens_per_group, num_experts].
+    token_priority = torch.max(token_priority, dim=1)[0]
+
+    # Token T can only be routed to expert E if its priority is positive and
+    # less than the expert capacity. One-hot matrix will ignore indices outside
+    # the range [0, expert_capacity).
+    # Shape: [tokens_per_group, num_experts, expert_capacity].
+    valid_mask = torch.logical_and(token_priority >= 0, token_priority < expert_capacity)
+    token_priority = torch.masked_fill(token_priority, ~valid_mask, 0)
+    dispatch_mask = F.one_hot(token_priority, expert_capacity).to(torch.bool)
+    valid_mask = valid_mask.unsqueeze(-1).expand(-1, -1, expert_capacity)
+    dispatch_mask = torch.masked_fill(dispatch_mask, ~valid_mask, 0)
+
+    # The combine array will be used for combining expert outputs, scaled by the
+    # router probabilities. Shape: [num_groups, tokens_per_group, num_experts,
+    # expert_capacity].
+    combine_weights = torch.einsum("...te,...tec->...tec", router_probs, dispatch_mask)
+    exp_counts_capacity = torch.sum(dispatch_mask)
+    
+    if used_token is None:
+        exp_capacity_rate = exp_counts_capacity / (logits.shape[0] * topk)
+    else:
+        exp_capacity_rate = exp_counts_capacity / (torch.sum(used_token) * topk + 1e-8)
+
+    return [l_aux, z_loss, exp_capacity_rate], combine_weights, dispatch_mask, exp_counts
+
+
+def fused_topk_gating(logits: Tensor,
+               topk: int,
+               capacity_factor: float,
+               min_capacity: int,
+               used_token: Tensor = None,
+               noisy_gate_policy: Optional[str] = None,
+               drop_tokens: bool = True,
+               use_rts: bool = True,
+               gather_seq:bool = False,
+               use_z_loss: bool = False) -> Tuple[Tensor,
+                                                 Tensor,
+                                                 Tensor,
+                                                 Tensor]:
+ # TODO: FIXME: add parallel group
+    if use_z_loss:
+        z_loss = _router_z_loss(logits=logits, importance=used_token)
+    else:
+        z_loss = torch.tensor(0.0, dtype=logits.dtype).cuda(non_blocking=True)
+
+    probs, scores, indices, tokens_per_expert, num_out_tokens = fused_aux_loss_router(logits,
+                                                                      used_token,
+                                                                      topk,
+                                                                      capacity_factor,
+                                                                      min_capacity,
+                                                                      False,
+                                                                      "position",
+                                                                      drop_tokens)
+
+    l_aux = fused_calculate_aux_loss(scores, tokens_per_expert, topk)
+
+    if used_token is None:
+        exp_capacity_rate = torch.sum(indices) / (logits.shape[0] * topk)
+    else:
+        exp_capacity_rate = torch.sum(indices) / (torch.sum(used_token) * topk + 1e-8)
+
+    return [l_aux, z_loss, exp_capacity_rate], probs, indices, tokens_per_expert, num_out_tokens
+
+
+class TopKGate(Module):
+    """Gate module which implements Top2Gating as described in Gshard_.
+    ::
+
+        gate = TopKGate(model_dim, num_experts)
+        l_moe, combine_weights, dispatch_mask = gate(input)
+        > aux_loss = l_moe[0]
+        > z_loss = l_moe[1]
+
+    .. Gshard_: https://arxiv.org/pdf/2006.16668.pdf
+
+    Args:
+        model_dim (int):
+            size of model embedding dimension
+        num_experts (ints):
+            number of experts in model
+    """
+
+    wg: torch.nn.Linear
+
+    def __init__(self,
+                 model_dim: int,
+                 num_experts: int,
+                 k: int = 1,
+                 capacity_factor: float = 1.0,
+                 eval_capacity_factor: float = 1.0,
+                 min_capacity: int = 8,
+                 noisy_gate_policy: Optional[str] = None,
+                 drop_tokens: bool = True,
+                 use_rts: bool = True, 
+                 use_z_loss: bool =  True,
+                 sequence_parallel = False,
+                 expert_tensor_parallel = False,
+                 gather_seq = False,
+                 random_routing_dropped_token = False,
+                 expert_choice_routing = False,
+                 deepseek_moe_config = {},
+                 use_fused_moe = False,
+                 use_deep_ep = False,
+                 disable_fused_topk_gating = True) -> None:
+        super().__init__()
+
+        self.wg = torch.nn.Linear(model_dim, num_experts, bias=False, dtype=torch.float32)
+        # denote gate and create all moe gate into one param group
+        self.wg.weight.gate = True
+        self.wg.ds_fp32 = True
+        self.wg.weight.ds_fp32 = True # indicate optimizer (ptm optimizer) that this param is a fp32 param
+
+        if deepseek_moe_config.get("use_deepseek_gate_bias", False):
+            self.e_score_correction_bias = torch.nn.Parameter(
+                torch.empty((num_experts))
+            )
+            if sequence_parallel:
+                setattr(self.e_score_correction_bias, 'sequence_parallel', True)
+            deepseek_moe_config['e_score_correction_bias'] = self.e_score_correction_bias
+        if len(deepseek_moe_config) != 0:
+            del deepseek_moe_config['use_deepseek_gate_bias']
+
+        if sequence_parallel:
+            setattr(self.wg.weight, 'sequence_parallel', True)
+        self.sequence_parallel = sequence_parallel
+        self.expert_tensor_parallel = expert_tensor_parallel
+        if gather_seq and sequence_parallel and expert_tensor_parallel:
+            self.gather_seq = True
+        else:
+            self.gather_seq = False
+        self.k = k
+        self.capacity_factor = capacity_factor
+        self.eval_capacity_factor = eval_capacity_factor
+        self.min_capacity = min_capacity
+        self.noisy_gate_policy = noisy_gate_policy
+        # self.timers = SynchronizedWallClockTimer()
+        self.wall_clock_breakdown = False
+        self.gate_time = 0.0
+        self.drop_tokens = drop_tokens
+        self.use_rts = use_rts
+        self.use_z_loss = use_z_loss
+        self.expert_choice_routing = expert_choice_routing
+        self.random_routing_dropped_token = random_routing_dropped_token
+        self.deepseek_moe_config = deepseek_moe_config
+        self.use_fused_moe = use_fused_moe
+        self.use_deep_ep = use_deep_ep
+        self.disable_fused_topk_gating = disable_fused_topk_gating
+
+    def forward(
+            self,
+            input: torch.Tensor,
+            used_token: torch.Tensor = None,
+            ep_group=None,
+            use_tutel: bool = False) -> Tuple[Tensor,
+                                              Tensor,
+                                              Tensor]:  # type: ignore
+        # hardcode input.float() to ensure fp32
+        input_fp32 = input.float()
+        
+        with torch.cuda.amp.autocast(enabled=False):
+            logits = self.wg(input_fp32)
+
+        if self.use_fused_moe and not self.disable_fused_topk_gating:
+            gate_output = fused_topk_gating(
+                logits,
+                self.k,
+                self.capacity_factor if self.training else self.eval_capacity_factor,
+                self.min_capacity,
+                used_token,
+                self.noisy_gate_policy if self.training else None,
+                self.drop_tokens,
+                self.use_rts,
+                self.gather_seq,
+                self.use_z_loss)
+        else:
+            gate_output = topkgating(
+                logits,
+                self.k,
+                self.capacity_factor if self.training else self.eval_capacity_factor,
+                self.min_capacity,
+                used_token,
+                self.noisy_gate_policy if self.training else None,
+                self.drop_tokens,
+                self.use_rts,
+                self.gather_seq,
+                self.use_z_loss,
+                self.use_deep_ep,
+                **self.deepseek_moe_config) # self.deepseek_moe_config is {}
+
+        return gate_output
+    
+
+class MOELayer(Base):
+    """MOELayer module which implements MixtureOfExperts as described in Gshard_.
+    ::
+
+        gate = TopKGate(model_dim, num_experts)
+        moe = MOELayer(gate, expert)
+        output = moe(input)
+        l_moe = moe.l_moe
+        > aux_loss = l_moe[0]
+        > z_loss = l_moe[1]
+
+    .. Gshard_: https://arxiv.org/pdf/2006.16668.pdf
+
+    Args:
+        gate (torch.nn.Module):
+            gate network
+        expert (torch.nn.Module):
+            expert network
+    """
+    def __init__(self,
+                 gate: TopKGate,
+                 experts: Module,
+                 ep_group_name,
+                 ep_size,
+                 num_local_experts: int,
+                 use_tutel: bool = False,
+                 gather_seq: bool = False,
+                 a2a_ffn_overlap_degree: int = 1,
+                 a2a_ffn_overlap_chunks: int = 2,
+                 expert_choice_routing: bool = False,
+                 use_fused_moe: bool = False,
+                 fp8_a2a: bool = False,
+                 ) -> None:
+        super().__init__()
+        self.gate = gate
+        self.experts = experts
+        self.ep_group = None
+        self.ep_size = ep_size
+        self.ep_group_name = ep_group_name
+        self.num_local_experts = num_local_experts
+        self.time_falltoall = 0.0
+        self.time_salltoall = 0.0
+        self.time_moe = 0.0
+        self.a2a_ffn_overlap_degree = a2a_ffn_overlap_degree
+        self.a2a_ffn_overlap_chunks = a2a_ffn_overlap_chunks
+        # from megatron import get_timers
+        self.timers = None
+        self.wall_clock_breakdown = False
+        self.expert_choice_routing = expert_choice_routing
+        self.gather_seq = gather_seq
+
+        # self.use_tutel = use_tutel and TUTEL_INSTALLED and gate.k == 1
+        self.use_tutel = False
+        self.use_fused_moe = use_fused_moe
+
+        self.gate.ds_fp32 = True
+
+        # if fp8_a2a:
+        if False:
+            input_is_quantized = True
+            self.fp8_share_a2a = FP8ShareAlltoAll()
+            self.fp8_share_a2a_first = FP8ShareAlltoAll(input_is_quantized=input_is_quantized)
+
+            self.fp8_a2a = FP8AlltoAll()
+            self.fp8_a2a_first = FP8AlltoAll(input_is_quantized=input_is_quantized)
+        else:
+            self.fp8_share_a2a = None
+
+    def _set_ep_group(self, ep_group):
+        self.ep_group = ep_group
+
+    def _unset_ep_group(self):
+        self.ep_group = None
+
+    def forward(self, *input: Tensor, **kwargs: Any) -> Tensor:
+        if self.wall_clock_breakdown:
+            self.timers('moe', log_level=2).start()
+
+        # Implement Algorithm 2 from GShard paper.
+        d_model = input[0].shape[-1]
+
+        # Initial implementation -> Reshape into S tokens by dropping sequence dimension.
+        # Reshape into G groups so that each group can distribute tokens equally
+        # group_size = kwargs['group_size'] if 'group_size' in kwargs.keys() else 1
+        reshaped_input = input[0].reshape(-1, d_model)
+        num_tokens = reshaped_input.shape[0]
+
+        '''
+        reshaped_input: (MBS * seq_len, dim)
+        dispatched_input: (#experts, #tokens, dim)
+        '''
+
+        gate_reshaped_input = reshaped_input
+
+        if self.fp8_share_a2a: # False
+            share_a2a_fn = self.fp8_share_a2a
+            share_a2a_fn_first = self.fp8_share_a2a_first
+            reshaped_input = share_a2a_fn_first.prepare(reshaped_input)
+
+            a2a_fn = self.fp8_a2a
+            a2a_fn_first = self.fp8_a2a_first
+        else:
+            share_a2a_fn = Share_AllToAll.apply
+            share_a2a_fn_first = share_a2a_fn
+
+            a2a_fn = _AllToAll.apply
+            a2a_fn_first = a2a_fn
+
+        if self.use_tutel: # False
+            self.l_moe, C, E, indices_, locations_, gates_, self.exp_counts = self.gate(gate_reshaped_input, input[1], True)
+            S, M = reshaped_input.size(0), reshaped_input.size(1)
+
+            if not hasattr(self, '_tutel_dispatcher'):
+                self._tutel_dispatcher = tutel_moe.fast_dispatcher(
+                    E,
+                    C,
+                    M,
+                    dispatch_dtype=reshaped_input.dtype)
+            self._tutel_dispatcher.update(indices_, locations_, gates_, capacity=C)
+            dispatched_input = self._tutel_dispatcher.encode(reshaped_input)
+        else:
+            if self.use_fused_moe and not self.gate.disable_fused_topk_gating:
+                old_shape = reshaped_input.shape
+                self.l_moe, combine_weights, dispatch_mask, self.exp_counts, num_out_tokens = self.gate(gate_reshaped_input, input[1], self.ep_group)
+                dispatched_input, sorted_indices = fused_permute(reshaped_input, dispatch_mask, num_out_tokens)
+                dispatched_input = dispatched_input.reshape(self.exp_counts.size(0),-1,dispatched_input.size(-1))
+            else:
+                self.l_moe, combine_weights, dispatch_mask, self.exp_counts = self.gate(gate_reshaped_input, input[1], self.ep_group)
+                if self.gather_seq: # False
+                    from deepspeed.runtime.activation_checkpointing.checkpointing import mpu
+                    #assert self.num_local_experts == 1
+                    reshaped_input = mpu.all_to_all_sp2hp(reshaped_input)
+                    sp_d_model = reshaped_input.shape[-1]
+                if self.expert_choice_routing: # None
+                    P = F.one_hot(dispatch_mask, num_classes=num_tokens).to(dtype=reshaped_input.dtype)
+                    dispatched_input = torch.matmul(P, reshaped_input)
+                else:
+                    dispatched_input = einsum("sec,sm->ecm",
+                                        dispatch_mask.type_as(input[0]),
+                                        reshaped_input)
+        
+        if hasattr(self, "mlp_layer") and self.a2a_ffn_overlap_degree == 4:
+            assert not self.gather_seq, "a2a_ffn_overlap_degree=4 is not supported with gather_seq=True!"
+            # l_input, r_input = input[0].chunk(2, dim = 0)
+            expert_output, s_output = Overlapped_Share_AllToAll.apply(self.ep_group, self.mlp_layer, self.experts, self.a2a_ffn_overlap_chunks, dispatched_input, input[0])
+
+        else:
+            if self.wall_clock_breakdown: # False
+                self.timers('falltoall', log_level=2).start()
+
+            if hasattr(self, "mlp_layer"):
+                if self.a2a_ffn_overlap_degree == 2:
+                    dispatched_input, s_output = share_a2a_fn_first(self.ep_group, self.mlp_layer, dispatched_input, input[0])
+                else:
+                    l_input, r_input = input[0].chunk(2, dim = 0)
+                    dispatched_input, l_output = share_a2a_fn_first(self.ep_group, self.mlp_layer, dispatched_input, l_input)
+            else:
+                dispatched_input = a2a_fn_first(self.ep_group, dispatched_input)
+
+            if self.wall_clock_breakdown: # False
+                self.timers('falltoall').stop()
+            if self.gather_seq: # False
+                dispatched_input = rearrange(dispatched_input, "a b d -> b a d")
+                dispatched_input = mpu.all_to_all_hp2sp(dispatched_input)#为了减少seq 带来的通信冗余
+                dispatched_input = dispatched_input.reshape(-1, self.ep_size,
+                                                            self.num_local_experts, d_model)
+                dispatched_input = rearrange(dispatched_input, "a b c d -> b c a d")
+            else:
+                # Re-shape after all-to-all: ecm -> gecm
+                dispatched_input = dispatched_input.reshape(self.ep_size,
+                                                            self.num_local_experts,
+                                                            -1,
+                                                            d_model)
+
+            expert_output = self.experts(dispatched_input)
+            if self.gather_seq: # False
+                expert_output = expert_output.reshape(self.ep_size, self.num_local_experts,
+                                                  -1,
+                                                  d_model)
+                expert_output = rearrange(expert_output, "a b c d -> c a b d")
+                expert_output = mpu.all_to_all_sp2hp(expert_output)
+                expert_output = expert_output.reshape(-1 ,self.ep_size, self.num_local_experts, sp_d_model)
+                expert_output = rearrange(expert_output, "a b c d -> b c a d")
+
+            if self.wall_clock_breakdown:
+                self.timers('salltoall', log_level=2).start()
+
+            if hasattr(self, "mlp_layer") and self.a2a_ffn_overlap_degree == 3:
+                expert_output, r_output = share_a2a_fn(self.ep_group, self.mlp_layer, expert_output, r_input)
+            else:
+                expert_output = a2a_fn(self.ep_group, expert_output)
+
+            if self.wall_clock_breakdown:
+                self.timers('salltoall').stop()
+        
+        if self.gather_seq: # False
+            # Re-shape back: gecm -> ecm
+            expert_output = expert_output.reshape(self.ep_size * self.num_local_experts,
+                                                  -1,
+                                                  sp_d_model)
+        else:
+            # Re-shape back: gecm -> ecm
+            expert_output = expert_output.reshape(self.ep_size * self.num_local_experts,
+                                                  -1,
+                                                  d_model)
+
+        if self.use_tutel: # False
+            combined_output = self._tutel_dispatcher.decode(expert_output.view(E * C, M))
+        else:
+            if self.expert_choice_routing:
+                combined_output = torch.einsum("abl,ab,abd->ld", P, combine_weights, expert_output)
+            elif self.use_fused_moe and not self.gate.disable_fused_topk_gating:
+                combined_output = fused_unpermute(expert_output, sorted_indices, old_shape, combine_weights, dispatch_mask)
+            else:
+                combined_output = einsum("sec,ecm->sm",
+                                     combine_weights.type_as(input[0]),
+                                     expert_output)
+
+        if self.gather_seq: # False
+            combined_output = mpu.all_to_all_hp2sp(combined_output)
+        # Re-shape back: gecm -> ecm
+        a = combined_output.reshape(input[0].shape)
+
+        if self.wall_clock_breakdown:
+            self.timers('moe').stop()
+            self.time_moe = self.timers('moe').elapsed(reset=False) * 1000
+        
+        if hasattr(self, "mlp_layer"):
+            if self.a2a_ffn_overlap_degree == 2 or self.a2a_ffn_overlap_degree == 4:
+                f_out = a + s_output
+                s_output.data = torch.empty((1,), device=s_output.device, dtype=s_output.dtype,)
+                return f_out
+            else:
+                f_out =  a + torch.cat([l_output, r_output], dim=0)
+                
+                l_output.data = torch.empty((1,), device=l_output.device, dtype=l_output.dtype,)
+                r_output.data = torch.empty((1,), device=r_output.device, dtype=r_output.dtype,)
+                return f_out
+
+        return a
+
+class PTMHunYuanMoE(torch.nn.Module):
+    def __init__(self,
+                 config: MoeConfig):
+        """Initialize an MoE layer.
+        """
+        super().__init__()
+
+        self.config = config
+        self.num_experts = config.num_experts
+        # ep parallel size
+        self.ep_size = get_parallel_state().ep
+        self.num_experts = config.num_experts
+        # the number of experts in every rank
+        self.num_local_experts = 1 if self.num_experts  < self.ep_size else self.num_experts // self.ep_size
+
+        # get params from config
+        hidden_size = config.hidden_size
+        k = config.moe_topk
+        capacity_factor = config.capacity_factor_train
+        eval_capacity_factor = config.capacity_factor_eval
+        min_capacity = MIN_EXPERT_CAPACITY
+        
+        # disable_fused_topk_gating, fix fused_topk backward bug
+        self.disable_fused_topk_gating = config.disable_fused_topk_gating
+
+        # there is router_z_loss_coef
+        use_z_loss = True
+
+        # hardcode 
+        drop_tokens = True
+        use_tutel = False
+        # use_z_loss = False
+        sequence_parallel = False
+        expert_tensor_parallel = False
+        gather_seq = False
+        random_routing_dropped_token = False
+        a2a_ffn_overlap_chunks = 2
+        fp8_a2a = False
+        self.use_fused_moe = True
+
+        self.use_deepep = self.config.moe_use_deepep
+
+        # overlap degree of all2all communication and share_mlp computation
+        # (1) no share_mlp: 1; (2) use deepep: 2 (3) no deepep: 3
+        a2a_ffn_overlap_degree = 3
+        if not self.config.use_mixed_mlp_moe:
+            a2a_ffn_overlap_degree = 1
+        elif self.use_deepep:
+            a2a_ffn_overlap_degree = 2
+
+        experts = Experts(config, self.num_local_experts)
+        from .deepseek_moe import DeepEP_MOELayer
+        moe_layer_class = DeepEP_MOELayer if self.use_deepep else MOELayer
+
+        self.deepspeed_moe = moe_layer_class(TopKGate(hidden_size,
+                                               self.num_experts,
+                                               k,
+                                               capacity_factor,
+                                               eval_capacity_factor,
+                                               min_capacity,
+                                               None,
+                                               drop_tokens,
+                                               False,
+                                               use_z_loss,
+                                               sequence_parallel,
+                                               expert_tensor_parallel,
+                                               gather_seq = gather_seq,
+                                               random_routing_dropped_token = random_routing_dropped_token,
+                                               expert_choice_routing = False,
+                                               deepseek_moe_config={},
+                                               use_fused_moe=self.use_fused_moe,
+                                               use_deep_ep=self.use_deepep,
+                                               disable_fused_topk_gating=self.disable_fused_topk_gating),
+                                      experts,
+                                      'self.expert_group_name',
+                                      self.ep_size,
+                                      self.num_local_experts,
+                                      use_tutel=use_tutel,
+                                      gather_seq = False,
+                                      a2a_ffn_overlap_degree = a2a_ffn_overlap_degree,
+                                      a2a_ffn_overlap_chunks = a2a_ffn_overlap_chunks,
+                                      expert_choice_routing=None,
+                                      use_fused_moe=self.use_fused_moe,
+                                      fp8_a2a = fp8_a2a)
+
+        # get ep_group from get_parallel_state
+        self._set_ep_group()
+        # set share epert from self.config
+        self.set_share_expert()
+    
+    def set_share_expert(self):
+        if self.config.use_mixed_mlp_moe:
+            self.deepspeed_moe.mlp_layer = PTMHunYuanMLP(self.config, is_shared_mlp=True)
+
+    def _set_ep_group(self):
+        if get_parallel_state().ep_enabled:
+            group = get_parallel_state().ep_group
+        else:
+            group = torch.distributed.new_group([torch.distributed.get_rank()])
+        self.deepspeed_moe._set_ep_group(group)
+
+    def _unset_ep_group(self):
+        self.deepspeed_moe._unset_ep_group()
+
+    def __getstate__(self):
+        self._unset_ep_group()
+        return super().__getstate__()
+
+    def __setstate__(self, state):
+        ret = super().__setstate__(state)
+        self._set_ep_group()
+        return ret
+
+
+    def get_moe_loss(self):
+        weighted_balance_loss = self.deepspeed_moe.l_moe[0] * self.config.balance_loss_coef
+        weighted_router_z_loss = self.deepspeed_moe.l_moe[1] * self.config.router_z_loss_coef
+        return [weighted_balance_loss, weighted_router_z_loss]
+
+    def get_count_top(self):
+        exp_capacity_rate = self.deepspeed_moe.l_moe[2]
+        return [exp_capacity_rate, exp_capacity_rate]
+
+
+    def forward(self, hidden_states, used_token=None):
+        """ MoE forward
+
+        Arguments:
+            hidden_states (Tensor): input to the layer
+            used_token (Tensor, optional): default: None, mask only used tokens
+
+        Returns:
+            A tuple including output, gate loss, and expert count.
+
+            * output (Tensor): output of the model
+
+            * l_moe (Tensor): moe loss value, contains aux_loss and moe_loss
+
+            * exp_counts (int): expert count
+        """
+        # [bs, seqlen, hidden_size] -> [seqlen, bs, hidden_size]
+        hidden_states = hidden_states.permute(1, 0, 2).contiguous()
+        seq_len = hidden_states.shape[0]
+        batch_size = hidden_states.shape[1]
+        if used_token is None:
+            # mock used_token
+            used_token = torch.ones(size=[seq_len, batch_size], dtype=torch.int64, device = hidden_states.device).reshape(-1)
+
+        output = self.deepspeed_moe(hidden_states, used_token)
+
+        # [seqlen, bs, hidden_size] -> [bs, seqlen, hidden_size]
+        output = output.permute(1, 0, 2).contiguous()
+
+        return output
+

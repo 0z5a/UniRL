@@ -1,0 +1,160 @@
+training_config:
+  trainer_name: text2image_text2text_gemini_trainer.GeminiTrainerAlpha
+  micro_batch_size: 2
+  gradient_accumulation_steps: 1
+  global_batch_size: null
+  global_seed: 100
+  reproduce: False
+  profile: False
+  zero_stage: 2
+  log_every: 1
+  tensorboard: True
+  training_parts: null
+  gradient_checkpoint: False
+  gradient_checkpoint_layers: -1
+
+  use_ema: True
+  distributed_ema: True
+  ema_precision: bf16
+  ema_warmup: False
+  ema_decay: 0.99
+  ema_warmup_power: 0.0
+
+  max_epochs: 1000                           # Not used
+  max_training_steps: 1000000
+  ckpt_every: 500
+
+  init_save: False
+  final_save: True
+
+  resume: null
+  resume_dataloader: False
+  no_load_optim_states: False
+  no_load_ema: False
+  default_rank0_ss: False
+  fix_lr_scheduler: False
+
+  validation_at_steps: []
+  validation_every: -1
+  validation_metrics: []
+  validation_metrics_save_image: False
+
+sampling_config:
+  ckpt: null
+  load_key: module
+  metric_image_size: 512
+  metric_batch_size: 8
+  evaluation_metrics: [fid@coco30k, clip_score@coco30k, hpsv2@coco30k, t2i_compbench, geneval]
+  rerank: 1
+  sample_image_size: 512
+  sample_batch_size: 8
+  seed_type: auto
+  seed: 123456
+  guidance_scale: 6.0
+  diff_infer_steps: 100
+  sample_flow_shift: 1.0
+  sample_use_flux_shift: False
+
+model_config:
+  model_name: hunyuan-dense-7b
+  model_structure: Transfusion
+  tokenizer_name: hunyuan-dense-7b
+  pretrained_ckpt: /apdcephfs_gy2/share_302507476/ckczzjzhang/output_ar/ptm/gemini_alpha_stage3_epoch2/checkpoint/global_step35000/mp_rank_00_model_states.pt
+  load_llm_to_mllm: False
+  precision: bf16
+  autocast_dtype: bf16
+  media_vocab_size: 0
+
+  denoise_type: flow
+  flow_path_type: linear
+  flow_predict_type: velocity
+  flow_loss_weight: null
+  flow_train_eps: null
+  flow_sample_eps: null
+  flow_snr_type: lognorm
+  flow_reverse: True
+  flow_shift: 3.0
+  use_flux_shift: False
+  flux_base_shift: null
+  flux_max_shift: null
+
+  model_kwargs:
+    block_size: 1280 # used for RoPE Cache and Transfusion's KVCache, and it must be full token seq length
+    # rope_base_rescale_factor: 4.0
+
+  image_loss_weight: 5.0
+
+  img_proj_type: unet
+  patch_embed_hidden_dim: 1024
+  patch_size: 1
+
+  use_compile: True
+
+extra_model_config:
+  vae_type: 32x32-64c-hy_v2
+  vae_precision: fp32
+  vae_autocast_dtype: fp32
+  vae_latent_dim: 64
+
+optimizer_config:
+  optimizer_name: AdamW
+  gradient_clipping: 1.0
+  optimizer_params:
+    lr: 0.00001
+    betas: [0.9, 0.95]
+    eps: 0.000001
+    weight_decay: 0.01
+
+lr_scheduler_config:
+  lr_schedule: WarmupCosineLR
+  lr_scheduler_params:
+    warmup_min_ratio: 0.0
+    warmup_num_steps: 1000
+    cos_min_ratio: 1.0
+    total_num_steps: 1000000
+
+dataloader_config:
+  index_file: [
+    /apdcephfs_gy2/share_302507476/0_public_datasets/text2image_gemini/gemini_json/sft/20241223_美学top2k_mb1024.json,
+    /apdcephfs_gy2/share_302507476/0_public_datasets/text2image_gemini/gemini_json/sft/game_1220_10w_multireso_mb1024.json,
+    /apdcephfs_gy2/share_302507476/0_public_datasets/text2image_gemini/gemini_json/sft/0101_diamod_400_multi_mb1024.json,
+    /apdcephfs_gy2/share_302507476/0_public_datasets/text2image_gemini/gemini_json/sft/0102_human170_multi_mb1024.json,
+    /apdcephfs_gy2/share_302507476/0_public_datasets/text2image_gemini/gemini_json/sft/20250101_hq_1K_multi_mb1024.json,
+    /apdcephfs_gy2/share_302507476/0_public_datasets/text2image_gemini/gemini_json/sft/class_kavyar_0104_multireso_mb1024.json,
+    /apdcephfs_gy2/share_302507476/0_public_datasets/text2image_gemini/gemini_json/sft/20250101_china_item_multi_3.4k_mb1024.json,
+    /apdcephfs_gy2/share_302507476/0_public_datasets/text2image_gemini/gemini_json/sft/flux_ai_12w_fliter_hsv_multi_mb1024.json,
+    /apdcephfs_gy2/share_302507476/0_public_datasets/text2image_gemini/gemini_json/sft/class_mj_ai_0110_multireso_mb1024.json,
+    /apdcephfs_gy2/share_302507476/0_public_datasets/text2image_gemini/gemini_json/sft/class_doubao_human_0114_multireso_mb1024.json,
+    /apdcephfs_gy2/share_302507476/0_public_datasets/text2image_gemini/gemini_json/sft/class_doubao_text_6k_0115_multireso_mb1024.json,
+    /apdcephfs_gy2/share_302507476/0_public_datasets/text2image_gemini/gemini_json/sft/class_hq_0213_multireso_mb1024.json,
+  ]
+  image_key: image
+  training_image_size: 1024 # only used when multireso is False
+  image_token_length: 1024
+  uncond_p: 0.1
+  multireso: True
+  add_iw_ih_token: True
+  add_timestep_token: True
+  use_front_boi_token: True
+  try_first_use_source_text: False
+  caption_processor: caption_process_v2
+  caption_processor_kwargs:
+    ocr_only_long_caption: True
+  use_general_style: True
+  text_index_file: /apdcephfs_gy2/share_302507476/1_public_models/hymm_ar_assets/dataset/t2t_index/hy_text_930m.json
+  text_token_length: 256
+  text_sampling_prob: 0.2
+  shuffle_by: dataset
+  fast_shuffle: True
+  index_kwargs:
+    image_caption_rate: 1.0   # 表示遇到 text source 时, 有 1-60% 的概率使用 text source, 否则就使用
+    image_text_col: text_source
+    image_caption_col: caption_v2
+    caption_sample_ratio: '{"long_caption":0.4,"medium_caption":0.3,"short_caption":0.25,"background":0.8,"shot_type":0.8,"style":0.8,"light":0.8,"atmosphere":0.8,"composition":0.8,"IP":0.8}'
+    ceph_base: '{"/apdcephfs_gy2/share_302507476":"gy2"}'
+    index_strategy: probability
+    index_probability: [1.0, 0.02, 1.0, 1.0, 1.0, 1.0, 1.0, 0.05, 0.002, 1.0, 1.0, 0.1]
+  dataloader_params:
+    num_workers: 4
+    pin_memory: True
+    prefetch_factor: 8

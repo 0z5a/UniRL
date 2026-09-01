@@ -1,0 +1,91 @@
+training_config:
+  trainer_name: null
+  launcher: "deepspeed"
+  micro_batch_size: 1
+  gradient_accumulation_steps: 1
+  global_batch_size: null
+  global_seed: 1
+  reproduce: False
+  profile: False
+  zero_stage: 2
+  log_every: 10
+  tensorboard: True
+  training_parts: null
+  gradient_checkpoint: False
+  gradient_checkpoint_layers: -1
+
+  use_ema: False
+  distributed_ema: False
+  ema_precision: bf16
+  ema_warmup: True
+  ema_decay: null
+  ema_warmup_power: null
+
+  output_dir: null
+  task_flag: null
+
+  max_epochs: 100
+  max_training_steps: 10_000_000
+  ckpt_every: 5000
+
+  save_n_training_data: 1
+  init_save: False
+  final_save: True
+
+  resume: null
+  resume_dataloader: False
+  no_load_optim_states: False
+  no_load_ema: False
+  default_rank0_ss: False
+  fix_lr_scheduler: False
+
+  validation_at_steps: [100]
+  validation_every: 5000
+  validation_metrics: null # metrics will be calculated during train
+  validation_metrics_save_image: False
+
+
+sampling_config:
+  ckpt: null
+  load_key: module
+  metric_image_size: null
+  metric_batch_size: 1  # 边训边推时设小，离线推理时设大
+  metric_save_path: null
+  evaluation_metrics: null # metrics will be calculated during eval_score
+  evaluation_metrics_save_image: False
+  evaluation_media_type: image
+  sample_image_size: null
+  sample_batch_size: 1  # 边训边推时设小，离线推理时设大
+  sample_save_path: null
+  seed_type: auto
+  seed: 123456
+  skip_exist: False
+  interactive: False
+  csv: std1000
+
+model_config:
+  model_name: null
+  precision: fp32
+  autocast_dtype: null
+
+extra_model_config: null
+
+optimizer_config:
+  optimizer_name: AdamW
+  gradient_clipping: 1.0
+  optimizer_params:
+    lr: 0.0001
+    betas: [0.9, 0.95]
+    eps: 0.000001
+    weight_decay: 0.01
+
+lr_scheduler_config:
+  lr_schedule: null
+  lr_scheduler_params: null
+
+dataloader_config:
+  dataloader_params:
+    num_workers: 4
+    pin_memory: True
+    prefetch_factor: 2
+  

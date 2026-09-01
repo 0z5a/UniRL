@@ -1,0 +1,605 @@
+# IMPORTANT NOTE: Write PTM args in YAML format:
+# 0. all arguments specified here are one-one correspondences with PTM arguments; un-specified arguments use PTM default values.
+# 1. arguments like '--hidden-size=2560' are written as 'hidden-size: 2560' (see below, note the space after colon).
+# 2. YAML format is like a tree, and only the leaf nodes are considered as arguments.
+#    Non-leaf nodes and structures are ignored, so arguments can be grouped as you like.
+# 3. arguments like '--sequence-parallel' can be written as 'enabled: \n  - sequence-parallel' (see below, note the indent).
+#    multiple `enabled` arguments in a same sub-tree must be put in a `enabled` list (see below for an example).
+# --------------------------------------------------------------------------------
+# 本配置用于 Gemini-3.5 模型一阶段预训练：只训练 t2i 任务，不包含 image shape token.
+# --------------------------------------------------------------------------------
+
+__GLOBAL_VARS__:
+  _DEFAULT_OUTPUT_PATH: "/apdcephfs_wza2/share_304227829/hunyuan/xiangtikong/gemini/ptm2/a3b_mot_48_pp"
+  DATA_PATH: "/root/dummy_data"
+  OUTPUT_PATH: ${oc.env:OUTPUT_PATH,${__GLOBAL_VARS__._DEFAULT_OUTPUT_PATH}}
+
+MODEL_ARGS:
+  model-name: multimodal.hunyuan-moe-a3b-vlm-gemini-mot-gen-a5b
+  model-structure: HunyuanMultimodal
+
+  # Mcore required.
+  num-layers: 48
+  hidden-size: 2048
+  num-attention-heads: 32
+  ffn-hidden-size: 6912
+  kv-channels: 128
+  # max-position-embeddings: 32768 # 32k
+  # max-position-embeddings: 65536 # 64k
+  max-position-embeddings: 131072 # 128k
+  # max-position-embeddings: 256000 # 256k
+  seq-length: ${MODEL_ARGS.max-position-embeddings}
+  vocab-size: 126309
+  normalization: RMSNorm
+  num-query-groups: 4
+  num-experts: 128
+  init-method-std: 0.012757759
+  moe-router-topk: 8
+  moe-ffn-hidden-size: 768
+  moe-shared-expert-intermediate-size: 768
+  # moe-layer-freq: '([0]+[1]*1)'
+  moe-layer-freq: '([0]+[1]*47)'
+  moe-router-load-balancing-type: aux_loss
+  moe-token-dispatcher-type: flex
+  moe-router-dtype: fp32
+  attention-dropout: 0.0
+  hidden-dropout: 0.0
+
+  init-device: meta  # [cpu, cuda, meta] pure torch specific
+  autocast-dtype: bf16  # pure torch specific
+  enabled:
+      # common
+    - bf16
+      # mcore
+    - qk-layernorm
+    - group-query-attention
+    - swiglu
+    - use-mcore-models
+    - moe-grouped-gemm
+    - use-hunyuan-arch
+    - disable-bias-linear
+      # torch
+    - split-qkv
+    - split-gate-and-up
+    # mot
+    - use-mot
+    # - mot-und-frozen
+    # - mot-embed-norm-lm-head-frozen
+    - use-global-diffusion-loss-average
+    - use-global-discrete-loss-average
+    - dist-ckpt-save-pre-mcore-014  # 沿用旧逻辑，不拆分weights_w和weights_v
+
+  patch-size: 1
+  rope-type-extended: "xdrope"
+  rope-scaling: 1000.0
+  moe-impl: ep_moe
+  cond-image-type: vae_vit
+  cond-token-attn-type: full_causal
+
+
+EXTRA_MODEL_ARGS:
+  enabled:
+    - use-vae
+    - use-vit
+    # - vit-frozen
+    - vit-recompute
+  vae-type: 16x16-64c-hy3.5
+  vae-latent-dim: 64
+  vae-precision: fp32
+  vae-autocast-dtype: fp32
+  vit-type: anyres-vit-for-a3b
+
+DENOISE_ARGS:
+  denoise-type: flow
+  flow-path-type: linear
+  flow-predict-type: velocity
+  flow-snr-type: lognorm
+  flow-reverse: True
+  # flow-shift: 1.0
+  use-flux-shift: True
+  flux-base-num-tokens: 256
+  flux-base-log-shift: 0.5
+  flux-max-num-tokens: 16384
+  flux-max-log-shift: 1.61
+
+DATA_ARGS:
+  tokenizer-type: NullTokenizer
+  dataloader-type: external
+
+  # extra args provider
+  tokenizer-name: hymm-v3-5
+  tokenizer-class: tokenization_hymm_v3_5.HunyuanMultimodalV3d5TokenizerFast
+  conv-template: hymm-v3-5
+  sequence-template: pretrain
+  gen-image-template: default
+  shuffle-by: dataset
+  combined-iterator-sampling-mode: fixed
+  cos-base:
+    - "/cos_nj1/share_302243067 -> /apdcephfs_wza2/share_304227829/hunyuan_data/{stem2}"
+  ignore-start-tokens: []
+  enabled:
+    - cos-file-is-encrypted
+    - enable-resample
+    - fast-shuffle
+    - first-epoch-no-shuffle
+    - use-numpy-indices
+    - add-timestep-token
+    # - add-image-shape-token
+    - add-tw-th-token
+    - use-front-src-image
+    - ignore-boi-token
+    # - independent-seq-length
+    - use-rope-sample-offsets
+    
+  # vae
+  vae-image-token-length: 16384 # 2048*2048/16/16
+  # reso strategy and config
+  reso-strategy: anyres
+  reso-base-size: 1024
+  reso-max-area: 4194304 # 2048*2048
+  # reso-strategy: reso_group
+  # reso-preset: arc33
+  # reso-base-size: 2048
+  reso-align: 16
+  # vit
+  vit-image-token-length: 4354  # 2048*2048/32/32+(2048*4/32)+2
+
+  modality: [ text, vae_image, vit_image ]
+  dummy-type: ["ts_proj", "vit"]
+  sampling-probs: '{"t2i_style_new": 0.3, "lm": 0.2, "mmu": 0.2, "interleave": 0.3, "interleave_multiref": 0.3}' # TODO
+
+  und-token-type: [ "bos", "text", "boi", "vit", "eoi", "joint_image_sep", "eoi", "eos", "pad", "vae_info" ]
+  gen-token-type: [ "vae" ]
+
+  # Dataloader
+  num-workers: 24
+  prefetch-factor: 12
+
+  # pack-buffer-factor: 1 # TODO
+
+__FROZEN__DATA_ARGS:
+
+  t2i_qualified_task_kwargs:
+    # required
+    batch_size: 1
+    modality: [ vae_image ]
+    max_token_length: 20480 # > 16384（image） + 3500 (text) ### 仅当打开 independent-seq-length时，该参数才会生效，否则按照统一的max-position-embeddings参数
+    attn_type: flex
+    shuffle_seed: 1111
+    sequence_pack: True
+    pretrain_add_bot_sep: True
+    # image caption
+    uncond_p: 0.1
+    prompt_token_length: 3500
+    patcher_names: []
+    instruct_type: none
+    image_caption_resource:
+      - caption_v5:
+          caption_v5_src: '{"caption_v5_en_col": 0.5, "caption_v5_zh_col": 0.5}'
+          caption_v5_caption_processor: caption_process_v4
+          caption_v5_caption_sample_ratio: '{"long_long_caption":0.455,"long_caption":0.195,"medium_caption":0.1,"short_caption":0.25,"style":1.0,"shot_type":0.1}'
+    reasoning_token_length: 0
+    cot_kwargs:
+      recaption_cot_prob: 0
+      recaption_cot: 'short_caption@0.4/medium_caption@0.4/long_caption@0.2 | long_caption@0.000001/long_long_caption@0.999999'
+      reasoning_cot_prob: 0
+    # system prompt
+    system_prompt_token_length: 0
+    system_prompt_type: none
+    predict_prompt: False
+  t2i_qualified_index_kwargs:
+    index_file: # 3259735913
+      - /apdcephfs_wza/0_public_datasets/hymm_3.5/stage2-1k2k-data/t2i_qualified/base_shuffle_seed1024.json
+    ceph_base_inv: '{"wza": "/apdcephfs_wza/"}'
+    verbose: 1
+    index_columns:
+      image_col: cache_image
+      caption_v5_en_col: caption_en
+      caption_v5_zh_col: caption_zh
+      url_cos_col: url_cos
+
+
+  t2i_ocr_qualified_task_kwargs:
+    # required
+    batch_size: 1
+    modality: [ vae_image ]
+    max_token_length: 20480 # 16384（image） + 3500 (text)
+    attn_type: flex
+    shuffle_seed: 1111
+    sequence_pack: True
+    pretrain_add_bot_sep: True
+    # image caption
+    uncond_p: 0.1
+    prompt_token_length: 3500
+    patcher_names: []
+    instruct_type: none
+    image_caption_resource:
+      - caption_v5:
+          caption_v5_src: '{"caption_v5_en_col": 0.5, "caption_v5_zh_col": 0.5}'
+          caption_v5_caption_processor: caption_process_v4
+          caption_v5_caption_sample_ratio: '{"long_long_caption":0.999999,"long_caption":0.000001,"style":1.0,"shot_type":0.1}'
+    reasoning_token_length: 0
+    cot_kwargs:
+      recaption_cot_prob: 0
+      recaption_cot: 'short_caption@0.4/medium_caption@0.4/long_caption@0.2 | long_caption@0.000001/long_long_caption@0.999999'
+      reasoning_cot_prob: 0
+    # system prompt
+    system_prompt_token_length: 0
+    system_prompt_type: none
+    predict_prompt: False
+  t2i_ocr_qualified_index_kwargs:
+    index_file: # 3396718523
+      - /apdcephfs_wza/0_public_datasets/hymm_3.5/stage2-1k2k-data/t2i_ocr_qualified/base_shuffle_seed1024.json
+    ceph_base_inv: '{"wza": "/apdcephfs_wza/"}'
+    verbose: 1
+    index_columns:
+      image_col: cache_image
+      caption_v5_en_col: caption_en
+      caption_v5_zh_col: caption_zh
+      url_cos_col: url_cos
+
+#  ---- rawtext caption (latex / structured text with inject_caption) ----
+  t2i_ocr_core_qualified_task_kwargs:
+    batch_size: 1
+    modality: [ vae_image ]
+    max_token_length: 20480 # 16384（image） + 3500 (text)
+    attn_type: flex
+    shuffle_seed: 1111
+    sequence_pack: True
+    pretrain_add_bot_sep: True
+    # image caption
+    uncond_p: 0.1
+    prompt_token_length: 3500
+    patcher_names: []
+    instruct_type: none
+    image_caption_resource:
+      - caption_v5:
+          caption_v5_src: '{"caption_v5_en_col": 0.5, "caption_v5_zh_col": 0.5}'
+          caption_v5_caption_processor: caption_process_v4
+          caption_v5_caption_sample_ratio: '{"long_long_caption":0.999999,"long_caption":0.000001,"style":1.0,"shot_type":0.1}'
+      - caption_rawtext:
+          caption_rawtext_src: '{"caption_rawtext_en_col": 0.5, "caption_rawtext_zh_col": 0.5}'
+          caption_rawtext_caption_processor: caption_process_rawtext
+          caption_rawtext_caption_sample_ratio: '{"long_long_caption":0.6,"long_caption":0.2,"medium_caption":0.1,"short_caption":0.1}'
+          caption_rawtext_caption_processor_kwargs: '{"inject_lang_ratio": {"en": 0.5, "zh": 0.5}, "wrap_triple_quotes": true}'
+          caption_rawtext_extra_processor: [ 'select_nonempty' ]
+    reasoning_token_length: 0
+    cot_kwargs:
+      recaption_cot_prob: 0
+      reasoning_cot_prob: 0
+    system_prompt_token_length: 0
+    system_prompt_type: none
+    predict_prompt: False
+  t2i_ocr_core_qualified_index_kwargs:
+    index_file:
+      - /apdcephfs_wza/0_public_datasets/hymm_3.5/stage2-1k2k-data/ocr_core_0310/base_shuffle_seed42.json
+    ceph_base_inv: '{"wza": "/apdcephfs_wza/"}'
+    verbose: 1
+    index_columns:
+      image_col: cache_image
+      caption_v5_en_col: caption_en
+      caption_v5_zh_col: caption_zh
+      caption_rawtext_en_col: rawtext_en
+      caption_rawtext_zh_col: rawtext_zh
+
+  t2i_ip_new_task_kwargs:
+    # required
+    batch_size: 1
+    modality: [ vae_image ]
+    max_token_length: 20480 # 16384（image） + 3500 (text)
+    attn_type: flex
+    shuffle_seed: 1111
+    sequence_pack: True
+    pretrain_add_bot_sep: True
+    # image caption
+    uncond_p: 0.1
+    prompt_token_length: 3500
+    patcher_names: []
+    instruct_type: none
+    image_caption_resource:
+      - caption_v5:
+          caption_v5_src: '{"caption_v5_en_col": 0.5, "caption_v5_zh_col": 0.5}'
+          caption_v5_caption_processor: caption_process_v4
+          caption_v5_caption_sample_ratio: '{"long_long_caption":0.455,"long_caption":0.195,"medium_caption":0.1,"short_caption":0.25,"style":1.0,"shot_type":0.1}'
+    reasoning_token_length: 0
+    cot_kwargs:
+      recaption_cot_prob: 0
+      recaption_cot: 'short_caption@0.4/medium_caption@0.4/long_caption@0.2 | long_caption@0.000001/long_long_caption@0.999999'
+      reasoning_cot_prob: 0
+    # system prompt
+    system_prompt_token_length: 0
+    system_prompt_type: none
+    predict_prompt: False
+  t2i_ip_new_index_kwargs:
+    index_file: # 146193870
+      - /apdcephfs_wza/0_public_datasets/hymm_3.5/stage2-1k2k-data/ip_repeat50/base_shuffle_seed1024.json
+    ceph_base_inv: '{"wza": "/apdcephfs_wza/"}'
+    verbose: 1
+    index_columns:
+      image_col: cache_image
+      caption_v5_en_col: caption_en
+      caption_v5_zh_col: caption_zh
+      url_cos_col: url_cos
+
+  t2i_style_new_task_kwargs:
+    # required
+    batch_size: 1
+    modality: [ vae_image ]
+    max_token_length: 20480 # 16384（image） + 3500 (text)
+    attn_type: flex
+    shuffle_seed: 1111
+    sequence_pack: True
+    pretrain_add_bot_sep: True
+    # image caption
+    uncond_p: 0.1
+    prompt_token_length: 3500
+    patcher_names: []
+    instruct_type: none
+    image_caption_resource:
+      - caption_v5:
+          caption_v5_src: '{"caption_v5_en_col": 0.5, "caption_v5_zh_col": 0.5}'
+          caption_v5_caption_processor: caption_process_v4
+          caption_v5_caption_sample_ratio: '{"long_long_caption":0.455,"long_caption":0.195,"medium_caption":0.1,"short_caption":0.25,"style":1.0,"shot_type":0.1}'
+    reasoning_token_length: 0
+    cot_kwargs:
+      recaption_cot_prob: 0
+      recaption_cot: 'short_caption@0.4/medium_caption@0.4/long_caption@0.2 | long_caption@0.000001/long_long_caption@0.999999'
+      reasoning_cot_prob: 0
+    # system prompt
+    system_prompt_token_length: 0
+    system_prompt_type: none
+    predict_prompt: False
+  t2i_style_new_index_kwargs:
+    index_file: #  57759100
+      - /apdcephfs_wza/0_public_datasets/hymm_3.5/stage2-1k2k-data/style_repeat100/base_filtered_set_repeat100_epoch_shuffle.json
+    ceph_base_inv: '{"wza": "/apdcephfs_wza/"}'
+    verbose: 1
+    index_columns:
+      image_col: cache_image
+      caption_v5_en_col: caption_en
+      caption_v5_zh_col: caption_zh
+      url_cos_col: url_cos
+
+  lm_task_kwargs:
+    # required
+    batch_size: 1
+    modality: [ text, vae_image ]   # Add vae_image for prerunning vae
+    max_token_length: 32768
+    input_max_token_length: 32768
+    attn_type: flex
+    shuffle_seed: 3333
+    sequence_pack: True
+    # task specific
+    data_format: pure_text  # [pure_text, conversation]
+    pre_extract_tokens: False  # [True, False]
+    # system prompt
+    system_prompt_token_length: 0
+    system_prompt_type: none
+  lm_index_kwargs:
+    index_file:
+       - /apdcephfs_wza/0_public_datasets/llm_d35/STAGE_ONE/data_1770130396043/arrow_data_part/base_part1.json
+      #  - /apdcephfs_wza/0_public_datasets/llm_d35/STAGE_ONE/data_1770130396043/arrow_data_part/base_part2.json
+      #  - /apdcephfs_wza/0_public_datasets/llm_d35/STAGE_ONE/data_1770130396043/arrow_data_part/base_part3.json
+      #  - /apdcephfs_wza/0_public_datasets/llm_d35/STAGE_ONE/data_1770130396043/arrow_data_part/base_part4.json
+    ceph_base_inv: '{"prefix": "/apdcephfs_wza"}'
+    index_columns:
+      text_col: text  # [text, tokens]
+      conversation_col: conversations
+    verbose: 1
+
+  mmu_task_kwargs:
+    # required
+    batch_size: 1
+    modality: [ vae_image, vit_image, text ]
+    max_token_length: 21506  # 16384 vae + 4354 vision encoder + 768 text
+    input_max_token_length: 1024   # 256 for special tokens and output text
+    attn_type: flex
+    shuffle_seed: 5555
+    sequence_pack: True
+    # task specific
+    data_format: message  # [message, captioning]
+    # system prompt
+    system_prompt_token_length: 0
+    system_prompt_type: none
+    use_json_coord_tokens: False
+  mmu_index_kwargs:
+    index_file:
+      - /apdcephfs_wza/0_public_datasets/mmu_inhouse/pretrain/arrows/caption/base.json
+      - /apdcephfs_wza/0_public_datasets/mmu_inhouse/pretrain/arrows/ocr/base.json
+      - /apdcephfs_wza/0_public_datasets/mmu_inhouse/pretrain/arrows/stem/base.json
+      - /apdcephfs_wza/0_public_datasets/mmu_inhouse/pretrain/arrows/depth/base.json
+      - /apdcephfs_wza/0_public_datasets/mmu_inhouse/pretrain/arrows/omni_det/base.json
+      - /apdcephfs_wza/0_public_datasets/mmu_inhouse/pretrain/arrows/local_ref/base.json
+    ceph_base_inv: '{"nj10": "/apdcephfs_wza/share_303937731", "wza": "/apdcephfs_wza/0_public_datasets"}'
+    verbose: 2
+    index_columns:
+      message_col: messages
+    index_keys:
+      image_key: cache_image
+      url_cos_key: url_cos
+
+  interleave_editing_task_kwargs:
+    # required
+    batch_size: 1
+    modality: [ vae_image, vit_image, text ]
+    max_token_length: 32768 # 
+    input_max_token_length: 32768  # cond text max length
+    attn_type: flex
+    shuffle_seed: 8888
+    sequence_pack: True
+    uncond_p: 0.1
+    # system prompt
+    system_prompt_token_length: 0
+    system_prompt_type: none
+    interleave_only_last_round: False
+  interleave_editing_index_kwargs:
+    index_file:
+      - /apdcephfs_wza/yijicheng/dummy_data/interleave_editing/base.json
+    verbose: 2
+    index_columns:
+      message_col: messages
+    index_keys:
+      image_key: cache_image
+      url_cos_key: url_cos
+
+  interleave_task_kwargs:
+    # required
+    batch_size: 1
+    modality: [ vae_image, vit_image, text ]
+    max_token_length: 38146 # 16384 * 2 + 4354 + 1024 = 38146
+    input_max_token_length: 1024  # cond text max length
+    attn_type: flex
+    shuffle_seed: 8888
+    sequence_pack: True
+    uncond_p: 0.1
+    # system prompt
+    system_prompt_token_length: 0
+    system_prompt_type: none
+    interleave_only_last_round: False
+  interleave_index_kwargs:
+    index_file:
+      - /apdcephfs_wza/0_public_datasets/hymm_3.5/stage3-multi-data/wajue/HYImage3.5-multi-dakujuleiyizhixing-0323-V2_download_63ad14405e774b29ad53fcfcc51b39b6/base.json
+    verbose: 2
+    index_columns:
+      message_col: messages
+    index_keys:
+      image_key: cache_image
+      url_cos_key: url_cos
+
+
+  interleave_multiref_task_kwargs:
+    # required
+    batch_size: 1
+    modality: [ vae_image, vit_image, text ]
+    max_token_length: 100360 # 16384 * 5 + 4354 * 4 + 1024 = 100360
+    input_max_token_length: 1024  # cond text max length
+    attn_type: flex
+    shuffle_seed: 8888
+    sequence_pack: True
+    uncond_p: 0.1
+    # system prompt
+    system_prompt_token_length: 0
+    system_prompt_type: none
+    interleave_only_last_round: False
+  interleave_multiref_index_kwargs:
+    index_file:
+      - /apdcephfs_wza/0_public_datasets/hymm_3.5/stage3-multi-data/multiref/HYImage3.5-multi-dewuwajueduocankaotu-0327_download_19ecae16add041d9a900150295a4bec9/base_count_le_5.json
+    verbose: 2
+    index_columns:
+      message_col: messages
+    index_keys:
+      image_key: cache_image
+      url_cos_key: url_cos
+
+TRAINING_ARGS:
+  micro-batch-size: 1
+  gradient-accumulation-steps: 24
+  global-batch-size: ${mul:${div:${mul:${oc.env:HOST_GPU_NUM}, ${oc.env:HOST_NUM}}, ${mul:${mul:${MODEL_PARALLEL_ARGS.tensor-model-parallel-size}, ${MODEL_PARALLEL_ARGS.pipeline-model-parallel-size}}, ${MODEL_PARALLEL_ARGS.context-parallel-size}}}, ${mul:${TRAINING_ARGS.gradient-accumulation-steps}, ${TRAINING_ARGS.micro-batch-size}}} # GLOBAL_BATCH_SIZE = HOST_GPU_NUM * HOST_NUM / (TP_SIZE*PP_SIZE*CP_SIZE) * GRADIENT_ACCUMULATION_STEPS * MICRO_BATCH_SIZE
+  lr: 1e-4
+  train-iters: 100_000_000
+  lr-decay-iters: 100_000_000
+  lr-decay-style: cosine
+  optimizer: adam
+  adam-beta1: 0.9
+  adam-beta2: 0.95
+  adam-eps: 0.000001  # ptm2对应的是adam-eps参数（默认值1e-8） torch对应的是eps参数
+  min-lr: 1e-4
+  weight-decay: 0.1
+  lr-warmup-iters: 200
+  clip-grad: 1.0
+  eval-interval: 1000
+  eval-iters: 0
+  seed: 1234
+    # - optimizer-cpu-offload
+    # - use-precision-aware-optimizer
+  __FROZEN__OPTIMIZER_ARGS:  # pure torch specific
+    optimizer_params:
+      lr: ${TRAINING_ARGS.lr}
+      betas:
+      - ${TRAINING_ARGS.adam-beta1}
+      - ${TRAINING_ARGS.adam-beta2}
+      weight_decay: ${TRAINING_ARGS.weight-decay}
+      eps: ${TRAINING_ARGS.adam-eps}
+  __FROZEN__LR_SCHEDULER_ARGS:  # pure torch specific
+    lr_scheduler_params:
+      num_warmup_steps: ${TRAINING_ARGS.lr-warmup-iters}
+      num_training_steps: ${TRAINING_ARGS.train-iters}
+      min_lr: ${TRAINING_ARGS.min-lr}
+
+  # loss related
+  image-loss-weight: 1.0
+  moe-aux-loss-coeff: 0.01
+  enabled:
+    - moe-aux-loss
+    # - init-save  # pure torch specific
+
+PERFORMANCE_ARGS:
+  manual-gc-interval: 100
+  recompute-granularity: full
+  recompute-method: uniform
+  recompute-num-layers: 1
+  # recompute-method: block
+  # recompute-num-layers: 6
+  # per-stage-recompute-num-layers: [6, 6, 4, 0]
+  enabled:
+    - manual-gc
+    # - use-flash-attn
+    - moe-enable-deepep
+    - enable-experimental
+    #- moe-permute-fusion
+    - moe-router-fusion
+    # - moe-shared-expert-overlap
+    - overlap-grad-reduce
+    - overlap-param-gather
+    - moe-router-correct-valid-tokens
+
+
+MODEL_PARALLEL_ARGS:
+  tensor-model-parallel-size: 1
+  pipeline-model-parallel-size: 2
+  # pipeline-model-parallel-layout: Et*10|t*14|t*14|t*10L # 48layer pp = 4
+  pipeline-model-parallel-layout: Et*24|t*24L # 48layer pp = 2
+  # pipeline-model-parallel-layout: Et*0|t*7|t*7|t*7|t*7|t*7|t*7|t*6L # 48layer pp = 8
+  # pipeline-model-parallel-layout: Et*1|t*2|t*2|t*2|t*2|t*3|t*3|t*3|t*3|t*4|t*4|t*4|t*4|t*4|t*5|t*2L # 48layer pp = 16
+  context-parallel-size: 4
+  expert-model-parallel-size: 8
+  distributed-timeout-minutes: 30  # 增加分布式超时时间，解决进程组初始化超时问题（默认10分钟）
+  enabled:
+    - use-distributed-optimizer
+    # - tp-comm-overlap
+    # - sequence-parallel
+
+
+CHECKPOINT_ARGS:
+  ckpt-format: torch_dist
+  dist-ckpt-strictness: log_all
+  save-interval: 1_000
+  save: ${__GLOBAL_VARS__.OUTPUT_PATH}/ckpt
+  # ckpt: ${CHECKPOINT_ARGS.load}
+  # load: /apdcephfs_wza/yijicheng/models/hy_a3b_vlm_final_256k_mot_gen_a5b
+  load: "/apdcephfs_wza2/share_304227829/hunyuan/xiangtikong/basic_train_xiangtikong_20260218204158_6b90b699/8b0fba199cff098e019cff448b5e0012/ckpt"
+  key-mapping: []
+  enabled:
+    - fuse-experts-in-load
+    - resume
+    # - resume-index-batch-sampler
+    - use-dist-ckpt
+    - no-load-optim
+    # - no-load-rng   # saving/loading rng is not supported yet
+    # - finetune
+    - ckpt-fully-parallel-load
+    - ckpt-fully-parallel-save
+
+
+LOGGING_ARGS:
+  log-interval: 1
+  tensorboard-dir: ${__GLOBAL_VARS__.OUTPUT_PATH}/events
+  saved-training-batch-dir: ${__GLOBAL_VARS__.OUTPUT_PATH}/saved_training_data
+  save-n-training-data: 16
+  enabled:
+    - log-timers-to-tensorboard
+    - log-memory-to-tensorboard
+    - log-num-zeros-in-grad
+    - log-params-norm
+    - log-validation-ppl-to-tensorboard
+    - log-throughput

@@ -1,0 +1,522 @@
+# IMPORTANT NOTE: Write PTM args in YAML format:
+# 0. all arguments specified here are one-one correspondences with PTM arguments; un-specified arguments use PTM default values.
+# 1. arguments like '--hidden-size=2560' are written as 'hidden-size: 2560' (see below, note the space after colon).
+# 2. YAML format is like a tree, and only the leaf nodes are considered as arguments.
+#    Non-leaf nodes and structures are ignored, so arguments can be grouped as you like.
+# 3. arguments like '--sequence-parallel' can be written as 'enabled: \n  - sequence-parallel' (see below, note the indent).
+#    multiple `enabled` arguments in a same sub-tree must be put in a `enabled` list (see below for an example).
+
+__GLOBAL_VARS__:
+  _DEFAULT_OUTPUT_PATH: "/apdcephfs_wza/somoszhang/gemini35-exp/pure_torch/hy3vl_moe_a3b_example"
+  DATA_PATH: "/root/dummy_data"
+  OUTPUT_PATH: ${oc.env:OUTPUT_PATH,${__GLOBAL_VARS__._DEFAULT_OUTPUT_PATH}}
+
+MODEL_ARGS:
+  model-name: multimodal.hunyuan3-moe-a3b-gemini-mot-gen-a10b
+  model-structure: HunyuanMultimodal
+
+  # Mcore required.
+  num-layers: 48
+  hidden-size: 2048
+  num-attention-heads: 32
+  ffn-hidden-size: 6912
+  kv-channels: 128
+  max-position-embeddings: 8192
+  seq-length: ${MODEL_ARGS.max-position-embeddings}
+  vocab-size: 126309
+  normalization: RMSNorm
+  num-query-groups: 4
+  num-experts: 128
+  init-method-std: 0.006
+  moe-router-topk: 8
+  moe-ffn-hidden-size: 768
+  moe-shared-expert-intermediate-size: 768
+  moe-layer-freq: '([0]+[1]*47)'
+  # moe-layer-freq: '([0]+[1]*1)'
+  moe-token-dispatcher-type: flex
+  moe-router-dtype: fp32
+  attention-dropout: 0.0
+  hidden-dropout: 0.0
+  # gen a10b
+  hidden-size-mot-gen: 3200
+  moe-topk-mot-gen: 16
+  # other
+  moe-router-load-balancing-type: seq_aux_loss
+  moe-aux-loss-coeff: 0.0001
+  moe-router-bias-update-rate: 0.001
+  moe-router-score-function: sigmoid
+  position-embedding-type: rope
+  rotary-base: 11158840 
+  embedding-init-method-std: 6e-3  # ds-v3 init std
+  moe-router-topk-scaling-factor: 2.826
+  transformer-impl: local
+  extra-weight-decay-param-substrings:
+    - "layernorm"
+    - "layer_norm"
+
+  init-device: meta  # [cpu, cuda, meta] pure torch specific
+  autocast-dtype: bf16  # pure torch specific
+  enabled:
+      # common
+    - bf16
+    # mcore
+    - use-mcore-models
+    - group-query-attention
+    - swiglu
+    - disable-bias-linear
+    - qk-layernorm
+    - moe-grouped-gemm
+    - moe-use-legacy-grouped-gemm
+    - use-pre-qk-norm  #先qk-norm再rope
+    - untie-embeddings-and-output-weights #untie
+    - embedding-no-weight-decay
+    - use-unified-init-method # output_layer unify init
+    - moe-router-enable-expert-bias
+    - disable-flash-attn-3
+    - moe-router-enable-expert-bias-zero-mean-update
+    - use-gate-torch-mm
+    # torch
+    - split-qkv
+    - split-gate-and-up
+    # mot
+    - use-mot
+    - mot-und-frozen
+    - mot-embed-norm-lm-head-frozen
+    - use-global-diffusion-loss-average
+    # - use-global-discrete-loss-average
+    - dist-ckpt-save-pre-mcore-014  # 沿用旧逻辑，不拆分weights_w和weights_v
+
+  patch-size: 1
+  moe-impl: ep_moe
+  gate-impl: deepseek
+  rope-type-extended: "interleaved_mrope"
+  cond-image-type: vae_vit
+  cond-token-attn-type: full_causal
+
+
+EXTRA_MODEL_ARGS:
+  enabled:
+    - use-vae
+    - use-vit
+    - vit-frozen
+  vae-type: 16x16-128c-flux2
+  vae-latent-dim: 128
+  vae-precision: fp32
+  vae-autocast-dtype: fp32
+  vit-type: anyres-vit-for-hy3-a3b
+
+DENOISE_ARGS:
+  denoise-type: flow
+  flow-path-type: linear
+  flow-predict-type: velocity
+  flow-snr-type: lognorm
+  flow-reverse: True
+  flow-shift: 4.05
+
+
+DATA_ARGS:
+  tokenizer-type: NullTokenizer
+  dataloader-type: external
+
+  # extra args provider
+  tokenizer-name: hunyuan3-moe-a3b-hymm-v3-5
+  tokenizer-class: tokenization_hy3mm_v3_5.Hunyuan3MultimodalV3d5TokenizerFast
+  conv-template: hunyuan3-moe-a3b-gemini-mot-gen-a10b
+  sequence-template: pretrain
+  gen-image-template: tool_call_v3.5
+  shuffle-by: dataset
+  combined-iterator-sampling-mode: fixed
+  cos-base:
+    - "/cos_nj1/share_302243067 -> /apdcephfs_wza_common/hunyuan_data/{stem2}"
+  ignore-start-tokens: []
+  enabled:
+    - cos-file-is-encrypted
+    - enable-resample
+    - fast-shuffle
+    - first-epoch-no-shuffle
+    - use-numpy-indices
+    - add-timestep-token
+#    - add-image-shape-token
+#    - use-front-boi-token
+    - use-front-src-image
+    # - independent-seq-length
+    - use-rope-sample-offsets
+
+  # vae
+  vae-image-token-length: 256
+  # -- resolution group kwargs
+  reso-base-size: 256
+  reso-align: 16
+  reso-preset: arc33
+  # vit
+  vit-image-token-length: 4352  # 2048*2048/32/32+(2048*4/32)+2
+
+  modality: [ text, vae_image, vit_image ]
+  dummy-type: ["ts_proj"]
+  # sampling-probs: '{"t2i": 0.58, "t2i_ocr": 0.22, "t2i_ocr_short": 0.19, "t2i_ip_fix": 0.009, "t2i_style_fix": 0.001}'
+  sampling-probs: '{"t2i": 0.73, "t2i_ocr_new": 0.25, "t2i_ip_fix": 0.009, "t2i_style_fix": 0.011}'
+
+  und-token-type: [ "bos", "text", "boi", "vit", "eoi", "joint_image_sep", "eoi", "eos", "pad", "vae_info" ]
+  gen-token-type: [ "vae" ]
+
+  # Dataloader
+  num-workers: 24
+  prefetch-factor: 12
+
+  # pack-buffer-factor: 1 # TODO
+
+
+__FROZEN__DATA_ARGS:
+
+  t2i_task_kwargs:
+    # required
+    batch_size: 1
+    modality: [ vae_image ]
+    max_token_length: 3756 # 256（image） + 3500 (text) ### 仅当打开 independent-seq-length时，该参数才会生效，否则按照统一的max-position-embeddings参数
+    attn_type: flex
+    shuffle_seed: 1111
+    sequence_pack: True
+    # image caption
+    uncond_p: 0.1
+    prompt_token_length: 3500
+    patcher_names: []
+    instruct_type: none
+    image_caption_resource:
+      - caption_v5:
+          caption_v5_src: '{"caption_v5_en_col": 0.5, "caption_v5_zh_col": 0.5}'
+          caption_v5_caption_processor: caption_process_v4
+          caption_v5_caption_sample_ratio: '{"long_long_caption":0.455,"long_caption":0.195,"medium_caption":0.1,"short_caption":0.25,"style":1.0,"shot_type":0.1}'
+    reasoning_token_length: 0
+    cot_kwargs:
+      recaption_cot_prob: 0
+      recaption_cot: 'short_caption@0.4/medium_caption@0.4/long_caption@0.2 | long_caption@0.000001/long_long_caption@0.999999'
+      reasoning_cot_prob: 0
+    # system prompt
+    system_prompt_token_length: 0
+    system_prompt_type: none
+    predict_prompt: False
+  t2i_index_kwargs:
+    index_file: # 5508995367.0
+      - /apdcephfs_wza/0_public_datasets/hymm_3.5/stage1-256px-data/t2i/base_shuffle_seed42.json
+    reso_bucket_kwargs:
+      base_size: ${DATA_ARGS.reso-base-size}
+      align: ${DATA_ARGS.reso-align}
+      preset: ${DATA_ARGS.reso-preset}
+    ceph_base_inv: '{"wza": "/apdcephfs_wza/"}'
+    verbose: 1
+    index_columns:
+      image_col: cache_image
+      caption_v5_en_col: caption_en
+      caption_v5_zh_col: caption_zh
+      url_cos_col: url_cos
+
+
+  t2i_ocr_new_task_kwargs:
+    # required
+    batch_size: 1
+    modality: [ vae_image ]
+    max_token_length: 3756 # 256（image） + 3500 (text)
+    attn_type: flex
+    shuffle_seed: 1111
+    sequence_pack: True
+    # image caption
+    uncond_p: 0.1
+    prompt_token_length: 3500
+    patcher_names: []
+    instruct_type: none
+    image_caption_resource:
+      - caption_v5:
+          caption_v5_src: '{"caption_v5_en_col": 0.5, "caption_v5_zh_col": 0.5}'
+          caption_v5_caption_processor: caption_process_v4
+          caption_v5_caption_sample_ratio: '{"long_long_caption":0.999999,"long_caption":0.000001,"style":1.0,"shot_type":0.1}'
+    reasoning_token_length: 0
+    cot_kwargs:
+      recaption_cot_prob: 0
+      recaption_cot: 'short_caption@0.4/medium_caption@0.4/long_caption@0.2 | long_caption@0.000001/long_long_caption@0.999999'
+      reasoning_cot_prob: 0
+    # system prompt
+    system_prompt_token_length: 0
+    system_prompt_type: none
+    predict_prompt: False
+  t2i_ocr_new_index_kwargs:
+    index_file: # 1550855241.0
+      - /apdcephfs_wza/0_public_datasets/hymm_3.5/stage1-256px-data/t2i_ocr_ocrlen_lt60/base_filtered_set_epoch_shuffle_seed24.json
+    reso_bucket_kwargs:
+      base_size: ${DATA_ARGS.reso-base-size}
+      align: ${DATA_ARGS.reso-align}
+      preset: ${DATA_ARGS.reso-preset}
+    ceph_base_inv: '{"wza": "/apdcephfs_wza/"}'
+    verbose: 1
+    index_columns:
+      image_col: cache_image
+      caption_v5_en_col: caption_en
+      caption_v5_zh_col: caption_zh
+      url_cos_col: url_cos
+
+  t2i_ocr_short_task_kwargs:
+    # required
+    batch_size: 1
+    modality: [ vae_image ]
+    max_token_length: 3756 # 256（image） + 3500 (text)
+    attn_type: flex
+    shuffle_seed: 1111
+    sequence_pack: True
+    # image caption
+    uncond_p: 0.1
+    prompt_token_length: 3500
+    patcher_names: []
+    instruct_type: none
+    image_caption_resource:
+      - caption_v5:
+          caption_v5_src: '{"caption_v5_en_col": 0.5, "caption_v5_zh_col": 0.5}'
+          caption_v5_caption_processor: caption_process_v4
+          caption_v5_caption_sample_ratio: '{"short_caption":0.999999,"medium_caption":0.000001,"background":0.5,"style":1.0,"shot_type":0.1}'
+    reasoning_token_length: 0
+    cot_kwargs:
+      recaption_cot_prob: 0
+      recaption_cot: 'short_caption@0.4/medium_caption@0.4/long_caption@0.2 | long_caption@0.000001/long_long_caption@0.999999'
+      reasoning_cot_prob: 0
+    # system prompt
+    system_prompt_token_length: 0
+    system_prompt_type: none
+    predict_prompt: False
+  t2i_ocr_short_index_kwargs:
+    index_file: # 2976065347.0
+      - /apdcephfs_wza/0_public_datasets/hymm_3.5/stage1-256px-data/t2i_short_ocr/base_filtered_set_shuffle_seed42.json
+    reso_bucket_kwargs:
+      base_size: ${DATA_ARGS.reso-base-size}
+      align: ${DATA_ARGS.reso-align}
+      preset: ${DATA_ARGS.reso-preset}
+    ceph_base_inv: '{"wza": "/apdcephfs_wza/"}'
+    verbose: 1
+    index_columns:
+      image_col: cache_image
+      caption_v5_en_col: caption_en
+      caption_v5_zh_col: caption_zh
+      url_cos_col: url_cos
+
+  t2i_ip_fix_task_kwargs:
+    # required
+    batch_size: 1
+    modality: [ vae_image ]
+    max_token_length: 3756 # 256（image） + 3500 (text)
+    attn_type: flex
+    shuffle_seed: 1111
+    sequence_pack: True
+    # image caption
+    uncond_p: 0.1
+    prompt_token_length: 3500
+    patcher_names: []
+    instruct_type: none
+    image_caption_resource:
+      - caption_v5:
+          caption_v5_src: '{"caption_v5_en_col": 0.5, "caption_v5_zh_col": 0.5}'
+          caption_v5_caption_processor: caption_process_v4
+          caption_v5_caption_sample_ratio: '{"long_long_caption":0.455,"long_caption":0.195,"medium_caption":0.1,"short_caption":0.25,"style":1.0,"shot_type":0.1}'
+    reasoning_token_length: 0
+    cot_kwargs:
+      recaption_cot_prob: 0
+      recaption_cot: 'short_caption@0.4/medium_caption@0.4/long_caption@0.2 | long_caption@0.000001/long_long_caption@0.999999'
+      reasoning_cot_prob: 0
+    # system prompt
+    system_prompt_token_length: 0
+    system_prompt_type: none
+    predict_prompt: False
+  t2i_ip_fix_index_kwargs:
+    index_file: # 29814808.0
+      # IP
+      - /apdcephfs_wza/0_public_datasets/hymm_3.5/stage1-256px-data/ip_repeat2_fix/base_repeat2_epoch_shuffle.json
+    reso_bucket_kwargs:
+      base_size: ${DATA_ARGS.reso-base-size}
+      align: ${DATA_ARGS.reso-align}
+      preset: ${DATA_ARGS.reso-preset}
+    ceph_base_inv: '{"wza": "/apdcephfs_wza/"}'
+    verbose: 1
+    index_columns:
+      image_col: cache_image
+      caption_v5_en_col: caption_en
+      caption_v5_zh_col: caption_zh
+      url_cos_col: url_cos
+
+  t2i_style_fix_task_kwargs:
+    # required
+    batch_size: 1
+    modality: [ vae_image ]
+    max_token_length: 3756 # 256（image） + 3500 (text)
+    attn_type: flex
+    shuffle_seed: 1111
+    sequence_pack: True
+    # image caption
+    uncond_p: 0.1
+    prompt_token_length: 3500
+    patcher_names: []
+    instruct_type: none
+    image_caption_resource:
+      - caption_v5:
+          caption_v5_src: '{"caption_v5_en_col": 0.5, "caption_v5_zh_col": 0.5}'
+          caption_v5_caption_processor: caption_process_v4
+          caption_v5_caption_sample_ratio: '{"long_long_caption":0.455,"long_caption":0.195,"medium_caption":0.1,"short_caption":0.25,"style":1.0,"shot_type":0.1}'
+    reasoning_token_length: 0
+    cot_kwargs:
+      recaption_cot_prob: 0
+      recaption_cot: 'short_caption@0.4/medium_caption@0.4/long_caption@0.2 | long_caption@0.000001/long_long_caption@0.999999'
+      reasoning_cot_prob: 0
+    # system prompt
+    system_prompt_token_length: 0
+    system_prompt_type: none
+    predict_prompt: False
+  t2i_style_fix_index_kwargs:
+    index_file: #  1017630.0
+      # style
+      - /apdcephfs_wza/0_public_datasets/hymm_3.5/stage1-256px-data/style_repeat40/base_filtered_set_repeat40_epoch_shuffle.json
+    reso_bucket_kwargs:
+      base_size: ${DATA_ARGS.reso-base-size}
+      align: ${DATA_ARGS.reso-align}
+      preset: ${DATA_ARGS.reso-preset}
+    ceph_base_inv: '{"wza": "/apdcephfs_wza/"}'
+    verbose: 1
+    index_columns:
+      image_col: cache_image
+      caption_v5_en_col: caption_en
+      caption_v5_zh_col: caption_zh
+      url_cos_col: url_cos
+
+
+TRAINING_ARGS:
+  micro-batch-size: 1
+  gradient-accumulation-steps: 1
+  global-batch-size: ${mul:${div:${mul:${oc.env:HOST_GPU_NUM}, ${oc.env:HOST_NUM}}, ${mul:${MODEL_PARALLEL_ARGS.tensor-model-parallel-size}, ${MODEL_PARALLEL_ARGS.pipeline-model-parallel-size}}}, ${mul:${TRAINING_ARGS.gradient-accumulation-steps}, ${TRAINING_ARGS.micro-batch-size}}} # GLOBAL_BATCH_SIZE = HOST_GPU_NUM * HOST_NUM / (TP_SIZE*PP_SIZE*CP_SIZE) * GRADIENT_ACCUMULATION_STEPS * MICRO_BATCH_SIZE
+  lr: 1e-4
+  train-iters: 100_000_000
+  lr-decay-iters: 100_000_000
+  lr-decay-style: constant
+  optimizer: muon
+  muon-ema-gradient: True  # 对应sum_decay_momentum为False的情况
+  muon-momentum: 0.95
+  adam-beta1: 0.9
+  adam-beta2: 0.95
+  min-lr: 1e-4
+  weight-decay: 0.1
+  lr-warmup-iters: 5000
+  clip-grad: 1.0
+  eval-interval: 1000
+  eval-iters: 0
+  seed: 1234
+    # - optimizer-cpu-offload
+    # - use-precision-aware-optimizer
+  __FROZEN__OPTIMIZER_ARGS:  # pure torch specific
+    optimizer_params:
+      lr: ${TRAINING_ARGS.lr}
+      adamw_betas:
+      - ${TRAINING_ARGS.adam-beta1}
+      - ${TRAINING_ARGS.adam-beta2}
+      weight_decay: ${TRAINING_ARGS.weight-decay}
+      momentum: ${TRAINING_ARGS.muon-momentum}
+      adamw_eps: 0.00000001 # adam eps 1e-8
+    special_adamw_params: ["*embed_tokens*", "*lm_head*", "*final_layer*", "*time_embed*", "*timestep_emb*", "*patch_embed*", "*embedding*"]
+  __FROZEN__LR_SCHEDULER_ARGS:  # pure torch specific
+    lr_scheduler_params:
+      num_warmup_steps: ${TRAINING_ARGS.lr-warmup-iters}
+      num_training_steps: ${TRAINING_ARGS.train-iters}
+      min_lr: ${TRAINING_ARGS.min-lr}
+
+  # loss related
+  image-loss-weight: 1.0
+  moe-expert-bias-update-rate: 0.001
+  moe-score-func: "sigmoid"
+  moe-aux-loss-coeff: 0.0001
+  enabled:
+    # - check-for-spiky-loss
+    - accumulate-allreduce-grads-in-fp32
+    - deterministic-mode
+    - override-opt_param-scheduler
+    - use-dynamic-global-batch-size-convert-iters-to-samples
+    # - moe-router-keep-high-precision-params
+    # - calculate-per-token-loss
+    - moe-enable-router-expert-bias
+    - moe-enable-expert-bias-zero-mean-update
+    - moe-aux-loss
+    - moe-seq-aux-loss
+
+
+PERFORMANCE_ARGS:
+  manual-gc-interval: 100
+  recompute-granularity: full
+  recompute-method: uniform
+  recompute-num-layers: 1
+  # recompute-method: block
+  # recompute-num-layers: 6
+  # per-stage-recompute-num-layers: [6, 6, 4, 0]
+  enabled:
+    - manual-gc
+    # - use-flash-attn
+    - moe-enable-deepep
+    - enable-experimental
+    - moe-permute-fusion
+    # - cross-entropy-loss-fusion
+    - moe-router-fusion
+    # - moe-shared-expert-overlap # mcore目前实现不支持和deepep一起使用
+    - overlap-grad-reduce
+    - overlap-param-gather
+    # - overlap-moe-expert-parallel-comm
+    - no-persist-layer-norm
+    - no-gradient-accumulation-fusion
+    - no-masked-softmax-fusion
+    - no-bias-swiglu-fusion
+    - use-out-place-mask-local-attn
+    - use-index-add-local-unpermute
+    - deepep-moe-shared-expert-overlap
+    - muon-overlap-momentum-gather
+    - muon-use-batch-p2p-gather
+    # - no-bias-dropout-fusion
+    # - no-rope-fusion
+    # - moe-router-force-load-balancing
+    - no-align-grad-reduce
+    - disable-gloo-process-groups
+    - disable-fill-uninitialized-memory
+
+
+MODEL_PARALLEL_ARGS:
+  tensor-model-parallel-size: 1
+  pipeline-model-parallel-size: 1
+  # pipeline-model-parallel-layout: Et*24|t*24L
+  expert-model-parallel-size: 8
+  distributed-timeout-minutes: 30  # 增加分布式超时时间，解决进程组初始化超时问题（默认10分钟）
+  enabled:
+    - use-distributed-optimizer
+    # - tp-comm-overlap
+    # - sequence-parallel
+
+
+CHECKPOINT_ARGS:
+  ckpt-format: torch_dist
+  dist-ckpt-strictness: log_all
+  save-interval: 1000
+  save: ${__GLOBAL_VARS__.OUTPUT_PATH}/ckpt
+  # ckpt: ${CHECKPOINT_ARGS.load}
+  load: "/apdcephfs_wza2/share_304227829/hunyuan/milesjyang/basic_train_milesjyang_20260407202045_a5b8364b/8b2027419d67b679019d68ea763e00de/ckpt"
+  key-mapping: []
+  generation-config: /apdcephfs_wza/1_public_models/hymm_ar_assets/pretrained_llm/HunyuanImage3.5/hunyuan3-moe-a3b-gemini-mot-gen-a10b.json
+  enabled:
+    - fuse-experts-in-load
+    - resume
+    - use-dist-ckpt
+    - no-load-optim
+    - no-load-rng   # saving/loading rng is not supported yet
+    # - finetune
+    - ckpt-fully-parallel-load
+    - ckpt-fully-parallel-save
+
+
+LOGGING_ARGS:
+  log-interval: 1
+  tensorboard-dir: ${__GLOBAL_VARS__.OUTPUT_PATH}/events
+  saved-training-batch-dir: ${__GLOBAL_VARS__.OUTPUT_PATH}/saved_training_data
+  save-n-training-data: 16
+  enabled:
+    - log-timers-to-tensorboard
+    - log-memory-to-tensorboard
+    - log-num-zeros-in-grad
+    - log-params-norm
+    - log-validation-ppl-to-tensorboard
+    - log-throughput

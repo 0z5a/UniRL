@@ -1,0 +1,393 @@
+training_config:
+  trainer_name: multimodal_gemini_beta_trainer.MultiModalGeminiBetaTrainer
+  micro_batch_size: 4
+  gradient_accumulation_steps: 1
+  global_batch_size: null
+  global_seed: 666
+  zero_stage: 2
+  log_every: 1
+  tensorboard: True
+  gradient_checkpoint: False
+  gradient_checkpoint_layers: -1
+  use_compile: False
+  launcher: torch
+
+  overlap_comm: True
+  reduce_bucket_size: 5e7
+
+  max_training_steps: 1_000_000
+  ckpt_every: 50
+
+  init_save: False
+  final_save: True
+
+  resume: null
+  resume_dataloader: False
+  no_load_optim_states: False
+  no_load_ema: False
+  default_rank0_ss: False
+  fix_lr_scheduler: False
+
+  validation_at_steps: []
+  validation_every: -1
+  validation_metrics: []
+  validation_metrics_save_image: False
+
+sampling_config:
+  ckpt: null
+  load_key: module
+  metric_image_size: 1024
+  metric_batch_size: 8
+  evaluation_metrics: [fid@coco30k, clip_score@coco30k, hpsv2@coco30k, t2i_compbench]
+  rerank: 1
+  sample_image_size: 1024
+  sample_batch_size: 8
+  seed_type: auto
+  seed: 123456
+  guidance_scale: 6.0
+  diff_infer_steps: 100
+  sample_flow_shift: 3.0
+  sample_use_flux_shift: False
+  do_sample: True
+
+  logits_processors_cfg:
+    - TemperatureLogitsWarper:
+        temperature: 0.6
+    - TopKLogitsWarper:
+        top_k: 1024
+    - TopPLogitsWarper:
+        top_p: 0.95
+
+model_config:
+  model_name: hunyuan-moe-7b-a13b-vocab-expanded
+  model_structure: MultiModalTransfusion
+  tokenizer_name: hunyuan-dense-7b-tokenizer-refactor
+  load_prepend_key: 'language_model.'    # Enable to load from pretrained ckpt of Transfusion structure
+  pretrained_ckpt: hunyuan-moe-7b-a13b-vocab-expanded
+  precision: bf16
+  autocast_dtype: bf16
+  media_vocab_size: 0
+
+  denoise_type: flow
+  flow_path_type: linear
+  flow_predict_type: velocity
+  flow_loss_weight: null
+  flow_train_eps: null
+  flow_sample_eps: null
+  flow_snr_type: lognorm
+  flow_reverse: True
+  flow_shift: 3.0
+  use_flux_shift: False
+  flux_base_shift: null
+  flux_max_shift: null
+
+  model_kwargs:
+    block_size: 12500
+    rope_type: 2d   # updated
+    vision_encoder_max_num_patches: 1024  # add
+    vision_model:
+      vision_model_type: siglip2-so400m-patch16-naflex  # updated
+      vision_model_precision: fp32
+      vision_model_autocast_dtype: fp32
+      vision_model_freeze: False
+    vision_aligner:
+      vision_aligner_type: mlp_gelu
+      vision_aligner_precision: fp32
+      vision_aligner_autocast_dtype: fp32
+      vision_aligner_freeze: False
+      vision_aligner_params:
+        vision_aligner_depth: 2
+        vision_aligner_input_dim: 1152   # Align to vision_model_type's hidden_dim, updated
+        vision_aligner_n_embed: 4096     # Align to model_name's n_embd
+
+  image_loss_weight: 5.0
+
+  img_proj_type: unet
+  patch_embed_hidden_dim: 1024
+  patch_size: 1
+  unet_out_norm: True
+  image_preln: True
+  use_final_time_embed: True
+
+extra_model_config:
+  vae_type: 16x16x4-32c-hy-image
+  vae_precision: fp32
+  vae_autocast_dtype: fp16
+  vae_latent_dim: 32
+
+optimizer_config:
+  optimizer_name: AdamW
+  gradient_clipping: 1.0
+  optimizer_params:
+    lr: 0.0001
+    betas: [0.9, 0.95]
+    eps: 0.000001
+    weight_decay: 0.01
+
+lr_scheduler_config:
+  lr_schedule: WarmupCosineLR
+  lr_scheduler_params:
+    warmup_num_steps: 100
+    cos_min_ratio: 1.0
+    total_num_steps: 1_000_000
+
+dataloader_config:
+  # Common
+  get_image_retry: 0
+  shuffle_by: dataset
+  fast_shuffle: True
+  use_numpy_indices: True  # updated, for loading large-scale dataset
+  add_iw_ih_token: False
+  add_timestep_token: True
+  add_image_shape_token: True
+  use_front_boi_token: True
+  use_front_src_image: True
+  use_joint_image_feature: True
+  sequence_template: instruct
+  combined_iterator_sampling_mode: fixed
+  cos_base: "/cos_nj1/share_302243067 -> /cos_zw1/share_303793872"
+  enable_resample: True
+  sampling_probs: '{"t2i": 0.3, "t2i_stage_4": 0.3, "t2i_ocr": 0.3, "lm_instruct": 0.05, "lm_recaption": 0.05}'
+
+  # Text-to-Image
+  t2i_batch_size: 2
+  t2i_task_kwargs:
+    training_image_size: 1024 # only used when multireso is False
+    image_token_length: 4096
+    text_token_length: 768
+    text_cot_token_length: 1280
+    ignore_text_ntp: True
+    attn_type: flex
+    shuffle_seed: 16666
+    uncond_p: 0.1
+    try_first_use_source_text: False    # Must be False
+    image_caption_rate: 1.0   # 使用 caption 的比例
+    instruction_candidates_type: mix_up@0.5
+    caption_cot: 'short_caption@0.4/medium_caption@0.4/long_caption@0.2 | long_caption@0.000001/long_long_caption@0.999999'
+    caption_cot_prob: 0.9
+    image_caption_col_probs:
+      - caption_v3_2_ip:
+          caption_v3_2_ip_src: '{"image_caption_v3_2_ip_en_col": 0.5, "image_caption_v3_2_ip_zh_col": 0.5}'
+          caption_v3_2_ip_caption_processor: caption_process_v3
+          caption_v3_2_ip_caption_sample_ratio: '{"long_long_caption":0.455,"long_caption":0.195,"medium_caption":0.1,"short_caption":0.25,"background":0.1,"style":0.7,"shot_type":0.1}'
+          caption_v3_2_ip_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3_2_ocr:
+          caption_v3_2_ocr_src: '{"image_caption_v3_2_ocr_en_col": 0.5, "image_caption_v3_2_ocr_zh_col": 0.5}'
+          caption_v3_2_ocr_caption_processor: caption_process_v3
+          caption_v3_2_ocr_caption_sample_ratio: '{"long_long_caption":0.99,"long_caption":0.001,"medium_caption":0.003,"short_caption":0.006,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_2_ocr_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3_2:
+          caption_v3_2_src: '{"image_caption_v3_2_en_col": 0.5, "image_caption_v3_2_zh_col": 0.5}'
+          caption_v3_2_caption_processor: caption_process_v3
+          caption_v3_2_caption_sample_ratio: '{"long_long_caption":0.455,"long_caption":0.195,"medium_caption":0.1,"short_caption":0.25,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_2_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3_1:
+          caption_v3_1_src: '{"image_caption_v3_1_en_col": 0.5, "image_caption_v3_1_zh_col": 0.5}'
+          caption_v3_1_caption_processor: caption_process_v3
+          caption_v3_1_caption_sample_ratio: '{"long_long_caption":0.455,"long_caption":0.195,"medium_caption":0.1,"short_caption":0.25,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_1_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3:
+          caption_v3_src: '{"image_caption_v3_en_col": 0.5, "image_caption_v3_zh_col": 0.5}'
+          caption_v3_caption_processor: caption_process_v3
+          caption_v3_caption_sample_ratio: '{"long_long_caption":0.455,"long_caption":0.195,"medium_caption":0.1,"short_caption":0.25,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_extra_processor: [ 'fix_style', 'filter_shot', 'inject_style_v2' ]
+  t2i_index_kwargs:
+    index_file:
+      # 1M for test
+      # - /apdcephfs_nj8/share_301739632/1_public_models/hymm_ar_assets/dataset/t2i_index/gemini_json/mb256_cap_v3/mb512_p4_v3_1m_demo.json
+      # actually used
+      - /apdcephfs_zwfy/share_303937731/1_public_models/hymm_ar_assets/dataset/t2i_index/gemini_json/mb1024_cap_v3/mb1024_stage5_zw_noocr.json  # 1883w
+      - /apdcephfs_zwfy/share_303937731/1_public_models/hymm_ar_assets/dataset/t2i_index/gemini_json/mb1024_cap_v3/mb1024_ip.json  # 127w
+      - /apdcephfs_zwfy/share_303937731/1_public_models/hymm_ar_assets/dataset/t2i_index/gemini_json/mb1024_cap_v3/mb1024_style_batch1_2.json  # 54w
+      - /apdcephfs_zwfy/share_303937731/1_public_models/hymm_ar_assets/dataset/t2i_index/gemini_json/mb1024_cap_v3/mb1024_ct_uniform_distribution_zw.json  # 561w
+    multireso: True
+    ceph_base_inv: '{"nj10": "/apdcephfs_zwfy/share_303937731", "zwfy": "/apdcephfs_zwfy/share_303937731"}'  # updated
+    image_col: cache_image
+    image_caption_v3_2_ocr_en_col: caption_v3_2_ocr_en  # updated
+    image_caption_v3_2_ocr_zh_col: caption_v3_2_ocr_zh  # updated
+    image_caption_v3_2_en_col: caption_v3_2_en  # updated
+    image_caption_v3_2_zh_col: caption_v3_2_zh  # updated
+    image_caption_v3_1_en_col: caption_v3_1_en  # updated
+    image_caption_v3_1_zh_col: caption_v3_1_zh  # updated
+    image_caption_v3_en_col: caption_v3_en  # updated
+    image_caption_v3_zh_col: caption_v3_zh  # updated
+    image_caption_v3_2_ip_en_col: caption_v3_2_ip_en  # updated
+    image_caption_v3_2_ip_zh_col: caption_v3_2_ip_zh  # updated
+    extra_style_v2_col: style_v2
+
+
+  # Text-to-Image
+  t2i_stage_4_batch_size: 2
+  t2i_stage_4_task_kwargs:
+    t2i_stage_4_training_image_size: 1024 # only used when multireso is False
+    t2i_stage_4_image_token_length: 4096
+    t2i_stage_4_text_token_length: 768
+    t2i_stage_4_text_cot_token_length: 1280
+    t2i_stage_4_ignore_text_ntp: True
+    t2i_stage_4_attn_type: flex
+    t2i_stage_4_shuffle_seed: 26666
+    t2i_stage_4_uncond_p: 0.1
+    t2i_stage_4_try_first_use_source_text: False    # Must be False
+    t2i_stage_4_image_caption_rate: 1.0   # 使用 caption 的比例
+    t2i_stage_4_instruction_candidates_type: mix_up@0.5
+    t2i_stage_4_caption_cot: 'short_caption@0.4/medium_caption@0.4/long_caption@0.2 | long_caption@0.000001/long_long_caption@0.999999'
+    t2i_stage_4_caption_cot_prob: 0.9
+    t2i_stage_4_image_caption_col_probs:
+      - caption_v3_2_ip:
+          caption_v3_2_ip_src: '{"image_caption_v3_2_ip_en_col": 0.5, "image_caption_v3_2_ip_zh_col": 0.5}'
+          caption_v3_2_ip_caption_processor: caption_process_v3
+          caption_v3_2_ip_caption_sample_ratio: '{"long_long_caption":0.455,"long_caption":0.195,"medium_caption":0.1,"short_caption":0.25,"background":0.1,"style":0.7,"shot_type":0.1}'
+          caption_v3_2_ip_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3_2_ocr:
+          caption_v3_2_ocr_src: '{"image_caption_v3_2_ocr_en_col": 0.5, "image_caption_v3_2_ocr_zh_col": 0.5}'
+          caption_v3_2_ocr_caption_processor: caption_process_v3
+          caption_v3_2_ocr_caption_sample_ratio: '{"long_long_caption":0.99,"long_caption":0.001,"medium_caption":0.003,"short_caption":0.006,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_2_ocr_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3_2:
+          caption_v3_2_src: '{"image_caption_v3_2_en_col": 0.5, "image_caption_v3_2_zh_col": 0.5}'
+          caption_v3_2_caption_processor: caption_process_v3
+          caption_v3_2_caption_sample_ratio: '{"long_long_caption":0.455,"long_caption":0.195,"medium_caption":0.1,"short_caption":0.25,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_2_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3_1:
+          caption_v3_1_src: '{"image_caption_v3_1_en_col": 0.5, "image_caption_v3_1_zh_col": 0.5}'
+          caption_v3_1_caption_processor: caption_process_v3
+          caption_v3_1_caption_sample_ratio: '{"long_long_caption":0.455,"long_caption":0.195,"medium_caption":0.1,"short_caption":0.25,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_1_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3:
+          caption_v3_src: '{"image_caption_v3_en_col": 0.5, "image_caption_v3_zh_col": 0.5}'
+          caption_v3_caption_processor: caption_process_v3
+          caption_v3_caption_sample_ratio: '{"long_long_caption":0.455,"long_caption":0.195,"medium_caption":0.1,"short_caption":0.25,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_extra_processor: [ 'fix_style', 'filter_shot', 'inject_style_v2' ]
+  t2i_stage_4_index_kwargs:
+    t2i_stage_4_index_file:
+      # 1M for test
+      # - /apdcephfs_nj8/share_301739632/1_public_models/hymm_ar_assets/dataset/t2i_index/gemini_json/mb256_cap_v3/mb512_p4_v3_1m_demo.json
+      # actually used
+      - /apdcephfs_zwfy/share_303937731/1_public_models/hymm_ar_assets/dataset/t2i_index/gemini_json/mb1024_cap_v3/mb1024_zw_noocr.json  # 1.08B
+      - /apdcephfs_zwfy/share_303937731/1_public_models/hymm_ar_assets/dataset/t2i_index/gemini_json/mb1024_cap_v3/mb1024_ip.json  # 1,269,056
+    t2i_stage_4_multireso: True
+    t2i_stage_4_ceph_base_inv: '{"nj10": "/apdcephfs_zwfy/share_303937731", "zwfy": "/apdcephfs_zwfy/share_303937731"}'  # updated
+    t2i_stage_4_image_col: cache_image
+    t2i_stage_4_image_caption_v3_2_ocr_en_col: caption_v3_2_ocr_en  # updated
+    t2i_stage_4_image_caption_v3_2_ocr_zh_col: caption_v3_2_ocr_zh  # updated
+    t2i_stage_4_image_caption_v3_2_en_col: caption_v3_2_en  # updated
+    t2i_stage_4_image_caption_v3_2_zh_col: caption_v3_2_zh  # updated
+    t2i_stage_4_image_caption_v3_1_en_col: caption_v3_1_en  # updated
+    t2i_stage_4_image_caption_v3_1_zh_col: caption_v3_1_zh  # updated
+    t2i_stage_4_image_caption_v3_en_col: caption_v3_en  # updated
+    t2i_stage_4_image_caption_v3_zh_col: caption_v3_zh  # updated
+    t2i_stage_4_image_caption_v3_2_ip_en_col: caption_v3_2_ip_en  # updated
+    t2i_stage_4_image_caption_v3_2_ip_zh_col: caption_v3_2_ip_zh  # updated
+    t2i_stage_4_extra_style_v2_col: style_v2
+
+  # Text-to-Image OCR, we only use long or long_long caption for OCR dataset
+  t2i_ocr_batch_size: 2
+  t2i_ocr_task_kwargs:
+    t2i_ocr_training_image_size: 1024 # only used when multireso is False
+    t2i_ocr_image_token_length: 4096
+    t2i_ocr_text_token_length: 768
+    t2i_ocr_text_cot_token_length: 1280
+    t2i_ocr_ignore_text_ntp: True
+    t2i_ocr_attn_type: flex
+    t2i_ocr_shuffle_seed: 36666
+    t2i_ocr_uncond_p: 0.1
+    t2i_ocr_try_first_use_source_text: False    # Must be False
+    t2i_ocr_image_caption_rate: 1.0   # 使用 caption 的比例
+    t2i_ocr_instruction_candidates_type: mix_up@0.5
+    t2i_ocr_caption_cot: 'short_caption@0.2/medium_caption@0.4/long_caption@0.4 | long_caption@0.000001/long_long_caption@0.999999'
+    t2i_ocr_caption_cot_prob: 0.7
+    t2i_ocr_image_caption_col_probs:
+      - caption_v3_2_ocr:
+          caption_v3_2_ocr_src: '{"image_caption_v3_2_ocr_en_col": 0.5, "image_caption_v3_2_ocr_zh_col": 0.5}'
+          caption_v3_2_ocr_caption_processor: caption_process_v3
+          caption_v3_2_ocr_caption_sample_ratio: '{"long_long_caption":0.99,"long_caption":0.001,"medium_caption":0.003,"short_caption":0.006,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_2_ocr_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3_2:
+          caption_v3_2_src: '{"image_caption_v3_2_en_col": 0.5, "image_caption_v3_2_zh_col": 0.5}'
+          caption_v3_2_caption_processor: caption_process_v3
+          caption_v3_2_caption_sample_ratio: '{"long_long_caption":0.455,"long_caption":0.195,"medium_caption":0.1,"short_caption":0.25,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_2_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3_1:
+          caption_v3_1_src: '{"image_caption_v3_1_en_col": 0.5, "image_caption_v3_1_zh_col": 0.5}'
+          caption_v3_1_caption_processor: caption_process_v3
+          caption_v3_1_caption_sample_ratio: '{"long_long_caption":0.455,"long_caption":0.195,"medium_caption":0.1,"short_caption":0.25,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_1_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3:
+          caption_v3_src: '{"image_caption_v3_en_col": 0.5, "image_caption_v3_zh_col": 0.5}'
+          caption_v3_caption_processor: caption_process_v3
+          caption_v3_caption_sample_ratio: '{"long_long_caption":0.455,"long_caption":0.195,"medium_caption":0.1,"short_caption":0.25,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_extra_processor: [ 'fix_style', 'filter_shot', 'inject_style_v2' ]
+  t2i_ocr_index_kwargs:
+    t2i_ocr_index_file:
+      # ct
+      - /apdcephfs_zwfy/share_303937731/1_public_models/hymm_ar_assets/dataset/t2i_index/gemini_json/mb1024_cap_v3/mb1024_stage5_zw_ocr.json  # 124w
+      - /apdcephfs_zwfy/share_303937731/1_public_models/hymm_ar_assets/dataset/t2i_index/gemini_json/mb1024_cap_v3/mb1024_kris_ocr_post_train.json  # 121w
+      - /apdcephfs_zwfy/share_303937731/1_public_models/hymm_ar_assets/dataset/t2i_index/gemini_json/mb1024_cap_v3/mb1024_app_center_ocr_sft.json  # 50w
+      - /apdcephfs_zwfy/share_303937731/1_public_models/hymm_ar_assets/dataset/t2i_index/gemini_json/mb1024_cap_v3/mb1024_ui_4o.json  # 9.5w
+      - /apdcephfs_zwfy/share_303937731/1_public_models/hymm_ar_assets/dataset/t2i_index/gemini_json/mb1024_cap_v3/mb1024_ui_4o_part2.json  # 9.3w
+      - /apdcephfs_zwfy/share_303937731/1_public_models/hymm_ar_assets/dataset/t2i_index/gemini_json/mb1024_cap_v3/mb1024_4o_comic.json  # 19w
+      - /apdcephfs_zwfy/share_303937731/1_public_models/hymm_ar_assets/dataset/t2i_index/gemini_json/mb1024_cap_v3/mb1024_ct_extra_ocr_zw.json  # 901w
+      # stage 4
+      - /apdcephfs_zwfy/share_303937731/1_public_models/hymm_ar_assets/dataset/t2i_index/gemini_json/mb1024_cap_v3/mb1024_zw_ocr.json  # 0.12B
+      - /apdcephfs_zwfy/share_303937731/1_public_models/hymm_ar_assets/dataset/t2i_index/gemini_json/mb1024_cap_v3/mb1024_ocr_3kw_kris_fix.json
+      # - /apdcephfs_zwfy/share_303937731/1_public_models/hymm_ar_assets/dataset/t2i_index/gemini_json/mb1024_cap_v3/mb1024_ui_4o.json
+      - /apdcephfs_zwfy/share_303937731/1_public_models/hymm_ar_assets/dataset/t2i_index/gemini_json/mb1024_cap_v3/mb1024_app_center_extra_0806_fix.json
+      # - /apdcephfs_zwfy/share_303937731/1_public_models/hymm_ar_assets/dataset/t2i_index/gemini_json/mb1024_cap_v3/mb1024_ui_4o_part2.json
+    t2i_ocr_multireso: True
+    t2i_ocr_ceph_base_inv: '{"nj10": "/apdcephfs_zwfy/share_303937731", "zwfy": "/apdcephfs_zwfy/share_303937731"}'  # updated
+    t2i_ocr_image_col: cache_image
+    t2i_ocr_image_caption_v3_2_ocr_en_col: caption_v3_2_ocr_en  # updated
+    t2i_ocr_image_caption_v3_2_ocr_zh_col: caption_v3_2_ocr_zh  # updated
+    t2i_ocr_image_caption_v3_2_en_col: caption_v3_2_en  # updated
+    t2i_ocr_image_caption_v3_2_zh_col: caption_v3_2_zh  # updated
+    t2i_ocr_image_caption_v3_1_en_col: caption_v3_1_en  # updated
+    t2i_ocr_image_caption_v3_1_zh_col: caption_v3_1_zh  # updated
+    t2i_ocr_image_caption_v3_en_col: caption_v3_en  # updated
+    t2i_ocr_image_caption_v3_zh_col: caption_v3_zh  # updated
+    t2i_ocr_extra_style_v2_col: style_v2
+
+
+  # Language Model
+  lm_recaption_batch_size: 1
+  lm_recaption_task_kwargs:
+    lm_recaption_token_length: 12288
+    lm_recaption_attn_type: flex
+    lm_recaption_shuffle_seed: 46666
+    lm_recaption_pre_extract_tokens: False
+    lm_recaption_open_recaption: True
+  lm_recaption_index_kwargs:
+    lm_recaption_index_file:
+      # 1M for test
+      # - /apdcephfs_nj8/share_301739632/1_public_models/hymm_ar_assets/dataset/t2t_index/hy_text_v2_tokens_p3_1m_demo.json
+      # actually used
+      # - /apdcephfs_zwfy/share_303937731/1_public_models/hymm_ar_assets/dataset/t2t_index/hy_text_v2_tokens_p3.json  # 4.7B
+      - /apdcephfs_zwfy/share_303937731/fanbinlu/datasets/sft_cot_0809/data.json  # 916680
+      # new 
+      - /apdcephfs_zwfy/share_303937731/0_public_datasets/llm_recaption_think/Midjourney_v5_Prompt/base.json # 891003
+      - /apdcephfs_zwfy/share_303937731/0_public_datasets/llm_recaption_think/uiapp_v20_recap/base.json # 787940
+      - /apdcephfs_zwfy/share_303937731/0_public_datasets/llm_recaption_think/poster_v20_recap/base.json # 190591
+    lm_recaption_ceph_base_inv: '{"zwfy": "/apdcephfs_zwfy/share_303793872", "zwfy_303937731": "/apdcephfs_zwfy/share_303937731"}'
+    lm_recaption_verbose: 1
+    lm_recaption_index_strategy: probability
+    lm_recaption_index_probability: [20.0, 20.0, 20.0, 20.0]
+
+
+  # Language Model
+  lm_instruct_batch_size: 1
+  lm_instruct_task_kwargs:
+    lm_instruct_token_length: 12288
+    lm_instruct_attn_type: flex
+    lm_instruct_shuffle_seed: 46666
+    lm_instruct_pre_extract_tokens: False
+  lm_instruct_index_kwargs:
+    lm_instruct_index_file:
+      - /apdcephfs_zwfy/share_303937731/1_public_models/hymm_ar_assets/dataset/t2t_index/open_instruct_text_12288.json  # 88,991,092
+    lm_instruct_ceph_base_inv: '{"zwfy": "/apdcephfs_zwfy/share_303793872", "zwfy_303937731": "/apdcephfs_zwfy/share_303937731"}'
+    lm_instruct_verbose: 1
+
+  # Dataloader
+  dataloader_params:
+    num_workers: 4
+    pin_memory: True
+    prefetch_factor: 4
+    persistent_workers: True

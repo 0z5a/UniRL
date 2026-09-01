@@ -1,0 +1,256 @@
+# IMPORTANT NOTE: Write PTM args in YAML format:
+# 0. all arguments specified here are one-one correspondences with PTM arguments; un-specified arguments use PTM default values.
+# 1. arguments like '--hidden-size=2560' are written as 'hidden-size: 2560' (see below, note the space after colon).
+# 2. YAML format is like a tree, and only the leaf nodes are considered as arguments.
+#    Non-leaf nodes and structures are ignored, so arguments can be grouped as you like.
+# 3. arguments like '--sequence-parallel' can be written as 'enabled: \n  - sequence-parallel' (see below, note the indent).
+#    multiple `enabled` arguments in a same sub-tree must be put in a `enabled` list (see below for an example).
+
+__GLOBAL_VARS__:
+  _DEFAULT_OUTPUT_PATH: ""
+  DATA_PATH: "/root/dummy_data"
+  OUTPUT_PATH: ${oc.env:OUTPUT_PATH,${__GLOBAL_VARS__._DEFAULT_OUTPUT_PATH}}
+
+MODEL_ARGS:
+  model-name: diffusion.leo-2-moe-v1-2-small
+  model-structure: LeoModel
+  text-branch-model-name: diffusion.leo-2-moe-v1-2-small-txt-branch
+  audio-branch-model-name: diffusion.leo-2-moe-v1-2-small-audio-branch
+
+  init-device: meta  # [cpu, cuda, meta] pure torch specific
+  autocast-dtype: bf16  # pure torch specific
+  enabled:
+    - bf16
+    - main-params-fp32
+#    - fsdp-cast-forward-inputs
+  noise-dtype: fp32
+
+#  num-layers: 4
+  patch-size: 1
+  moe-impl: ep_moe
+  img-latent-in-channels: 97  # 2 * 48 + 1
+  cond-image-type: vae
+  cond-token-attn-type: full
+  cond-video-type: none
+  cond-video-token-attn-type: none
+
+
+EXTRA_MODEL_ARGS:
+  enabled:
+    - use-vae
+    - use-audio-vae
+    - use-text-encoder
+
+  vae-type: 16x16x4-48c-hy-v3
+  vae-latent-dim: 48
+  vae-precision: fp32
+  vae-autocast-dtype: fp16
+  vae-encode-type: mode
+
+  audio-vae-type: waveflow-v1_0
+  audio-vae-latent-dim: 64
+
+  text-encoder-type: qwen-3-vl-8b-instruct
+  __FROZEN__TEXT_ENCODER_ARGS:
+    text_encoder_prompt_template: li-dit-encode-image-qwen-vl-v2
+    text_encoder_prompt_template_video: li-dit-encode-video-qwen-vl-v2
+    text_encoder_text_len: 1024
+    text_encoder_precision: bf16
+    text_encoder_hidden_state_skip_layer: 2
+    text_encoder_uncond_token: "<|im_end|>"
+    text_encoder_use_fsdp: True
+
+
+DENOISE_ARGS:
+  denoise-type: flow
+  flow-path-type: linear
+  flow-predict-type: velocity
+  flow-snr-type: lognorm
+  flow-reverse: True
+  flow-shift: 1.0
+  flow-shift-video: 3.0
+  flow-shift-audio: 1.0
+
+
+DATA_ARGS:
+  tokenizer-type: NullTokenizer
+  dataloader-type: external
+  tokenizer-name: qwen-3-vl-8b-instruct
+  tokenizer-class: tokenization_qwen_multimodal.Qwen2TokenizerFast
+  conv-template: qwen-vl-v2-li-dit
+  sequence-template: instruct
+  uncond-length: single
+
+  # extra args provider
+  shuffle-by: dataset
+  combined-iterator-sampling-mode: fixed
+  video-cos-base: "/cos_nj1/share_302243067"
+  audio-cos-base: ${DATA_ARGS.video-cos-base}
+  enabled:
+    - enable-resample
+    - drop-resampled-samples
+    - fast-shuffle
+    - use-numpy-indices
+    - extend-latent-channels
+
+  # vae
+  vae-image-token-length: 256
+  vae-video-token-length: 7936
+  vae-audio-token-length: 1000
+  # -- resolution group kwargs
+  reso-base-size: 256
+  reso-align: 16
+  reso-preset: zigzag
+  duration-range: [33, 241]
+  duration-step: 4
+  additional-durations: [1]   # for image, not used
+
+  modality: [ vae_image, vae_video, vae_audio ]
+  gen-image-template: dit_it
+  gen-video-template: dit_it
+  gen-audio-template: dit_it
+  sampling-probs: '{"t2i": 1.0}'
+
+  # Dataloader
+  num-workers: 4
+  prefetch-factor: 2
+
+
+__FROZEN__DATA_ARGS:
+  t2i_task_kwargs:
+    # required
+    cls: av_loader.MultimodalAVIndexDataset
+    batch_size: 16
+    modality: [ vae_image ]
+    max_token_length: 330   # 256+74
+    attn_type: flash
+    shuffle_seed: 1111
+    no_shuffle: True
+    random_crop: False
+    target_size_type: index
+    # dit specific
+    prompt_first: False   # Put text tokens after image tokens for adapting flash attention.
+    remove_unused_images: False
+    extra_num_tokens: 0
+    latent_channel_extend_type: t2i  # one of {t2i, t2a, t2v, i2v, fl2v}
+    crop_start: 74
+    # sp
+    system_prompt_type: li-dit-encode-image-qwen-vl-v2
+    system_prompt_token_length: 74
+    # image caption
+    uncond_p: 0.1
+    prompt_token_length: 256
+    image_caption_resource:
+      - caption_v4:
+          caption_v4_src: '{"caption_v4_en_col": 0.5, "caption_v4_zh_col": 0.5}'
+          caption_v4_caption_processor: caption_process_v4
+          caption_v4_caption_sample_ratio: '{"long_caption":0.4,"medium_caption":0.3,"short_caption":0.3,"style":0.7,"shot_type":0.1,"IP":0.2}'
+  t2i_index_kwargs:
+    index_file:
+      - /apdcephfs_nj10/share_301739632/0_public_datasets/leo_2.0/image/pretrain_256p_json/pretrain/base_no_compress.json
+#      - /apdcephfs_nj10/share_301739632/0_public_datasets/leo_2.0/image/pretrain_256p_json/pretrain/demo_base.json
+    online_bucketing: True
+    reso_bucket_kwargs:
+      base_size: ${DATA_ARGS.reso-base-size}
+      align: ${DATA_ARGS.reso-align}
+      preset: ${DATA_ARGS.reso-preset}
+    verbose: 1
+    index_columns:
+      image_col: cache_image
+      caption_v4_en_col: caption_v4_en
+      caption_v4_zh_col: caption_v4_zh
+
+
+TRAINING_ARGS:
+  micro-batch-size: 1
+  gradient-accumulation-steps: 1
+  global-batch-size: ${mul:${div:${mul:${oc.env:HOST_GPU_NUM}, ${oc.env:HOST_NUM}}, ${mul:${mul:${MODEL_PARALLEL_ARGS.tensor-model-parallel-size}, ${MODEL_PARALLEL_ARGS.pipeline-model-parallel-size}}, ${MODEL_PARALLEL_ARGS.context-parallel-size}}}, ${mul:${TRAINING_ARGS.gradient-accumulation-steps}, ${TRAINING_ARGS.micro-batch-size}}} # GLOBAL_BATCH_SIZE = HOST_GPU_NUM * HOST_NUM / (TP_SIZE*PP_SIZE*CP_SIZE) * GRADIENT_ACCUMULATION_STEPS * MICRO_BATCH_SIZE
+  lr: 1e-4
+  train-iters: 100_000_000
+  lr-decay-iters: 100_000_000
+  lr-decay-style: cosine
+  optimizer: adam
+  adam-beta1: 0.9
+  adam-beta2: 0.999
+  min-lr: 1e-4
+  weight-decay: 0.0001
+  lr-warmup-iters: 500
+  clip-grad: 1.0
+  eval-interval: 1000
+  eval-iters: 0
+  seed: 42
+    # - optimizer-cpu-offload
+    # - use-precision-aware-optimizer
+  __FROZEN__OPTIMIZER_ARGS:  # pure torch specific
+    optimizer_params:
+      lr: ${TRAINING_ARGS.lr}
+      betas:
+      - ${TRAINING_ARGS.adam-beta1}
+      - ${TRAINING_ARGS.adam-beta2}
+      weight_decay: ${TRAINING_ARGS.weight-decay}
+      eps: 0.00000001
+  __FROZEN__LR_SCHEDULER_ARGS:  # pure torch specific
+    lr_scheduler_params:
+      num_warmup_steps: ${TRAINING_ARGS.lr-warmup-iters}
+      num_training_steps: ${TRAINING_ARGS.train-iters}
+      min_lr: ${TRAINING_ARGS.min-lr}
+
+  image-loss-weight: 1.0
+  audio-loss-weight: 1.0
+  moe-aux-loss-coeff: 0.01
+  enabled:
+    - moe-aux-loss
+
+PERFORMANCE_ARGS:
+  manual-gc-interval: 5
+  recompute-granularity: full
+  enabled:
+    - manual-gc
+    - use-flash-attn
+    # - moe-enable-deepep
+    - enable-experimental
+    # - moe-permute-fusion
+    # - moe-router-fusion
+    # - moe-shared-expert-overlap
+    - overlap-grad-reduce
+    - overlap-param-gather
+
+
+MODEL_PARALLEL_ARGS:
+  tensor-model-parallel-size: 1
+  pipeline-model-parallel-size: 1
+  expert-model-parallel-size: 16
+  context-parallel-size: 1
+  enabled:
+    - use-distributed-optimizer
+    # - tp-comm-overlap
+    # - sequence-parallel
+
+
+CHECKPOINT_ARGS:
+  ckpt-format: torch_dist
+  dist-ckpt-strictness: log_all
+  save-interval: 1_000
+  save: ${__GLOBAL_VARS__.OUTPUT_PATH}/ckpt
+  enabled:
+    - resume
+    - use-dist-ckpt
+#    - no-load-optim
+#    - no-load-rng
+#    - finetune
+    - ckpt-fully-parallel-load
+    - ckpt-fully-parallel-save
+
+
+LOGGING_ARGS:
+  log-interval: 1
+  tensorboard-dir: ${__GLOBAL_VARS__.OUTPUT_PATH}/events
+  saved-training-batch-dir: ${__GLOBAL_VARS__.OUTPUT_PATH}/saved_training_data
+  save-n-training-data: 0
+  enabled:
+    - log-timers-to-tensorboard
+    - log-memory-to-tensorboard
+    - log-num-zeros-in-grad
+    - log-params-norm
+    - log-validation-ppl-to-tensorboard
+    - log-throughput

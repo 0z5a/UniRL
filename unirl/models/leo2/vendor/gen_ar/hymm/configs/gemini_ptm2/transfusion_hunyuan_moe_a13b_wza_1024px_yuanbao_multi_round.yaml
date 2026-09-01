@@ -1,0 +1,734 @@
+# IMPORTANT NOTE: Write PTM args in YAML format:
+# 0. all arguments specified here are one-one correspondences with PTM arguments; un-specified arguments use PTM default values.
+# 1. arguments like '--hidden-size=2560' are written as 'hidden-size: 2560' (see below, note the space after colon).
+# 2. YAML format is like a tree, and only the leaf nodes are considered as arguments.
+#    Non-leaf nodes and structures are ignored, so arguments can be grouped as you like.
+# 3. arguments like '--sequence-parallel' can be written as 'enabled: \n  - sequence-parallel' (see below, note the indent).
+#    multiple `enabled` arguments in a same sub-tree must be put in a `enabled` list (see below for an example).
+
+__GLOBAL_VARS__:
+  _DEFAULT_OUTPUT_PATH: ""
+  DATA_PATH: "/root/dummy_data"
+  OUTPUT_PATH: ${oc.env:OUTPUT_PATH,${__GLOBAL_VARS__._DEFAULT_OUTPUT_PATH}}
+
+MODEL_ARGS:
+  model-name: multimodal.hunyuan-moe-a13b-gemini
+  model-structure: HunyuanMultimodal
+
+  # Mcore required.
+  num-layers: 32
+  hidden-size: 4096
+  num-attention-heads: 32
+  ffn-hidden-size: 3072
+  kv-channels: 128
+  max-position-embeddings: 65536
+  seq-length: ${MODEL_ARGS.max-position-embeddings}
+  vocab-size: 133120
+  normalization: RMSNorm
+  num-query-groups: 8
+  num-experts: 64
+  init-method-std: 0.012757759
+  moe-router-topk: 8
+  moe-ffn-hidden-size: 3072
+  moe-shared-expert-intermediate-size: 3072
+  #moe-layer-freq: '([0]+[1]*1)'
+  moe-layer-freq: '([1]*32)'
+  moe-router-load-balancing-type: aux_loss
+  moe-token-dispatcher-type: flex
+  moe-router-dtype: fp32
+  attention-dropout: 0.0
+  hidden-dropout: 0.0
+
+  init-device: meta  # [cpu, cuda, meta] pure torch specific
+  autocast-dtype: bf16  # pure torch specific
+  enabled:
+    # common
+    - bf16
+    # mcore
+    - qk-layernorm
+    - group-query-attention
+    - swiglu
+    - use-mcore-models
+    - moe-grouped-gemm
+    - use-hunyuan-arch
+    - disable-bias-linear
+      # torch
+    # - split-qkv
+    # - split-gate-and-up
+
+  patch-size: 1
+  rope-type-extended: "2d"
+  # moe-impl: ep_moe
+  moe-impl: flashinfer
+  # moe-impl: deepseek
+  cond-image-type: vae_vit
+  cond-token-attn-type: joint_full
+
+
+EXTRA_MODEL_ARGS:
+  enabled:
+    - use-vae
+    - use-vit
+    - vit-frozen
+  vae-type: 16x16x4-32c-hy-image
+  vae-latent-dim: 32
+  vae-precision: fp32
+  vae-autocast-dtype: fp16
+  vit-type: siglip2-so400m-patch16-naflex
+
+
+DENOISE_ARGS:
+  denoise-type: flow
+  flow-path-type: linear
+  flow-predict-type: velocity
+  flow-snr-type: lognorm
+  flow-reverse: True
+  flow-shift: 3.0
+
+
+DATA_ARGS:
+  tokenizer-type: NullTokenizer
+  dataloader-type: external
+
+  # extra args provider
+  tokenizer-name: hunyuan-dense-7b-tokenizer-refactor
+  tokenizer-class: tokenizer_wrapper.TokenizerWrapper
+  shuffle-by: dataset
+  fast-shuffle: True
+  use-numpy-indices: True
+  add-timestep-token: True
+  add-image-shape-token: True
+  use-front-boi-token: True
+  use-front-src-image: True
+  use-joint-image-feature: True
+  sequence-template: instruct
+  combined-iterator-sampling-mode: fixed
+  cos-base:
+    - "/cos_nj1/share_302243067 -> /apdcephfs_wza/milesjyang/{bucket}"
+    - "/cos_zw1/share_303793872 -> /apdcephfs_wza/milesjyang/{bucket}"
+    - "/apdcephfs_zwfy/share_303937731 -> /apdcephfs_wza/share_303937731"
+  cos-file-is-encrypted: True
+  enable-resample: True
+  ignore-start-tokens: ["<think>"]
+
+  # vae
+  vae-image-token-length: 4096
+  # -- resolution group kwargs
+  reso-base-size: 1024
+  reso-align: 16
+  # reso-preset: sdxl
+  reso-mode: sdxl+
+  reso-aspect-ratios: ["3:4", "9:16", "4:3", "16:9"] # w:h
+  # vit
+  vit-image-token-length: 1024
+
+  modality: [ text, vae_image, vit_image ]
+  # sampling-probs: '{"t2i": 0.4, "lm": 0.2, "mmu_caption": 0.2, "mmu": 0.2}'
+  # sampling-probs: '{"interleave": 1.0}'
+  # sampling-probs: '{"t2i_1": 0.02, "t2i_2": 0.02, "t2i_2_cot": 0.03, "t2i_ocr": 0.02, "lm_recaption": 0.03, "lm_instruct_4": 0.04, "interleave_cot_1": 0.38, "interleave_cot_2": 0.38, "interleave_t2i": 0.08}'
+  sampling-probs: '{"t2i_1": 0.1, "t2i_2": 0.12, "t2i_2_cot": 0.152, "t2i_ocr": 0.008, "lm_recaption": 0.1, "lm_instruct_4": 0.1, "interleave_cot_1": 0.2, "interleave_cot_2": 0.2, "interleave_t2i": 0.02}'
+
+  # Dataloader
+  num-workers: 4
+  prefetch-factor: 2
+
+
+__FROZEN__DATA_ARGS:
+  t2i_1_task_kwargs:
+    # required
+    batch_size: 4
+    modality: [ vae_image ]
+    
+    attn_type: flex
+    shuffle_seed: 1111
+    # image caption
+    uncond_p: 0.1
+    patcher_names: []
+    instruct_type: none  # some instruction like "please generate an image"
+
+    max_token_length: 6144  # 1280 + 768 user input + 4096 image
+    system_prompt_token_length: 1280
+    system_prompt_type: en_unified
+    prompt_token_length: 768
+    recaption_token_length: 0
+    reasoning_token_length: 0
+    cot_kwargs:
+      recaption_cot_prob: 0.0
+      recaption_cot: none
+      reasoning_cot_prob: 0.0
+    predict_prompt: False
+    image_caption_resource:
+      - caption_v3_2_ip:
+          caption_v3_2_ip_src: '{"caption_v3_2_ip_en_col": 0.5, "caption_v3_2_ip_zh_col": 0.5}'
+          caption_v3_2_ip_caption_processor: caption_process_v3
+          caption_v3_2_ip_caption_sample_ratio: '{"long_long_caption":0.3,"long_caption":0.35,"medium_caption":0.25,"short_caption":0.1,"background":0.1,"style":0.7,"shot_type":0.1}'
+          caption_v3_2_ip_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3_2_ocr:
+          caption_v3_2_ocr_src: '{"caption_v3_2_ocr_en_col": 0.5, "caption_v3_2_ocr_zh_col": 0.5}'
+          caption_v3_2_ocr_caption_processor: caption_process_v3
+          caption_v3_2_ocr_caption_sample_ratio: '{"long_long_caption":0.99,"long_caption":0.01,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_2_ocr_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3_2:
+          caption_v3_2_src: '{"caption_v3_2_en_col": 0.5, "caption_v3_2_zh_col": 0.5}'
+          caption_v3_2_caption_processor: caption_process_v3
+          caption_v3_2_caption_sample_ratio: '{"long_long_caption":0.5,"long_caption":0.2,"medium_caption":0.2,"short_caption":0.1,"background":0.4,"style":0.5,"shot_type":0.5,"light":0.5,"atmosphere":0.5,"motion":0.5,"composition":0.5,"IP":0.5}'
+          caption_v3_2_extra_processor: [ 'filter_shot', 'inject_style_v2']
+      - caption_v3_1:
+          caption_v3_1_src: '{"caption_v3_1_en_col": 0.5, "caption_v3_1_zh_col": 0.5}'
+          caption_v3_1_caption_processor: caption_process_v3
+          caption_v3_1_caption_sample_ratio: '{"long_long_caption":0.455,"long_caption":0.195,"medium_caption":0.1,"short_caption":0.25,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_1_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3:
+          caption_v3_src: '{"caption_v3_en_col": 0.5, "caption_v3_zh_col": 0.5}'
+          caption_v3_caption_processor: caption_process_v3
+          caption_v3_caption_sample_ratio: '{"long_long_caption":0.455,"long_caption":0.195,"medium_caption":0.1,"short_caption":0.25,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+  t2i_1_index_kwargs:
+    index_file:
+      # - /apdcephfs_zwfy/share_303937731/charlesxyli/data/txt2img_all_in_1/portrait_control-20250730/portarit_aes_0821/json/human_aes_12w-multireso.json             #   125,938  x 3
+      - /apdcephfs_wza/share_303937731/genshinyuan/datasets/jsons/aesthetic-high-quality-0824-filter_min_dover-85_multireso_1024.json                              #    56119 * 2
+      - /apdcephfs_wza/share_303937731/genshinyuan/datasets/jsons/human_top2k_0821_multireso_1024.json                                                             #     1440 * 5
+      - /apdcephfs_wza/share_303937731/genshinyuan/datasets/jsons_fixed/real_aes_5614_bran_pengyu_0829_url_cos_0918_multireso_1024.json                            #     5614  * 10
+      # - /apdcephfs_wza/share_303937731/genshinyuan/datasets/jsons/base_sft2_flux_0901_multireso_1024.json                                                          #     1038  * 2
+      # - /apdcephfs_wza/share_303937731/genshinyuan/datasets/jsons/high_quality_badcase_from_12w_0806_multireso_1024.json                                           #       369 * 2
+      # - /apdcephfs_wza/share_303937731/genshinyuan/datasets/jsons/doubao_2048_8k_0821_multireso_1024.json                                                          #     3559  * 1
+      # - /apdcephfs_wza/share_303937731/genshinyuan/datasets/jsons/wsft_aigc_finetune_merge_0729_refix_0806_filter_0901_multireso_1024.json                         #     4350  * 1
+      # - /apdcephfs_wza/share_303937731/genshinyuan/datasets/jsons/doubao3_0_style_prompt_0722_cn_sorted_fix_0806_filter_0901_multireso_1024.json                   #    24643  * 0.1
+      # - /apdcephfs_wza/share_303937731/genshinyuan/datasets/jsons/tencent_mj_tasks_demand_style_prompt_0722_en_sorted_batch1_0808_filter_0901_multireso_1024.json  #     4746  * 1
+      # - /apdcephfs_wza/share_303937731/genshinyuan/datasets/jsons/text_filter_0901_multireso_1024.json                                                             #     7118  * 3
+      # - /apdcephfs_wza/share_303937731/genshinyuan/datasets/jsons/text_ui_aigc_9w_0901_multireso_1024.json                                                         #     7589  * 3
+      - /apdcephfs_wza/branzkjiang/sft_data/image_artist_choice_gemini_caption_cleaned_multireso_1k.json                                                                   #    11923  * 2
+      # - /apdcephfs_zwfy/share_303937731/genshinyuan/datasets/jsons/hand_drawing_anime_943_multireso_1024.json                                                       #       943  x 3
+      # - /apdcephfs_zwfy/share_303937731/genshinyuan/datasets/jsons/painting_1581_multireso_1024.json                                                                #     1,581  x 7
+      # - /apdcephfs_zwfy/share_303937731/genshinyuan/datasets/jsons/photo-cars_677_multireso_1024.json                                                               #       677  x 1
+      # - /apdcephfs_zwfy/share_303937731/genshinyuan/datasets/jsons/poster_736_multireso_1024.json                                                                   #       734  x 3
+      # - /apdcephfs_zwfy/share_303937731/genshinyuan/datasets/jsons/cartoon_movie_1545_multireso_1024.json                                                           #     1,545  x 3
+      # - /apdcephfs_zwfy/share_303937731/genshinyuan/datasets/jsons/game_design_484_multireso_1024.json                                                              #       484  x 1
+      # - /apdcephfs_zwfy/share_303937731/genshinyuan/datasets/jsons/ocr_515_multireso_1024.json                                                                      #       487  x 3
+      # - /apdcephfs_zwfy/share_303937731/genshinyuan/datasets/jsons/photo_2871_multireso_1024.json                                                                   #     2,871  x 4
+      # - /apdcephfs_zwfy/share_303937731/genshinyuan/datasets/jsons/photo-food_1185_multireso_1024.json                                                              #     1,185  x 1
+    multireso: True
+    ceph_base_inv: '{"zwfy_3039": "/apdcephfs_wza/share_303937731", "wza": "/apdcephfs_wza/share_303937731", "zwfy": "/apdcephfs_wza/share_303793872", "wza_bran": "/apdcephfs_wza/branzkjiang"}'
+    verbose: 1
+    index_columns:
+      image_col: cache_image
+      caption_v3_2_ocr_en_col: caption_v3_2_ocr_en
+      caption_v3_2_ocr_zh_col: caption_v3_2_ocr_zh
+      caption_v3_2_en_col: caption_v3_2_en
+      caption_v3_2_zh_col: caption_v3_2_zh
+      caption_v3_1_en_col: caption_v3_1_en
+      caption_v3_1_zh_col: caption_v3_1_zh
+      caption_v3_en_col: caption_v3_en
+      caption_v3_zh_col: caption_v3_zh
+      caption_v3_2_ip_en_col: caption_v3_2_ip_en
+      caption_v3_2_ip_zh_col: caption_v3_2_ip_zh
+      style_v2_col: style_v2
+      url_cos_col: url_cos
+    index_strategy: probability
+    index_probability: [2, 5, 10, 5]
+
+
+  t2i_2_task_kwargs:
+    # required
+    batch_size: 4
+    modality: [ vae_image ]
+    
+    attn_type: flex
+    shuffle_seed: 2222
+    # image caption
+    uncond_p: 0.1
+    instruct_type: none  # some instruction like "please generate an image"
+
+    max_token_length: 6656  # 1280 + 512 user input + 768 recaption + 4096 image
+    system_prompt_token_length: 1280
+    system_prompt_type: en_unified
+    prompt_token_length: 512
+    recaption_token_length: 768
+    reasoning_token_length: 0
+    cot_kwargs:
+      recaption_cot_prob: 1.0
+      recaption_cot: 'short_caption@0.4/medium_caption@0.4/long_caption@0.2 | long_caption@0.000001/long_long_caption@0.999999'
+      reasoning_cot_prob: 0.0
+    predict_prompt: False
+    patcher_names: [ 'image_ratio@0.3' ]
+    image_caption_resource:
+      - caption_v3_2:
+          caption_v3_2_src: '{"caption_v3_2_en_col": 0.5, "caption_v3_2_zh_col": 0.5}'
+          caption_v3_2_caption_processor: caption_process_v3
+          caption_v3_2_caption_sample_ratio: '{"long_caption":0.5,"short_caption":0.5}'
+          caption_v3_2_extra_processor: []
+      - caption_v3_1:
+          caption_v3_1_src: '{"caption_v3_1_en_col": 0.5, "caption_v3_1_zh_col": 0.5}'
+          caption_v3_1_caption_processor: caption_process_v3
+          caption_v3_1_caption_sample_ratio: '{"long_caption":0.5,"short_caption":0.5}'
+          caption_v3_1_extra_processor: []
+      - caption_v3:
+          caption_v3_src: '{"caption_v3_en_col": 0.5, "caption_v3_zh_col": 0.5}'
+          caption_v3_caption_processor: caption_process_v3
+          caption_v3_caption_sample_ratio: '{"long_caption":0.5,"short_caption":0.5}'
+          caption_v3_extra_processor: []
+  t2i_2_index_kwargs:
+    index_file:
+      - /apdcephfs_wza/share_303937731/genshinyuan/datasets/jsons/human_aes_12w_0918_multireso_1024.json                                                           #    19994  * 3
+      - /apdcephfs_wza/share_303937731/genshinyuan/datasets/jsons/aesthetic-high-quality-0824-filter_min_dover-85_0918_multireso_1024.json                         #    56119  * 2
+      - /apdcephfs_wza/share_303937731/genshinyuan/datasets/jsons/human_top2k_0918_multireso_1024.json                                                             #     1440  * 5
+      - /apdcephfs_wza/share_303937731/genshinyuan/datasets/jsons_fixed/real_aes_5614_bran_pengyu_0829_url_cos_0918_multireso_1024.json                            #     5614  * 10
+      # - /apdcephfs_wza/share_303937731/genshinyuan/datasets/jsons/wsft_aigc_finetune_merge_0729_refix_0806_filter_0918_multireso_1024.json                         #     4350  * 1
+      # - /apdcephfs_wza/share_303937731/genshinyuan/datasets/jsons/doubao3_0_style_prompt_0722_cn_sorted_fix_0806_filter_0918_multireso_1024.json                   #    23619  * 0.1
+      # - /apdcephfs_wza/share_303937731/genshinyuan/datasets/jsons/tencent_mj_tasks_demand_style_prompt_0722_en_sorted_batch1_0808_filter_0918_multireso_1024.json  #     4746  * 1
+      - /apdcephfs_wza/share_303937731/genshinyuan/datasets/jsons_fixed/aesthetic_11234_gemini_caption_0918_multireso_1024.json                                    #    10237  * 1
+      - /apdcephfs_wza/share_303937731/genshinyuan/datasets/jsons/hand_drawing_anime_943_0918_multireso_1024.json                                                  #       943  * 3
+      - /apdcephfs_wza/share_303937731/genshinyuan/datasets/jsons/painting_1581_0918_multireso_1024.json                                                           #     1581  * 7
+      - /apdcephfs_wza/share_303937731/genshinyuan/datasets/jsons/photo-cars_677_0918_multireso_1024.json                                                          #       677  * 1
+      - /apdcephfs_wza/share_303937731/genshinyuan/datasets/jsons/poster_736_0918_multireso_1024.json                                                              #       734  * 3
+      - /apdcephfs_wza/share_303937731/genshinyuan/datasets/jsons/cartoon_movie_1545_0918_multireso_1024.json                                                      #     1545  * 3
+      - /apdcephfs_wza/share_303937731/genshinyuan/datasets/jsons/photo_2871_0918_multireso_1024.json                                                              #     2871  * 5
+      - /apdcephfs_wza/share_303937731/genshinyuan/datasets/jsons/photo-food_1185_0918_multireso_1024.json                                                         #     1185  * 1
+    multireso: True
+    ceph_base_inv: '{"zwfy_3039": "/apdcephfs_wza/share_303937731", "wza": "/apdcephfs_wza/share_303937731"}'
+    verbose: 1
+    index_columns:
+      image_col: cache_image
+      caption_v3_2_en_col: caption_v3_2_en
+      caption_v3_2_zh_col: caption_v3_2_zh
+      caption_v3_1_en_col: caption_v3_1_en
+      caption_v3_1_zh_col: caption_v3_1_zh
+      caption_v3_en_col: caption_v3_en
+      caption_v3_zh_col: caption_v3_zh
+      style_v2_col: style_v2
+      url_cos_col: url_cos
+    index_strategy: probability
+    index_probability: [3, 2, 5, 10, 1, 3, 7, 1, 3, 3, 5, 1]
+
+  t2i_2_cot_task_kwargs:
+    # required
+    batch_size: 3
+    modality: [ vae_image ]
+    
+    attn_type: flex
+    shuffle_seed: 3333
+    # image caption
+    uncond_p: 0.1
+    instruct_type: none  # some instruction like "please generate an image"
+
+    max_token_length: 7680  # 1280 + 512 user input + 1024 think + 768 recaption + 4096 image
+    system_prompt_token_length: 1280
+    system_prompt_type: en_unified
+    prompt_token_length: 512
+    recaption_token_length: 768
+    reasoning_token_length: 1024
+    cot_kwargs:
+      recaption_cot_prob: 1.0
+      recaption_cot: 'short_caption@1.0 | long_caption@1.0'
+      reasoning_cot_prob: 1.0
+    predict_prompt: False
+    patcher_names: [ 'image_ratio@0.3' ]
+    image_caption_resource:
+      - caption_v3_2:
+          caption_v3_2_src: '{"caption_v3_2_en_col": 0.5, "caption_v3_2_zh_col": 0.5}'
+          caption_v3_2_caption_processor: caption_process_v3
+          caption_v3_2_caption_sample_ratio: '{"long_long_caption":0.99,"long_caption":0.001,"medium_caption":0.003,"short_caption":0.006,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_2_caption_processor_kwargs: '{"force_use_style_tag":true}'
+          caption_v3_2_extra_processor:  [ 'filter_shot', 'inject_style_v2' ]
+  t2i_2_cot_index_kwargs:
+    index_file:
+      # - /apdcephfs_wza/share_303944931/branzkjiang/data/cot_1014/csv_files_fixed/filtered_0920_mid表文字数据_v3_251_t2ti_sft_think_multireso_1k.json # 227 * 10
+      # - /apdcephfs_wza/share_303944931/branzkjiang/data/cot_1014/csv_files_fixed/filtered_0920_UI蒸馏_3847_v3_3780_t2ti_sft_think_multireso_1k.json # 3773 * 10
+      # - /apdcephfs_wza/share_303944931/branzkjiang/data/cot_1014/csv_files_fixed/filtered_0920_采买艺术字_2399_v3_27497_t2ti_sft_think_multireso_1k.json # 23290
+      - /apdcephfs_wza/share_303944931/branzkjiang/data/cot_1014/csv_files_fixed/filtered_0920_采买艺术字海报_3527_v3_86687_t2ti_sft_think_multireso_1k.json # 83014
+      - /apdcephfs_wza/share_303944931/branzkjiang/data/cot_1014/csv_files_fixed/filtered_aesthetic_11234_gemini_caption_t2ti_sft_think_v2_multireso_1k.json # 10422
+      - /apdcephfs_wza/share_303944931/branzkjiang/data/cot_1014/csv_files_fixed/filtered_aesthetic-high-quality-0824-filter_min_dover-85_56119_t2ti_sft_think_multireso_1k.json # 55424 * 2
+      - /apdcephfs_wza/share_303944931/branzkjiang/data/cot_1014/csv_files_fixed/filtered_aesthetic-real_5614_0807_from_dong_t2ti_sft_think_multireso_1k.json # 5606
+      # - /apdcephfs_wza/share_303944931/branzkjiang/data/cot_1014/csv_files_fixed/filtered_base_sft2_flux_0901_1038_t2ti_sft_think_multireso_1k.json # 1007 * 2
+      # - /apdcephfs_wza/share_303944931/branzkjiang/data/cot_1014/csv_files_fixed/filtered_doubao3_0_style_prompt_0722_cn_sorted_fix_0806_filter_0901_24643_t2ti_sft_think_multireso_1k.json # 24153 * 0.1
+      # - /apdcephfs_wza/share_303944931/branzkjiang/data/cot_1014/csv_files_fixed/filtered_high_quality_badcase_from_12w_0806_369_t2ti_sft_think_multireso_1k.json # 360
+      # - /apdcephfs_wza/share_303944931/branzkjiang/data/cot_1014/csv_files_fixed/filtered_human_top2k_0821_1440_t2ti_sft_think_multireso_1k.json # 1431
+      - /apdcephfs_wza/share_303944931/branzkjiang/data/cot_1014/csv_files_fixed/filtered_image_info_00-精筛_gemini_en_zh_t2ti_sft_think_v2_multireso_1k.json # 7634 * 5
+      # - /apdcephfs_wza/share_303944931/branzkjiang/data/cot_1014/csv_files_fixed/filtered_tencent_mj_tasks_demand_style_prompt_0722_en_sorted_batch1_0808_filter_0901_4746_t2ti_sft_think_multireso_1k.json # 4724
+      # - /apdcephfs_wza/share_303944931/branzkjiang/data/cot_1014/csv_files_fixed/filtered_text_ui_aigc_9w_0901_7589_t2ti_sft_think_multireso_1k.json # 7427 
+      # - /apdcephfs_wza/share_303944931/branzkjiang/data/cot_1014/csv_files_fixed/filtered_wsft_aigc_finetune_merge_0729_refix_0806_filter_0901_4350_t2ti_sft_think_multireso_1k.json # 4133 * 1
+      - /apdcephfs_wza/share_303944931/harriswen/data/sft/t2i_cot/idk/251024_human_aes_12w_cot/multireso.json # 19865 * 1
+      - /apdcephfs_wza/share_303944931/harriswen/data/sft/t2i_cot/idk/251024_hand_drawing_anime_943_cot/multireso.json # 935 * 3
+      - /apdcephfs_wza/share_303944931/harriswen/data/sft/t2i_cot/idk/251024_painting_1581_cot/multireso.json # 1543 * 7
+      - /apdcephfs_wza/share_303944931/harriswen/data/sft/t2i_cot/idk/251024_photo-cars_677_cot/multireso.json # 672 * 1
+      - /apdcephfs_wza/share_303944931/harriswen/data/sft/t2i_cot/idk/251024_poster_736_cot/multireso.json # 722 * 3
+      - /apdcephfs_wza/share_303944931/harriswen/data/sft/t2i_cot/idk/251024_cartoon_movie_1545_cot/multireso.json # 1534 * 3
+      - /apdcephfs_wza/share_303944931/harriswen/data/sft/t2i_cot/idk/251024_photo_2871_cot/multireso.json # 2863 * 5
+      - /apdcephfs_wza/share_303944931/harriswen/data/sft/t2i_cot/idk/251024_photo-food_1185_cot/multireso.json # 1179 * 1
+    multireso: True
+    ceph_base_inv: '{"wza": "/apdcephfs_wza/share_303944931", "zwfy2": "/apdcephfs_wza/share_303944931"}'
+    verbose: 1
+    index_columns:
+      image_col: cache_image
+      caption_v3_2_en_col: caption_instruct_en
+      caption_v3_2_zh_col: caption_instruct_zh
+      think_en_col: think_en
+      think_zh_col: think_zh
+      style_v2_col: style_v2
+      url_cos_col: url_cos
+    index_strategy: probability
+    index_probability: [1, 2, 1, 2, 5, 1, 5, 3, 5, 5, 5, 5, 5]
+
+
+  t2i_ocr_task_kwargs:
+    # required
+    batch_size: 1
+    modality: [ vae_image ]
+    
+    attn_type: flex
+    shuffle_seed: 4444
+    # image caption
+    uncond_p: 0.1
+    instruct_type: none  # some instruction like "please generate an image"
+
+    max_token_length: 6656  # 1280 + 512 user input + 768 recaption + 4096 image
+    system_prompt_token_length: 1280
+    system_prompt_type: en_unified
+    prompt_token_length: 512
+    recaption_token_length: 768
+    reasoning_token_length: 0
+    cot_kwargs:
+      recaption_cot_prob: 1.0
+      recaption_cot: 'medium_caption@0.7/long_caption@0.3 | long_caption@0.000001/long_long_caption@0.999999'
+      reasoning_cot_prob: 0.0
+    predict_prompt: False
+    patcher_names: [ 'image_ratio@0.3' ]
+    image_caption_resource:
+      - caption_ocr:
+          caption_ocr_src: '{"caption_ocr_en_col": 0.5, "caption_ocr_zh_col": 0.5}'
+          caption_ocr_caption_processor: caption_process_v3
+          caption_ocr_caption_sample_ratio: '{"long_long_caption":0.99,"long_caption":0.001,"medium_caption":0.003,"short_caption":0.006,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_ocr_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3_2_ocr:
+          caption_v3_2_ocr_src: '{"caption_v3_2_ocr_en_col": 0.5, "caption_v3_2_ocr_zh_col": 0.5}'
+          caption_v3_2_ocr_caption_processor: caption_process_v3
+          caption_v3_2_ocr_caption_sample_ratio: '{"long_long_caption":0.99,"long_caption":0.001,"medium_caption":0.003,"short_caption":0.006,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_2_ocr_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3_2:
+          caption_v3_2_src: '{"caption_v3_2_en_col": 0.5, "caption_v3_2_zh_col": 0.5}'
+          caption_v3_2_caption_processor: caption_process_v3
+          caption_v3_2_caption_sample_ratio: '{"long_long_caption":0.455,"long_caption":0.195,"medium_caption":0.1,"short_caption":0.25,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_2_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v32:
+          caption_v32_src: '{"caption_v32_en_col": 0.5, "caption_v32_zh_col": 0.5}'
+          caption_v32_caption_processor: caption_process_v3
+          caption_v32_caption_sample_ratio: '{"long_long_caption":0.455,"long_caption":0.195,"medium_caption":0.1,"short_caption":0.25,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v32_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+  t2i_ocr_index_kwargs:
+    index_file:
+      # - /apdcephfs_wza/share_303944931/branzkjiang/data/ocr_clean_1016/csv_files_fixed/glyph-20250806-wsft-zwfy_multireso_1k.json # 24871 
+      - /apdcephfs_wza/share_303944931/branzkjiang/data/ocr_clean_1016/csv_files_fixed/mid表logo数据_v3_3518_multireso_1k.json # 647 
+      - /apdcephfs_wza/share_303944931/branzkjiang/data/ocr_clean_1016/csv_files_fixed/mid表文字数据_v3_4265_multireso_1k.json # 1412 
+      # - /apdcephfs_wza/share_303944931/branzkjiang/data/ocr_clean_1016/csv_files_fixed/text_ui_aigc_9w_0901_multireso_1k.json # 3165 
+      # - /apdcephfs_wza/share_303944931/branzkjiang/data/ocr_clean_1016/csv_files_fixed/UI蒸馏_3847_v3_3780_multireso_1k.json # 1731 
+      # - /apdcephfs_wza/share_303944931/branzkjiang/data/ocr_clean_1016/csv_files_fixed/采买艺术字_2399_v3_27497_multireso_1k.json # 18955 
+      - /apdcephfs_wza/share_303944931/branzkjiang/data/ocr_clean_1016/csv_files_fixed/采买艺术字海报_3527_v3_86687_multireso_1k.json # 15269
+    multireso: True
+    ceph_base_inv: '{"zwfy_3039": "/apdcephfs_wza/share_303937731", "zwfy": "/apdcephfs_wza/share_303937731", "wza": "/apdcephfs_wza/share_303944931"}'
+    verbose: 1
+    index_columns:
+      image_col: cache_image
+      caption_ocr_en_col: caption_ocr_en
+      caption_ocr_zh_col: caption_ocr_zh
+      caption_v3_2_ocr_en_col: caption_v3_2_ocr_en
+      caption_v3_2_ocr_zh_col: caption_v3_2_ocr_zh
+      caption_v3_2_en_col: caption_v3_2_en
+      caption_v3_2_zh_col: caption_v3_2_zh
+      caption_v32_en_col: caption_v32_en
+      caption_v32_zh_col: caption_v32_zh
+      style_v2_col: style_v2
+      url_cos_col: url_cos
+
+
+  lm_recaption_task_kwargs:
+    # required
+    batch_size: 6
+    modality: [ text, vae_image ]   # Add vae_image for prerunning vae
+    max_token_length: 3584 # 1280 + 256 user input + 1024 think + 1024 recaption
+    input_max_token_length: 256  # cond text max length, user input
+    attn_type: flex
+    shuffle_seed: 5555
+    # task specific
+    data_format: conversation  # [pure_text, conversation]
+    pre_extract_tokens: False  # [True, False]
+    # system prompt
+    system_prompt_token_length: 1280  # lm data may contain system prompt
+    system_prompt_type: en_unified
+  lm_recaption_index_kwargs:
+    index_file:
+      - /apdcephfs_wza/share_303944931/lucasxwang/data/gemini/sft/llm1015/fanbin_recap0820/formatted_base.json # 213373  fanbin
+      - /apdcephfs_wza/share_303944931/lucasxwang/data/gemini/sft/llm1015/fanbin_recap0907/formatted_base.json # 36456   fanbin
+      - /apdcephfs_wza/share_303944931/lucasxwang/data/gemini/sft/llm1015/stem_distill/formatted_base.json # 15w
+    ceph_base_inv: '{"wza": "/apdcephfs_wza"}'
+    index_columns:
+      # text_col: tokens  # [text, tokens]
+      conversation_col: conversations  # only needed when data_format is conversation
+    verbose: 1
+    index_strategy: probability
+    index_probability: [0.5, 0.5, 1]
+
+
+  lm_instruct_4_task_kwargs:
+    # required
+    batch_size: 2
+    modality: [ text, vae_image ]   # Add vae_image for prerunning vae
+    max_token_length: 9472 # 1280 + 8192
+    input_max_token_length: 4096  # cond text max length, user input
+    attn_type: flex
+    shuffle_seed: 6666
+    # task specific
+    data_format: conversation  # [pure_text, conversation]
+    pre_extract_tokens: False  # [True, False]
+    # system prompt
+    system_prompt_token_length: 1280  # lm data may contain system prompt
+    system_prompt_type: en_unified
+  lm_instruct_4_index_kwargs:
+    index_file:
+      - /apdcephfs_wza/share_303944931/lucasxwang/data/llm/sft/hunyuan-llm/guanghuixu/exp_data/zerobase/release_data/20251111/train_fast_1114_fixed.json # 1372458 * 1
+      - /apdcephfs_wza/share_303944931/lucasxwang/data/llm/sft/hunyuan-llm/guanghuixu/exp_data/zerobase/release_data/20251111/train_think_1114_fixed.json # 648303 * 1
+    ceph_base_inv: '{"zwfy2": "/apdcephfs_wza/share_303944931"}'
+    index_columns:
+      # text_col: tokens  # [text, tokens]
+      conversation_col: conversations  # only needed when data_format is conversation
+    verbose: 1
+
+
+  # mmu_recaption_task_kwargs:
+  #   # required
+  #   batch_size: 3
+  #   modality: [ vae_image, vit_image, text ]
+  #   max_token_length: 7680  # 4096 vae + 1024 vision encoder + 512 input + 2048 output
+  #   input_max_token_length: 512  # cond text max length
+  #   attn_type: flex
+  #   shuffle_seed: 4444
+  #   # task specific
+  #   data_format: message  # [message, captioning]
+  #   # system prompt
+  #   system_prompt_token_length: 1280
+  #   system_prompt_type: en_unified
+  # mmu_recaption_index_kwargs:
+  #   index_file:
+  #     - /apdcephfs_wza/0_public_datasets/R1_Onevision/data.json
+  #   ceph_base_inv: '{"wza": "/apdcephfs_wza"}'
+  #   verbose: 2
+  #   index_columns:
+  #     message_col: messages
+  #   index_keys:
+  #     image_key: cache_image
+  #     url_cos_key: url_cos
+
+  # mmu_task_kwargs:
+  #   # required
+  #   batch_size: 3
+  #   modality: [ vae_image, vit_image, text ]
+  #   max_token_length: 7680  # 4096 vae + 1024 vision encoder + 512 input + 2048 output
+  #   input_max_token_length: 512  # cond text max length
+  #   attn_type: flex
+  #   shuffle_seed: 4444
+  #   # task specific
+  #   data_format: message  # [message, captioning]
+  #   # system prompt
+  #   system_prompt_token_length: 1280
+  #   system_prompt_type: en_unified
+  # mmu_index_kwargs:
+  #   index_file:
+  #     - /apdcephfs_wza/share_303937731/1_public_models/hymm_ar_assets/dataset/mmu_index/mmu_in_house_batch3_single.json # 4715618
+  #     - /apdcephfs_wza/share_303937731/1_public_models/hymm_ar_assets/dataset/mmu_index/mmu_in_house_batch2_ocr.json # 10000000 * 0.4
+  #   ceph_base_inv: '{"nj10": "/apdcephfs_wza/share_303937731", "zwfy": "/apdcephfs_wza/share_303937731", "zwfy2": "/apdcephfs_wza/share_303937731"}'
+  #   verbose: 2
+  #   index_columns:
+  #     message_col: messages
+  #   index_keys:
+  #     image_key: cache_image
+  #     url_cos_key: url_cos
+  #   index_strategy: probability
+  #   index_probability: [1.0, 0.4]
+
+  interleave_cot_1_task_kwargs:
+    # required
+    batch_size: 1
+    modality: [ vae_image, vit_image, text ]
+    max_token_length: 18176 # 1280 + 10240 + 2560 + 4096
+    input_max_token_length: 512  # cond text max length
+    attn_type: flex
+    shuffle_seed: 7777
+    uncond_p: 0.1
+    # system prompt
+    system_prompt_token_length: 1280
+    system_prompt_type: en_unified
+    interleave_only_last_round: True
+  interleave_cot_1_index_kwargs:
+    index_file:
+      - /apdcephfs_wza/0_public_datasets/multi_round_edit/yuanbao/gemini/t_i_0_0_insert_t2t/base_train.json
+    ceph_base_inv: '{"nj10": "/apdcephfs_wza/share_303937731", "zwfy": "/apdcephfs_wza/share_303937731"}'
+    verbose: 2
+    index_columns:
+      message_col: messages
+    index_keys:
+      image_key: cache_image
+      url_cos_key: url_cos
+
+
+  interleave_cot_2_task_kwargs:
+    # required
+    batch_size: 2
+    modality: [ vae_image, vit_image, text ]
+    max_token_length: 9472 # 1280 + 4096 + 4096
+    input_max_token_length: 1024  # cond text max length
+    attn_type: flex
+    shuffle_seed: 8888
+    uncond_p: 0.1
+    # system prompt
+    system_prompt_token_length: 1280
+    system_prompt_type: en_unified
+    interleave_only_last_round: True
+  interleave_cot_2_index_kwargs:
+    index_file:
+      # all_text_max_length 2115
+      - /apdcephfs_wza/0_public_datasets/multi_round_edit/yuanbao/gemini/t_i_tn_1/base_train.json
+      # all_text_max_length 3360
+      - /apdcephfs_wza/0_public_datasets/multi_round_edit/yuanbao/gemini/t_i_tn_1_prompt_tuning/base_train.json
+    ceph_base_inv: '{"nj10": "/apdcephfs_wza/share_303937731", "zwfy": "/apdcephfs_wza/share_303937731"}'
+    verbose: 2
+    index_columns:
+      message_col: messages
+    index_keys:
+      image_key: cache_image
+      url_cos_key: url_cos
+
+
+  interleave_t2i_task_kwargs:
+    # required
+    batch_size: 2
+    modality: [ vae_image, vit_image, text ]
+    max_token_length: 6144 # 1280 + 768 + 4096
+    input_max_token_length: 768  # cond text max length
+    attn_type: flex
+    shuffle_seed: 9999
+    uncond_p: 0.05
+    # system prompt
+    system_prompt_token_length: 1280
+    system_prompt_type: en_unified
+  interleave_t2i_index_kwargs:
+    index_file:
+      - /apdcephfs_wza/0_public_datasets/multi_round_edit/yuanbao/gemini/comic/base_train.json # 19,663
+      - /apdcephfs_wza/0_public_datasets/multi_round_edit/yuanbao/gemini/stickers/base_train.json # 22,357
+    ceph_base_inv: '{"nj10": "/apdcephfs_wza/share_303937731", "zwfy": "/apdcephfs_wza/share_303937731"}'
+    verbose: 2
+    index_columns:
+      message_col: messages
+    index_keys:
+      image_key: cache_image
+      url_cos_key: url_cos
+
+
+TRAINING_ARGS:
+  micro-batch-size: 1
+  gradient-accumulation-steps: 64
+  global-batch-size: ${mul:${div:${mul:${oc.env:HOST_GPU_NUM}, ${oc.env:HOST_NUM}}, ${mul:${mul:${MODEL_PARALLEL_ARGS.tensor-model-parallel-size}, ${MODEL_PARALLEL_ARGS.pipeline-model-parallel-size}}, ${MODEL_PARALLEL_ARGS.context-parallel-size}}}, ${mul:${TRAINING_ARGS.gradient-accumulation-steps}, ${TRAINING_ARGS.micro-batch-size}}} # GLOBAL_BATCH_SIZE = HOST_GPU_NUM * HOST_NUM / (TP_SIZE*PP_SIZE*CP_SIZE) * GRADIENT_ACCUMULATION_STEPS * MICRO_BATCH_SIZE
+  dp-shard: 8 # torch
+  lr: 1e-6
+  train-iters: 100_000_000
+  lr-decay-iters: 100_000_000
+  lr-decay-style: cosine
+  optimizer: adam
+  adam-beta1: 0.9
+  adam-beta2: 0.95
+  adam-eps: 0.000001  # ptm2对应的是adam-eps参数（默认值1e-8） torch对应的是eps参数
+  min-lr: 1e-6
+  weight-decay: 0.1
+  lr-warmup-iters: 0
+  clip-grad: 1.0
+  eval-interval: 1000
+  eval-iters: 0
+  seed: 1234
+    # - optimizer-cpu-offload
+    # - use-precision-aware-optimizer
+  __FROZEN__OPTIMIZER_ARGS:  # pure torch specific
+    optimizer_params:
+      lr: ${TRAINING_ARGS.lr}
+      betas:
+      - ${TRAINING_ARGS.adam-beta1}
+      - ${TRAINING_ARGS.adam-beta2}
+      weight_decay: ${TRAINING_ARGS.weight-decay}
+      eps: ${TRAINING_ARGS.adam-eps}
+  __FROZEN__LR_SCHEDULER_ARGS:  # pure torch specific
+    lr_scheduler_params:
+      num_warmup_steps: ${TRAINING_ARGS.lr-warmup-iters}
+      num_training_steps: ${TRAINING_ARGS.train-iters}
+      min_lr: ${TRAINING_ARGS.min-lr}
+
+  # loss related
+  image-loss-weight: 5.0
+  moe-aux-loss-coeff: 0.04 # 0.005 * 8 = 0.04
+  enabled:
+    - moe-aux-loss
+    # - init-save  # pure torch specific
+
+
+PERFORMANCE_ARGS:
+  manual-gc-interval: 5
+  recompute-granularity: full
+  recompute-method: uniform  # gradient checkpointing
+  recompute-num-layers: 1  # gradient checkpointing
+  enabled:
+    - manual-gc
+    - use-flash-attn
+    - moe-enable-deepep
+    - enable-experimental
+    - moe-permute-fusion
+    - moe-router-fusion
+    # - moe-shared-expert-overlap
+    - overlap-grad-reduce
+    - overlap-param-gather
+
+
+MODEL_PARALLEL_ARGS:
+  tensor-model-parallel-size: 1
+  pipeline-model-parallel-size: 4
+  pipeline-model-parallel-layout: Et*7|t*9|t*9|t*7L # 32layer
+  expert-model-parallel-size: 8
+  context-parallel-size: 1
+  enabled:
+    - use-distributed-optimizer
+    # - tp-comm-overlap
+    # - sequence-parallel
+
+
+CHECKPOINT_ARGS:
+  ckpt-format: torch_dist
+  dist-ckpt-strictness: log_all
+  save-interval: 25
+  save: ${__GLOBAL_VARS__.OUTPUT_PATH}/ckpt
+  # load: /apdcephfs_wza/2_public_experiments/log_EXP_gemini_beta/ckczzjzhang/ptm2/7b_moe_editing_sft_20251114_v23_4/hf
+  # load: /apdcephfs_wza/lucazzliu/exp/202601/20260119/Gemini_1.7_launch4/DM10Inv1_1c1t6p10_295v3EMT23v21ab2g3d_mulTWonly_type4_wKL_c2.5r1_f4_L1s50_dadv2_style2_lr2e-6_ref0.25_X2/log_EXP/0001_hunyuan_moe_7b_a13b_vocab_expanded_20260119_13_n16_DM10Inv1_1c1t6p10_295v3EMT23v21ab2g3d_mulTWonly_type4_wKL_c2.5r1_f4_L1s50_dadv2_style2/checkpoints/0000025/hf
+  load: /apdcephfs_wza/2_public_experiments/log_EXP_gemini_beta/ckczzjzhang/ptm2/reda0119/converted_ptm2_ckpt
+  ckpt-step: 1
+
+  # key-mapping: moe_a13b_ptm2_to_fsdp2
+  generation-config: ${oc.env:ASSETS_BASE}/pretrained_llm/HunyuanImage3-MultiRound/generation_config.json
+  enabled:
+    - fuse-experts-in-load
+    - resume        # if ${save} exists, execute the resume mode: load ckpt from ${save} first. if ${save} does not exist, load from ${load}.
+    - use-dist-ckpt
+    - no-load-optim # does not work in resume mode
+    - no-save-rng   # don't save rng to avoid affecting the random settings of the data
+    - finetune      # does not work in resume mode, but first run can reset iteration
+    - ckpt-fully-parallel-load
+    - ckpt-fully-parallel-save
+    # - swap-gate-and-up
+    # - load-remove-prefix
+
+LOGGING_ARGS:
+  log-interval: 1
+  tensorboard-dir: ${__GLOBAL_VARS__.OUTPUT_PATH}/events
+  saved-training-batch-dir: ${__GLOBAL_VARS__.OUTPUT_PATH}/saved_training_data
+  save-n-training-data: 0
+  enabled:
+    - log-timers-to-tensorboard
+    - log-memory-to-tensorboard
+    - log-num-zeros-in-grad
+    - log-params-norm
+    - log-validation-ppl-to-tensorboard
+    - log-throughput
+

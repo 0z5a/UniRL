@@ -1,0 +1,355 @@
+__GLOBAL_VARS__:
+  _DEFAULT_OUTPUT_PATH: ""
+  DATA_PATH: "/root/dummy_data"
+  OUTPUT_PATH: ${oc.env:OUTPUT_PATH,${__GLOBAL_VARS__._DEFAULT_OUTPUT_PATH}}
+
+MODEL_ARGS:
+  model-name: diffusion.leo-2-moe-v1-1-pack-noTR
+  model-structure: LeoModelHF
+  text-branch-model-name: diffusion.leo-2-moe-v1-1-pack-txt-branch
+  audio-branch-model-name: diffusion.leo-2-moe-v1-1-pack-audio-branch
+
+  init-device: meta  # [cpu, cuda, meta] pure torch specific
+  autocast-dtype: bf16  # pure torch specific
+  enabled:
+    - bf16
+    - main-params-fp32
+    # - fsdp-cast-forward-inputs
+    - rope-no-space
+  noise-dtype: fp32
+
+  patch-size: 1
+  seq-length: 148096 # 15s -> 91*40*40 + 2048 + 373 = 148021, pad up to a multiple of 2*CP(=8)
+  attn-impl: flash3_packed
+  #attn-impl: flash
+  rope-type-extended: 3d
+  rope-audio-rescale-factor: 0.24
+  moe-impl: ep_moe
+  img-latent-in-channels: 97  # 2 * 48 + 1
+  cond-image-type: vae
+  cond-token-attn-type: full
+  cond-video-type: none
+  cond-video-token-attn-type: none
+
+
+EXTRA_MODEL_ARGS:
+  enabled:
+    - use-vae
+    - use-vae-decoder
+    - use-audio-vae
+    - use-text-encoder
+#    - use-repa
+
+  vae-type: 16x16x4-48c-hy-v3
+  vae-latent-dim: 48
+  vae-precision: fp32
+  vae-autocast-dtype: fp16
+  vae-encode-type: mode
+
+  audio-vae-type: dual_channel_48k
+  audio-vae-latent-dim: 96
+  __FROZEN__AUDIO_VAE_ARGS:
+    audio_branch_audio_vae_latent_dim: ${EXTRA_MODEL_ARGS.audio-vae-latent-dim}
+
+  text-encoder-type: qwen-3.5-9b
+  __FROZEN__TEXT_ENCODER_ARGS:
+    text_encoder_text_len: 1024
+    text_encoder_precision: bf16
+    text_encoder_hidden_state_skip_layer: 2
+    text_encoder_uncond_token: "<|cfg|>"
+    text_encoder_use_fsdp: True
+    text_encoder_use_pack: True
+
+#  repa-encoder-type: qwen-3.5-9b
+#  repa-encoder-precision: bf16
+#  repa-loss-weight: 0.05
+
+
+DENOISE_ARGS:
+  denoise-type: flow
+  flow-path-type: linear
+  flow-predict-type: velocity
+  flow-snr-type: lognorm
+  flow-reverse: True
+  flow-shift: 1.0
+  flow-shift-video: 9.0
+  diff-infer-steps: 50
+  flow-shift-audio: 1.0
+  diff-guidance-scale: 6.0
+
+
+DATA_ARGS:
+  tokenizer-type: NullTokenizer
+  dataloader-type: external
+  tokenizer-name: qwen-3.5-9b
+  tokenizer-class: tokenization_qwen_multimodal.Qwen3TokenizerFast
+  conv-template: qwen-vl-v2-li-dit
+  sequence-template: pretrain
+  uncond-length: equal
+
+  # extra args provider
+  shuffle-by: dataset
+  combined-iterator-sampling-mode: fixed
+  cos-base:
+    - "/apdcephfs_wza2/share_304227829/hunyuan_data/{stem2}/ -> /cos_wzd1/share_305640887/"
+    - "/cos_nj1/share_302243067/ -> /cos_wzd1/share_305640887/"
+    - "/apdcephfs_wzd2/share_305640887/hy_dp/ -> /cos_wzd1/share_305640887/"
+  video-cos-base: "/cos_wzd1/share_305640887"
+  audio-cos-base: ${DATA_ARGS.video-cos-base}
+  enabled:
+    - enable-resample
+    - drop-resampled-samples
+    - fast-shuffle
+    - first-epoch-no-shuffle
+    - use-numpy-indices
+    - extend-latent-channels
+    - independent-seq-length
+    - use-input-ids
+
+  # vae
+  vae-image-token-length: 640
+  vae-video-token-length: 145600
+  vae-audio-token-length: 1000
+  # -- resolution group kwargs
+  reso-base-size: 640
+  reso-align: 16
+  reso-preset: zigzag
+  duration-range: [49, 361]
+  duration-step: 4
+  additional-durations: []   # for image, not used
+  # -- audio
+  audio-channels: 2
+  audio-sample-rate: 48000
+
+
+  modality: [ vae_image, vae_video, vae_audio ]
+  gen-template: multi_stream_dit
+  # sampling-probs: '{"t2i": 1.0, "t2i_ocr": 1.0}'
+  #sampling-probs: '{"t2i": 0.029, "t2i_ocr": 0.029, "t2va_single": 0.1, "t2va_multi": 0.55, "i2va_single": 0.05, "i2va_multi": 0.05, "fl2va_single": 0.05, "fl2va_multi": 0.05, "t2a_multi_slice_tts": 0.2}'
+  sampling-probs: '{"t2vi2v": 1.0}'
+
+  # Dataloader
+  num-workers: 8
+  prefetch-factor: 8
+
+
+__FROZEN__DATA_ARGS:
+  prompt_column:
+    prompt_en_recap_v2_ylv1: 0.65
+    prompt_cn_recap_v2_ylv1: 0.35
+  t2vi2v_task_kwargs:
+    # required
+    batch_size: 1
+    #modality: [ vae_video, vae_audio ]
+    modality: [ vae_video ]
+    max_token_length: 148021
+    attn_type: flash
+    shuffle_seed: 1111
+    latent_channel_extend_type: t2v
+    # dit specific
+    extra_num_tokens: 0
+    crop_start: 108
+    # sp
+    system_prompt_type: li-dit-encode-visual-qwen-3.5
+    system_prompt_token_length: 111
+    # video caption
+    uncond_p: 0.1
+    prompt_token_length: 2048
+    patcher_names: []
+    # eval config
+    bot_task: av
+    image_size: 480x848
+    num_frames: 121
+    video_fps: 24 
+    flow_shift_video: 9.0
+    diff_infer_steps: 50 
+    diff_guidance_scale: 6.0
+    ref_mode: channel
+    eval_script: 'python3 /apdcephfs_nj8/share_301739632/jodai/hunyuan_text2video_data_preprocess/video/video_autoeval_qsave_v2.py --input {video_dir} --output {out_csv_path} --label auto --overwrite'
+
+  t2vi2v_index_kwargs:
+    testsets:
+      # - /apdcephfs_zwfy8/share_303937731/hunyuan/public_service/testdata/lanqing_sample_20260622_t2v.csv
+      # - /apdcephfs_zwfy2/share_303937731/hunyuan/smurfsguo/dev/Leo2.1/hunyuan_multimodal_gen_ar/data/test_video/后训练筛选测试集_single_captions300_5s_15s_t2va_子集.csv
+      # - /apdcephfs_zwfy2/share_303937731/hunyuan/smurfsguo/dev/Leo2.1/hunyuan_multimodal_gen_ar/data/test_video/后训练筛选测试集_ssae_t2va_子集.csv
+      - /apdcephfs_zwfy/share_303793872/dylanruili/project/hunyuan_multimodal_gen_ar/data/test_video/后训练筛选测试集_ssae_t2va_子集.csv
+      # - /apdcephfs_zwfy2/share_303937731/hunyuan/smurfsguo/dev/Leo2.1/hunyuan_multimodal_gen_ar/data/test_video/后训练筛选测试集_single_captions300_5s_15s_t2va_子集.csv
+      # - /apdcephfs_zwfy2/share_303937731/hunyuan/smurfsguo/dev/Leo2.1/hunyuan_multimodal_gen_ar/data/test_video/后训练筛选测试集_single_captions300_5s_15s_i2va_子集.csv
+      # - /apdcephfs_zwfy2/share_303937731/hunyuan/smurfsguo/dev/Leo2.1/hunyuan_multimodal_gen_ar/data/test_video/后训练筛选测试集_multi_captions300_5s_15s_t2va_子集.csv
+    trainsets:
+      - data/GRPO_train/t2v/t2v_semantic_1060_0211.csv
+      - data/GRPO_train/t2v/t2v_motion_500.csv
+
+  data_type: video
+    
+  # video_size: [480, 868]
+  video_micro_batch_size: [1]
+  video_bucket_hw_base_size: 640
+
+TRAINING_ARGS:
+  micro-batch-size: 1
+  gradient-accumulation-steps: 4
+  global-batch-size: ${mul:${div:${mul:${oc.env:HOST_GPU_NUM}, ${oc.env:HOST_NUM}}, ${mul:${mul:${MODEL_PARALLEL_ARGS.tensor-model-parallel-size}, ${MODEL_PARALLEL_ARGS.pipeline-model-parallel-size}}, ${MODEL_PARALLEL_ARGS.context-parallel-size}}}, ${mul:${TRAINING_ARGS.gradient-accumulation-steps}, ${TRAINING_ARGS.micro-batch-size}}} # GLOBAL_BATCH_SIZE = HOST_GPU_NUM * HOST_NUM / (TP_SIZE*PP_SIZE*CP_SIZE) * GRADIENT_ACCUMULATION_STEPS * MICRO_BATCH_SIZE
+  lr: 1e-5
+  min-lr: 1e-5
+  train-iters: 100000000
+  lr-decay-style: constant
+  lr-warmup-iters: 0
+  optimizer: muon
+  momentum: 0.95
+  adam-beta1: 0.9
+  adam-beta2: 0.999
+  weight-decay: 0.01
+  clip-grad: 1.0
+  val-interval: 500
+  seed: 42
+  recompute-granularity: full
+    # - optimizer-cpu-offload
+  # - use-precision-aware-optimizer
+
+  __FROZEN__TRAINING_ARGS:  # pure torch with refl specific
+    _debug_fast_init: false
+    sample_interval: 50
+    checkpointing_steps: 20
+    max_epochs: 100
+    global_seed: 930
+
+  __FROZEN__OPTIMIZER_ARGS:  # pure torch specific
+    optimizer_params:
+      lr: ${TRAINING_ARGS.lr}
+      betas:
+        - ${TRAINING_ARGS.adam-beta1}
+        - ${TRAINING_ARGS.adam-beta2}
+      weight_decay: ${TRAINING_ARGS.weight-decay}
+      momentum: ${TRAINING_ARGS.momentum}
+      adamw_eps: 0.00000001 # adam eps 1e-8
+    special_adamw_params: ["*embed_tokens*", "*lm_head*", "*final_layer*", "*time_embed*", "*timestep_emb*", "*patch_embed*", "*embedding*"]
+
+  __FROZEN__LR_SCHEDULER_ARGS:  # pure torch specific
+    lr_scheduler_params:
+      num_warmup_steps: ${TRAINING_ARGS.lr-warmup-iters}
+      num_training_steps: ${TRAINING_ARGS.train-iters}
+      min_lr: ${TRAINING_ARGS.min-lr}
+
+__FROZEN__POST_TRANING_ARGS:
+  post_train_type: refl
+  train_video_csv: 
+    - data/GRPO_train/t2v/t2v_motion_500.csv
+    - data/GRPO_train/t2v/t2v_semantic_1060_0211.csv
+
+  mini_batch_size_per_update: 1
+  mini_batch_size_per_rollout: 1
+
+  reward_config:
+    fps: 8
+    use_lrm: false
+    reward_model: qwen_rm
+    model_config: /apdcephfs_zwfy/share_303793872/dylanruili/project/HYVideoReWard/reward_model/qwen-vl-finetune/qwenvl/configs/hyvideo/qwen3_8b_bt_multi_all_multi_layer.yaml
+    reward_th: 10.0
+    # ---- Per-dimension reward normalization (z-score) ----
+    use_reward_norm: false
+    use_reward_ema: false
+    reward_ema_decay: 0.99
+    reward_ema_warmup_steps: 0
+    reward_norm_eps: 0.000001
+    reward_mean:
+      VQ: 0.0
+      MQ: 0.0
+      TA: 0.0
+      ID: 0.0
+    reward_std:
+      VQ: 1.0
+      MQ: 1.0
+      TA: 1.0
+      ID: 1.0
+    sub_reward:
+      VQ: 0.0
+      MQ: 1.0
+      TA: 1.0
+      ID: 0.0
+    # params:  # for altclip_rm / lrm reward models, unused with qwen_rm
+    #     model_path: ...
+    #     pretrained_model_name_or_path: ...
+    #     processor_cache_dir: ...
+    #     resize_res: 512
+
+  # rollout / 采样
+  num_generations: 1
+  refl_sampling_steps: 30
+  eta: 0.5
+  rollout_cfg_scale: 6.0
+  post_train_sampler: repeat_random
+  use_same_noise: false
+  sde_type: flow_grpo
+  refl_timestep_t1: 12
+  refl_timestep_t2: 14
+  infer_flow_shift_video: 7.0  # for rollout TODO 9.0 ?
+
+  # KL / ref model
+  kl_weight: 0.0
+  reference_model_offload: true
+
+  # offload
+  text_encoder_offload: true
+
+PERFORMANCE_ARGS:
+  manual-gc-interval: 5
+  recompute-granularity: full
+  enabled:
+    - manual-gc
+    - use-flash-attn
+    # - moe-enable-deepep
+    - enable-experimental
+    # - moe-permute-fusion
+    # - moe-router-fusion
+    # - moe-shared-expert-overlap
+    - overlap-grad-reduce
+    - overlap-param-gather
+    - optimizer-offloading
+
+
+MODEL_PARALLEL_ARGS:
+  tensor-model-parallel-size: 1
+  pipeline-model-parallel-size: 1
+  expert-model-parallel-size: 1
+  context-parallel-size: 8
+  fsdp-impl: new
+  activation-offloading: False
+  dp-shard: 32
+  enabled:
+    - use-distributed-optimizer
+    # - tp-comm-overlap
+    # - sequence-parallel
+
+
+CHECKPOINT_ARGS:
+  ckpt-format: torch_dist
+  dist-ckpt-strictness: log_all
+  save-interval: 500
+  save: ${__GLOBAL_VARS__.OUTPUT_PATH}/ckpt
+#  load: /apdcephfs_wzd2/share_305640887/nj10/hunyuan/jarvizhang/basic_train_jarvizhang_20260509224103_ae711a27/95a8ce269e02770a019e0d2fa28b0436/ckpt.torch/iter_0032000
+  enabled:
+    - resume
+    - use-dist-ckpt
+    #    - no-load-optim
+    #    - no-load-rng
+    #    - finetune
+    - ckpt-fully-parallel-load
+    - ckpt-fully-parallel-save
+
+
+LOGGING_ARGS:
+  log-interval: 1
+  tensorboard-dir: ${__GLOBAL_VARS__.OUTPUT_PATH}/events
+  wandb-project: Leo2.1_RL
+  wandb-exp-name: ReFL_moe_a12b_480p_t2v_step30_t12_t14_121f_qwen_rm_wcfg
+  wandb-dir: ${__GLOBAL_VARS__.OUTPUT_PATH}/wandb
+  saved-training-batch-dir: ${__GLOBAL_VARS__.OUTPUT_PATH}/saved_training_data
+  save-n-training-data: 16
+  enabled:
+    - log-timers-to-tensorboard
+    - log-memory-to-tensorboard
+    - log-num-zeros-in-grad
+    - log-params-norm
+    - log-validation-ppl-to-tensorboard
+    - log-throughput

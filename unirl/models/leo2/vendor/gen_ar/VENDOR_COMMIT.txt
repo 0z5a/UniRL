@@ -1,0 +1,37 @@
+source      = text2video/hunyuan_multimoda_gen_ar (https://git.woa.com/text2video/hunyuan_multimoda_gen_ar.git)
+branch      = dev_video
+commit      = 5573b656c28adcbb673f4018c84a47f50eda0954
+short       = 5573b65
+commit_date = 2026-08-31
+vendored    = 2026-09-01 (into unirl/models/leo2/vendor/gen_ar/)
+
+The vendored runtime contains the upstream hymm/ and processors/ source trees,
+plus the two inference-time submodules below. Model weights, generation
+configuration, tokenizer/VAE assets, datasets, tests, jobs, and .git metadata
+are intentionally external to this package.
+
+Submodules pinned by the upstream commit:
+  deps/hy_parallelism = a2fb81523b4c35563d7129ff47e5a0955f77d204
+  deps/IndexKits      = d83299da6b0efdd87c4e0387d603e5f3721210ce
+
+Dependency snapshot provenance:
+  deps/IndexKits was exported exactly from d83299da6b0efdd87c4e0387d603e5f3721210ce.
+  deps/hy_parallelism was copied from the flattened source tree at
+  https://git.woa.com/bowenping/gen-ar.git commit
+  e6b8b5934ce2e57d0ea4abbff8b8d1179fdc49c3; its package version is 1.1.12.
+  The original a2fb815 gitlink repository was unavailable during vendoring, so
+  that SHA could not be independently verified. Replace this snapshot when the
+  pinned repository becomes available.
+
+Not vendored: deps/AngelPTM and deps/VLMEvalKit. They are not imported by the
+Leo2 inference bootstrap.
+
+Local integration:
+  - unirl.models.leo2.bundle inserts this directory and the two dependency
+    roots into sys.path, preserving hymm's upstream absolute imports.
+  - unirl.models.leo2.config resolves the default hymm root and Leo2 YAML from
+    this tree. User-supplied paths continue to override those defaults.
+
+To re-vendor: export the source commit and IndexKits commit above, obtain the
+hy_parallelism gitlink source (or document its replacement), replace this tree
+without .git metadata, then update this file and rerun the Leo2 bootstrap smoke.

@@ -1,0 +1,1354 @@
+training_config:
+  trainer_name: multimodal_gemini_beta_trainer.MultiModalGeminiBetaTrainer
+  micro_batch_size: 4
+  gradient_accumulation_steps: 1
+  global_batch_size: null
+  global_seed: 999999
+  zero_stage: 2
+  log_every: 1
+  tensorboard: True
+  gradient_checkpoint: False
+  gradient_checkpoint_layers: -1
+  use_compile: False
+  launcher: torch
+
+  overlap_comm: True
+  reduce_bucket_size: 5e7
+
+  max_training_steps: 1_000_000
+  ckpt_every: 50
+
+  init_save: False
+  final_save: True
+
+  resume: null
+  resume_dataloader: False
+  no_load_optim_states: False
+  no_load_ema: False
+  default_rank0_ss: False
+  fix_lr_scheduler: False
+
+  validation_at_steps: []
+  validation_every: -1
+  validation_metrics: []
+  validation_metrics_save_image: False
+
+sampling_config:
+  ckpt: null
+  load_key: module
+  metric_image_size: 1024
+  metric_batch_size: 8
+  evaluation_metrics: [fid@coco30k, clip_score@coco30k, hpsv2@coco30k, t2i_compbench]
+  rerank: 1
+  sample_image_size: 1024
+  sample_batch_size: 8
+  seed_type: auto
+  seed: 123456
+  guidance_scale: 3.5
+  diff_infer_steps: 50
+  sample_flow_shift: 3.0
+  sample_use_flux_shift: False
+  do_sample: True
+
+  logits_processors_cfg:
+    - TemperatureLogitsWarper:
+        temperature: 0.6
+    - TopKLogitsWarper:
+        top_k: 1024
+    - TopPLogitsWarper:
+        top_p: 0.95
+
+model_config:
+  model_name: hunyuan-moe-7b-a13b-vocab-expanded
+  model_structure: MultiModalTransfusion
+  tokenizer_name: hunyuan-dense-7b-tokenizer-refactor
+  load_prepend_key: 'language_model.'    # Enable to load from pretrained ckpt of Transfusion structure
+  pretrained_ckpt: hunyuan-moe-7b-a13b-vocab-expanded
+  precision: bf16
+  autocast_dtype: bf16
+  media_vocab_size: 0
+
+  denoise_type: flow
+  flow_path_type: linear
+  flow_predict_type: velocity
+  flow_loss_weight: null
+  flow_train_eps: null
+  flow_sample_eps: null
+  flow_snr_type: lognorm
+  flow_reverse: True
+  flow_shift: 3.0
+  use_flux_shift: False
+  flux_base_shift: null
+  flux_max_shift: null
+
+  model_kwargs:
+    block_size: 22752
+    rope_type: 2d   # updated
+    vision_encoder_max_num_patches: 1024  # add
+    vision_model:
+      vision_model_type: siglip2-so400m-patch16-naflex  # updated
+      vision_model_precision: fp32
+      vision_model_autocast_dtype: fp32
+      vision_model_freeze: False
+    vision_aligner:
+      vision_aligner_type: mlp_gelu
+      vision_aligner_precision: fp32
+      vision_aligner_autocast_dtype: fp32
+      vision_aligner_freeze: False
+      vision_aligner_params:
+        vision_aligner_depth: 2
+        vision_aligner_input_dim: 1152   # Align to vision_model_type's hidden_dim, updated
+        vision_aligner_n_embed: 4096     # Align to model_name's n_embd
+
+  image_loss_weight: 5.0
+
+  img_proj_type: unet
+  patch_embed_hidden_dim: 1024
+  patch_size: 1
+  unet_out_norm: True
+  image_preln: True
+  use_final_time_embed: True
+
+extra_model_config:
+  vae_type: 16x16x4-32c-hy-image
+  vae_precision: fp32
+  vae_autocast_dtype: fp16
+  vae_latent_dim: 32
+
+optimizer_config:
+  optimizer_name: AdamW
+  gradient_clipping: 1.0
+  optimizer_params:
+    lr: 0.00001
+    betas: [0.9, 0.95]
+    eps: 0.000001
+    weight_decay: 0.01
+
+lr_scheduler_config:
+  lr_schedule: WarmupCosineLR
+  lr_scheduler_params:
+    warmup_num_steps: 500
+    cos_min_ratio: 1.0
+    total_num_steps: 1_000_000
+
+dataloader_config:
+  # Common
+  get_image_retry: 0
+  shuffle_by: dataset
+  fast_shuffle: True
+  use_numpy_indices: True  # updated, for loading large-scale dataset
+  add_iw_ih_token: False
+  add_timestep_token: True
+  add_image_shape_token: True
+  use_front_boi_token: True
+  use_front_src_image: True
+  use_joint_image_feature: True
+  sequence_template: instruct
+  combined_iterator_sampling_mode: fixed
+  cos_base:
+    - "/cos_nj1/share_302243067 -> /apdcephfs_wza/milesjyang/{bucket}"
+    - "/cos_zw1/share_303793872 -> /apdcephfs_wza/milesjyang/{bucket}"
+    - "/apdcephfs_zwfy/share_303937731 -> /apdcephfs_wza/share_303937731"
+  cos_file_is_encrypted: True
+  enable_resample: True
+  sampling_probs: '{"t2i": 0.133, "t2i_cot": 0.05, "t2i_ocr_check": 0.01, "t2i_ocr_except": 0.04, "mmu": 0.05, "mmu_caption": 0.05, "lm_instruct": 0.05, "lm_recaption": 0.02, "pair_person_cot_2": 0.1, "pair_inpainting": 0.03, "pair_controlnet_2": 0.02, "pair_controlnet_cot": 0.01, "pair_editing_3": 0.2, "pair_editing_3_cot": 0.2, "pair_multiref_2": 0.013, "pair_multiref_2_cot": 0.013, "pair_editing_game": 0.005, "pair_editing_game_cot": 0.005, "pair_3_ref_cot": 0.001}'
+
+  # Text-to-Image
+  t2i_batch_size: 3
+  t2i_task_kwargs:
+    training_image_size: 1024 # only used when multireso is False
+    image_token_length: 4096
+    text_token_length: 768
+    text_reason_token_length: 0
+    text_cot_token_length: 1280
+    # user input prompt_max_length = text_cot_token_length - text_token_length - text_reason_token_length
+    # text_cot_token_length should be >= text_token_length + text_reason_token_length
+    system_prompt_token_length: 1280
+    system_prompt_candidates_type: mix_up@1.0
+    use_unified_system_prompt: True
+    ignore_text_ntp: True
+    attn_type: flex
+    shuffle_seed: 22222
+    uncond_p: 0.1
+    try_first_use_source_text: False    # Must be False
+    image_caption_rate: 1.0   # 使用 caption 的比例
+    instruction_candidates_type: mix_up@0.05
+    caption_cot: 'short_caption@0.4/medium_caption@0.4/long_caption@0.2 | long_caption@0.000001/long_long_caption@0.999999'
+    caption_cot_prob: 0.7
+    reasoning_cot_prob: 0.0
+    # vanilla prob = 1. - caption_cot_prob
+    # recaption w.o. think prob = caption_cot_prob * (1. - reasoning_cot_prob)
+    # repcaiton w. think prob = caption_cot_prob * reasoning_cot_prob
+    # system prompt prob is applied independently and equally to these 3 cases
+    patcher_names: [ 'image_ratio@0.3' ]
+    image_caption_col_probs:
+      - caption_v3_2_ip:
+          caption_v3_2_ip_src: '{"image_caption_v3_2_ip_en_col": 0.5, "image_caption_v3_2_ip_zh_col": 0.5}'
+          caption_v3_2_ip_caption_processor: caption_process_v3
+          caption_v3_2_ip_caption_sample_ratio: '{"long_long_caption":0.455,"long_caption":0.195,"medium_caption":0.1,"short_caption":0.25,"background":0.1,"style":0.7,"shot_type":0.1}'
+          caption_v3_2_ip_caption_processor_kwargs: '{"force_use_style_tag":true}'
+          caption_v3_2_ip_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3_2_ocr:
+          caption_v3_2_ocr_src: '{"image_caption_v3_2_ocr_en_col": 0.5, "image_caption_v3_2_ocr_zh_col": 0.5}'
+          caption_v3_2_ocr_caption_processor: caption_process_v3
+          caption_v3_2_ocr_caption_sample_ratio: '{"long_long_caption":0.99,"long_caption":0.001,"medium_caption":0.003,"short_caption":0.006,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_2_ocr_caption_processor_kwargs: '{"force_use_style_tag":true}'
+          caption_v3_2_ocr_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3_2:
+          caption_v3_2_src: '{"image_caption_v3_2_en_col": 0.5, "image_caption_v3_2_zh_col": 0.5}'
+          caption_v3_2_caption_processor: caption_process_v3
+          caption_v3_2_caption_sample_ratio: '{"long_long_caption":0.455,"long_caption":0.195,"medium_caption":0.1,"short_caption":0.25,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_2_caption_processor_kwargs: '{"force_use_style_tag":true}'
+          caption_v3_2_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3_1:
+          caption_v3_1_src: '{"image_caption_v3_1_en_col": 0.5, "image_caption_v3_1_zh_col": 0.5}'
+          caption_v3_1_caption_processor: caption_process_v3
+          caption_v3_1_caption_sample_ratio: '{"long_long_caption":0.455,"long_caption":0.195,"medium_caption":0.1,"short_caption":0.25,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_1_caption_processor_kwargs: '{"force_use_style_tag":true}'
+          caption_v3_1_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3:
+          caption_v3_src: '{"image_caption_v3_en_col": 0.5, "image_caption_v3_zh_col": 0.5}'
+          caption_v3_caption_processor: caption_process_v3
+          caption_v3_caption_sample_ratio: '{"long_long_caption":0.455,"long_caption":0.195,"medium_caption":0.1,"short_caption":0.25,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_caption_processor_kwargs: '{"force_use_style_tag":true}'
+          caption_v3_extra_processor: [ 'fix_style', 'filter_shot', 'inject_style_v2' ]
+  t2i_index_kwargs:
+    index_file:
+      # 1M for test
+      # - /apdcephfs_nj8/share_301739632/1_public_models/hymm_ar_assets/dataset/t2i_index/gemini_json/mb256_cap_v3/mb512_p4_v3_1m_demo.json
+      # actually used
+      - /apdcephfs_wza/share_303937731/1_public_models/hymm_ar_assets/dataset/t2i_index/gemini_json/mb1024_cap_v3/mb1024_stage5_zw_noocr.json  # 1883w
+      - /apdcephfs_wza/share_303937731/1_public_models/hymm_ar_assets/dataset/t2i_index/gemini_json/mb1024_cap_v3/mb1024_ip.json  # 127w
+      - /apdcephfs_wza/share_303937731/1_public_models/hymm_ar_assets/dataset/t2i_index/gemini_json/mb1024_cap_v3/mb1024_style_batch1_2.json  # 54w
+      - /apdcephfs_wza/share_303937731/1_public_models/hymm_ar_assets/dataset/t2i_index/gemini_json/mb1024_cap_v3/mb1024_ct_uniform_distribution_zw.json  # 561w
+    multireso: True
+    ceph_base_inv: '{"nj10": "/apdcephfs_wza/share_303937731", "zwfy": "/apdcephfs_wza/share_303937731"}'  # updated
+    image_col: cache_image
+    image_caption_v3_2_ocr_en_col: caption_v3_2_ocr_en  # updated
+    image_caption_v3_2_ocr_zh_col: caption_v3_2_ocr_zh  # updated
+    image_caption_v3_2_en_col: caption_v3_2_en  # updated
+    image_caption_v3_2_zh_col: caption_v3_2_zh  # updated
+    image_caption_v3_1_en_col: caption_v3_1_en  # updated
+    image_caption_v3_1_zh_col: caption_v3_1_zh  # updated
+    image_caption_v3_en_col: caption_v3_en  # updated
+    image_caption_v3_zh_col: caption_v3_zh  # updated
+    image_caption_v3_2_ip_en_col: caption_v3_2_ip_en  # updated
+    image_caption_v3_2_ip_zh_col: caption_v3_2_ip_zh  # updated
+    extra_style_v2_col: style_v2
+    extra_url_cos_col: url_cos
+
+
+  # Text-to-Image
+  t2i_cot_batch_size: 2
+  t2i_cot_task_kwargs:
+    t2i_cot_training_image_size: 1024 # only used when multireso is False
+    t2i_cot_image_token_length: 4096
+    t2i_cot_text_token_length: 768
+    t2i_cot_text_reason_token_length: 1024
+    t2i_cot_text_cot_token_length: 2304
+    # user input prompt_max_length = text_cot_token_length - text_token_length - text_reason_token_length
+    # text_cot_token_length should be >= text_token_length + text_reason_token_length
+    t2i_cot_system_prompt_token_length: 1280
+    t2i_cot_system_prompt_candidates_type: mix_up@1.0
+    t2i_cot_use_unified_system_prompt: True
+    t2i_cot_ignore_text_ntp: True
+    t2i_cot_attn_type: flex
+    t2i_cot_shuffle_seed: 122222
+    t2i_cot_uncond_p: 0.1
+    t2i_cot_try_first_use_source_text: False    # Must be False
+    t2i_cot_image_caption_rate: 1.0   # 使用 caption 的比例
+    t2i_cot_instruction_candidates_type: mix_up@0.05
+    t2i_cot_caption_cot: 'short_caption@1.0 | long_long_caption@1.0'
+    t2i_cot_caption_cot_prob: 1.0
+    t2i_cot_reasoning_cot_prob: 1.0
+    # vanilla prob = 1. - caption_cot_prob
+    # recaption w.o. think prob = caption_cot_prob * (1. - reasoning_cot_prob)
+    # repcaiton w. think prob = caption_cot_prob * reasoning_cot_prob
+    # system prompt prob is applied independently and equally to these 3 cases
+    t2i_cot_patcher_names: [ 'image_ratio@0.3' ]
+    t2i_cot_image_caption_col_probs:
+      - caption_gemini:
+          caption_gemini_src: '{"image_caption_gemini_en_col": 0.5, "image_caption_gemini_zh_col": 0.5}'
+          caption_gemini_caption_processor: caption_process_v3
+          caption_gemini_caption_sample_ratio: '{"long_long_caption":0.5,"short_caption":0.5}'
+      - caption_v3_2_ip:
+          caption_v3_2_ip_src: '{"image_caption_v3_2_ip_en_col": 0.5, "image_caption_v3_2_ip_zh_col": 0.5}'
+          caption_v3_2_ip_caption_processor: caption_process_v3
+          caption_v3_2_ip_caption_sample_ratio: '{"long_long_caption":0.455,"long_caption":0.195,"medium_caption":0.1,"short_caption":0.25,"background":0.1,"style":0.7,"shot_type":0.1}'
+          caption_v3_2_ip_caption_processor_kwargs: '{"force_use_style_tag":true}'
+          caption_v3_2_ip_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3_2_ocr:
+          caption_v3_2_ocr_src: '{"image_caption_v3_2_ocr_en_col": 0.5, "image_caption_v3_2_ocr_zh_col": 0.5}'
+          caption_v3_2_ocr_caption_processor: caption_process_v3
+          caption_v3_2_ocr_caption_sample_ratio: '{"long_long_caption":0.99,"long_caption":0.001,"medium_caption":0.003,"short_caption":0.006,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_2_ocr_caption_processor_kwargs: '{"force_use_style_tag":true}'
+          caption_v3_2_ocr_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3_2:
+          caption_v3_2_src: '{"image_caption_v3_2_en_col": 0.5, "image_caption_v3_2_zh_col": 0.5}'
+          caption_v3_2_caption_processor: caption_process_v3
+          caption_v3_2_caption_sample_ratio: '{"long_long_caption":0.455,"long_caption":0.195,"medium_caption":0.1,"short_caption":0.25,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_2_caption_processor_kwargs: '{"force_use_style_tag":true}'
+          caption_v3_2_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3_1:
+          caption_v3_1_src: '{"image_caption_v3_1_en_col": 0.5, "image_caption_v3_1_zh_col": 0.5}'
+          caption_v3_1_caption_processor: caption_process_v3
+          caption_v3_1_caption_sample_ratio: '{"long_long_caption":0.455,"long_caption":0.195,"medium_caption":0.1,"short_caption":0.25,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_1_caption_processor_kwargs: '{"force_use_style_tag":true}'
+          caption_v3_1_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3:
+          caption_v3_src: '{"image_caption_v3_en_col": 0.5, "image_caption_v3_zh_col": 0.5}'
+          caption_v3_caption_processor: caption_process_v3
+          caption_v3_caption_sample_ratio: '{"long_long_caption":0.455,"long_caption":0.195,"medium_caption":0.1,"short_caption":0.25,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_caption_processor_kwargs: '{"force_use_style_tag":true}'
+          caption_v3_extra_processor: [ 'fix_style', 'filter_shot', 'inject_style_v2' ]
+  t2i_cot_index_kwargs:
+    t2i_cot_index_file:
+      # 1M for test
+      # - /apdcephfs_nj8/share_301739632/1_public_models/hymm_ar_assets/dataset/t2i_index/gemini_json/mb256_cap_v3/mb512_p4_v3_1m_demo.json
+      # actually used
+      - /apdcephfs_wza/share_303937731/0_public_datasets/t2i_recaption_think/gpt4o_ui_check/mb1024.json  # 185,443
+      - /apdcephfs_wza/share_303937731/fanbinlu/datasets/sft_recaption_t2i_0908/mb1024_science.json # 36,933
+      - /apdcephfs_wza/share_303937731/fanbinlu/datasets/wikipedia/mb1024.json # 187,977
+      - /apdcephfs_wza/share_303937731/0_public_datasets/t2i_recaption_think/ct_uniform_all/mb1024.json # 5,465,941
+      # - /apdcephfs_zwfy/share_303937731/0_public_datasets/t2i_recaption_think/mb1024_ct_uniform-1/mb1024.json # 1,084,376
+    t2i_cot_multireso: True
+    t2i_cot_ceph_base_inv: '{"nj10": "/apdcephfs_wza/share_303937731", "zwfy": "/apdcephfs_wza/share_303937731"}'  # updated
+    t2i_cot_image_col: cache_image
+    t2i_cot_image_caption_gemini_en_col: caption_gemini_en  # updated
+    t2i_cot_image_caption_gemini_zh_col: caption_gemini_zh  # updated
+    t2i_cot_image_caption_v3_2_ocr_en_col: caption_v3_2_ocr_en  # updated
+    t2i_cot_image_caption_v3_2_ocr_zh_col: caption_v3_2_ocr_zh  # updated
+    t2i_cot_image_caption_v3_2_en_col: caption_v3_2_en  # updated
+    t2i_cot_image_caption_v3_2_zh_col: caption_v3_2_zh  # updated
+    t2i_cot_image_caption_v3_1_en_col: caption_v3_1_en  # updated
+    t2i_cot_image_caption_v3_1_zh_col: caption_v3_1_zh  # updated
+    t2i_cot_image_caption_v3_en_col: caption_v3_en  # updated
+    t2i_cot_image_caption_v3_zh_col: caption_v3_zh  # updated
+    t2i_cot_image_caption_v3_2_ip_en_col: caption_v3_2_ip_en  # updated
+    t2i_cot_image_caption_v3_2_ip_zh_col: caption_v3_2_ip_zh  # updated
+    t2i_cot_extra_style_v2_col: style_v2
+    t2i_cot_extra_think_en_col: think_en
+    t2i_cot_extra_think_zh_col: think_zh
+    t2i_cot_extra_url_cos_col: url_cos
+
+
+  t2i_ocr_check_batch_size: 3
+  t2i_ocr_check_task_kwargs:
+    t2i_ocr_check_training_image_size: 1024 # only used when multireso is False
+    t2i_ocr_check_image_token_length: 4096
+    t2i_ocr_check_text_token_length: 768
+    t2i_ocr_check_text_cot_token_length: 1280
+    t2i_ocr_check_text_reason_token_length: 0
+    t2i_ocr_check_system_prompt_token_length: 1280
+    t2i_ocr_check_system_prompt_candidates_type: mix_up@1.0
+    t2i_ocr_check_use_unified_system_prompt: True
+    t2i_ocr_check_ignore_text_ntp: True
+    t2i_ocr_check_attn_type: flex
+    t2i_ocr_check_shuffle_seed: 222222
+    t2i_ocr_check_uncond_p: 0.1
+    t2i_ocr_check_try_first_use_source_text: False    # Must be False
+    t2i_ocr_check_image_caption_rate: 1.0   # 使用 caption 的比例
+    t2i_ocr_check_instruction_candidates_type: mix_up@0.05
+    t2i_ocr_check_caption_cot: 'medium_caption@0.7/long_caption@0.3 | long_caption@0.000001/long_long_caption@0.999999'
+    t2i_ocr_check_caption_cot_prob: 1.0
+    t2i_ocr_check_reasoning_cot_prob: 0.0
+    t2i_ocr_check_patcher_names: [ 'image_ratio@0.2' ]
+    t2i_ocr_check_image_caption_col_probs:
+      - caption_v3_2_ocr:
+          caption_v3_2_ocr_src: '{"image_caption_v3_2_ocr_en_col": 0.5, "image_caption_v3_2_ocr_zh_col": 0.5}'
+          caption_v3_2_ocr_caption_processor: caption_process_v3
+          caption_v3_2_ocr_caption_sample_ratio: '{"long_long_caption":0.99,"long_caption":0.001,"medium_caption":0.003,"short_caption":0.006,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_2_ocr_caption_processor_kwargs: '{"force_use_style_tag":true}'
+          caption_v3_2_ocr_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3_2:
+          caption_v3_2_src: '{"image_caption_v3_2_en_col": 0.5, "image_caption_v3_2_zh_col": 0.5}'
+          caption_v3_2_caption_processor: caption_process_v3
+          caption_v3_2_caption_sample_ratio: '{"long_long_caption":0.455,"long_caption":0.195,"medium_caption":0.1,"short_caption":0.25,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_2_caption_processor_kwargs: '{"force_use_style_tag":true}'
+          caption_v3_2_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3_1:
+          caption_v3_1_src: '{"image_caption_v3_1_en_col": 0.5, "image_caption_v3_1_zh_col": 0.5}'
+          caption_v3_1_caption_processor: caption_process_v3
+          caption_v3_1_caption_sample_ratio: '{"long_long_caption":0.455,"long_caption":0.195,"medium_caption":0.1,"short_caption":0.25,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_1_caption_processor_kwargs: '{"force_use_style_tag":true}'
+          caption_v3_1_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3:
+          caption_v3_src: '{"image_caption_v3_en_col": 0.5, "image_caption_v3_zh_col": 0.5}'
+          caption_v3_caption_processor: caption_process_v3
+          caption_v3_caption_sample_ratio: '{"long_long_caption":0.455,"long_caption":0.195,"medium_caption":0.1,"short_caption":0.25,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_caption_processor_kwargs: '{"force_use_style_tag":true}'
+          caption_v3_extra_processor: [ 'fix_style', 'filter_shot', 'inject_style_v2' ]
+  t2i_ocr_check_index_kwargs:
+    t2i_ocr_check_index_file:
+      - /apdcephfs_wza/share_303937731/0_public_datasets/ocr_0908/mb1024_ct_extra_ocr_zw/mb1024.json # 1,318,447
+      - /apdcephfs_wza/share_303937731/0_public_datasets/ocr_0908/mb1024_stage5_zw_ocr/mb1024.json # 224,260
+    t2i_ocr_check_multireso: True
+    t2i_ocr_check_ceph_base_inv: '{"nj10": "/apdcephfs_wza/share_303937731", "zwfy": "/apdcephfs_wza/share_303937731"}'  # updated
+    t2i_ocr_check_image_col: cache_image
+    t2i_ocr_check_image_caption_v3_2_ocr_en_col: caption_v3_2_ocr_en  # updated
+    t2i_ocr_check_image_caption_v3_2_ocr_zh_col: caption_v3_2_ocr_zh  # updated
+    t2i_ocr_check_image_caption_v3_2_en_col: caption_v3_2_en  # updated
+    t2i_ocr_check_image_caption_v3_2_zh_col: caption_v3_2_zh  # updated
+    t2i_ocr_check_image_caption_v3_1_en_col: caption_v3_1_en  # updated
+    t2i_ocr_check_image_caption_v3_1_zh_col: caption_v3_1_zh  # updated
+    t2i_ocr_check_image_caption_v3_en_col: caption_v3_en  # updated
+    t2i_ocr_check_image_caption_v3_zh_col: caption_v3_zh  # updated
+    t2i_ocr_check_extra_style_v2_col: style_v2
+    t2i_ocr_check_extra_url_cos_col: url_cos
+
+
+  t2i_ocr_except_batch_size: 3
+  t2i_ocr_except_task_kwargs:
+    t2i_ocr_except_training_image_size: 1024 # only used when multireso is False
+    t2i_ocr_except_image_token_length: 4096
+    t2i_ocr_except_text_token_length: 768
+    t2i_ocr_except_text_cot_token_length: 1280
+    t2i_ocr_except_text_reason_token_length: 0
+    t2i_ocr_except_system_prompt_token_length: 1280
+    t2i_ocr_except_system_prompt_candidates_type: mix_up@1.0
+    t2i_ocr_except_use_unified_system_prompt: True
+    t2i_ocr_except_ignore_text_ntp: True
+    t2i_ocr_except_attn_type: flex
+    t2i_ocr_except_shuffle_seed: 322222
+    t2i_ocr_except_uncond_p: 0.1
+    t2i_ocr_except_try_first_use_source_text: False    # Must be False
+    t2i_ocr_except_image_caption_rate: 1.0   # 使用 caption 的比例
+    t2i_ocr_except_instruction_candidates_type: mix_up@0.05
+    t2i_ocr_except_caption_cot: 'medium_caption@0.5/long_caption@0.5 | long_caption@0.000001/long_long_caption@0.999999'
+    t2i_ocr_except_caption_cot_prob: 0.5
+    t2i_ocr_except_reasoning_cot_prob: 0.0
+    t2i_ocr_except_patcher_names: [ 'image_ratio@0.2' ]
+    t2i_ocr_except_image_caption_col_probs:
+      - caption_v3_2_ocr:
+          caption_v3_2_ocr_src: '{"image_caption_v3_2_ocr_en_col": 0.5, "image_caption_v3_2_ocr_zh_col": 0.5}'
+          caption_v3_2_ocr_caption_processor: caption_process_v3
+          caption_v3_2_ocr_caption_sample_ratio: '{"long_long_caption":0.99,"long_caption":0.001,"medium_caption":0.003,"short_caption":0.006,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_2_ocr_caption_processor_kwargs: '{"force_use_style_tag":true}'
+          caption_v3_2_ocr_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3_2:
+          caption_v3_2_src: '{"image_caption_v3_2_en_col": 0.5, "image_caption_v3_2_zh_col": 0.5}'
+          caption_v3_2_caption_processor: caption_process_v3
+          caption_v3_2_caption_sample_ratio: '{"long_long_caption":0.455,"long_caption":0.195,"medium_caption":0.1,"short_caption":0.25,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_2_caption_processor_kwargs: '{"force_use_style_tag":true}'
+          caption_v3_2_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3_1:
+          caption_v3_1_src: '{"image_caption_v3_1_en_col": 0.5, "image_caption_v3_1_zh_col": 0.5}'
+          caption_v3_1_caption_processor: caption_process_v3
+          caption_v3_1_caption_sample_ratio: '{"long_long_caption":0.455,"long_caption":0.195,"medium_caption":0.1,"short_caption":0.25,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_1_caption_processor_kwargs: '{"force_use_style_tag":true}'
+          caption_v3_1_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3:
+          caption_v3_src: '{"image_caption_v3_en_col": 0.5, "image_caption_v3_zh_col": 0.5}'
+          caption_v3_caption_processor: caption_process_v3
+          caption_v3_caption_sample_ratio: '{"long_long_caption":0.455,"long_caption":0.195,"medium_caption":0.1,"short_caption":0.25,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_caption_processor_kwargs: '{"force_use_style_tag":true}'
+          caption_v3_extra_processor: [ 'fix_style', 'filter_shot', 'inject_style_v2' ]
+  t2i_ocr_except_index_kwargs:
+    t2i_ocr_except_index_file:
+      - /apdcephfs_wza/share_303937731/0_public_datasets/ocr_0908/mb1024_ct_extra_ocr_zw_except/mb1024.json # 7,659,929
+      - /apdcephfs_wza/share_303937731/0_public_datasets/ocr_0908/mb1024_stage5_zw_ocr_except/mb1024.json # 1,010,573
+    t2i_ocr_except_multireso: True
+    t2i_ocr_except_ceph_base_inv: '{"nj10": "/apdcephfs_wza/share_303937731", "zwfy": "/apdcephfs_wza/share_303937731"}'  # updated
+    t2i_ocr_except_image_col: cache_image
+    t2i_ocr_except_image_caption_v3_2_ocr_en_col: caption_v3_2_ocr_en  # updated
+    t2i_ocr_except_image_caption_v3_2_ocr_zh_col: caption_v3_2_ocr_zh  # updated
+    t2i_ocr_except_image_caption_v3_2_en_col: caption_v3_2_en  # updated
+    t2i_ocr_except_image_caption_v3_2_zh_col: caption_v3_2_zh  # updated
+    t2i_ocr_except_image_caption_v3_1_en_col: caption_v3_1_en  # updated
+    t2i_ocr_except_image_caption_v3_1_zh_col: caption_v3_1_zh  # updated
+    t2i_ocr_except_image_caption_v3_en_col: caption_v3_en  # updated
+    t2i_ocr_except_image_caption_v3_zh_col: caption_v3_zh  # updated
+    t2i_ocr_except_extra_style_v2_col: style_v2
+    t2i_ocr_except_extra_url_cos_col: url_cos
+
+
+  # Language Model
+  lm_recaption_batch_size: 8
+  lm_recaption_task_kwargs:
+    lm_recaption_token_length: 2432  # user input (256) + think (1024) + recaption (1024) + system prompt (128)
+    lm_recaption_system_prompt_token_length: 128
+    lm_recaption_system_prompt_candidates_type: mix_up@1.0
+    lm_recaption_use_vanilla_system_prompt: True
+    lm_recaption_attn_type: flex
+    lm_recaption_shuffle_seed: 422222
+    lm_recaption_pre_extract_tokens: False
+    lm_recaption_open_recaption: True
+  lm_recaption_index_kwargs:
+    lm_recaption_index_file:
+      # 1M for test
+      # - /apdcephfs_nj8/share_301739632/1_public_models/hymm_ar_assets/dataset/t2t_index/hy_text_v2_tokens_p3_1m_demo.json
+      # actually used 
+      # new
+      - /apdcephfs_wza/share_303937731/fanbinlu/datasets/sft_reasoning_prompt_0820_20w/data_with_think.json # 213373
+      - /apdcephfs_wza/share_303937731/fanbinlu/datasets/sft_reasoning_prompt_0907/data.json # 36456
+      - /apdcephfs_wza/share_303937731/0_public_datasets/llm_recaption_think/midjourney_v5_prompt_new/base.json # 889900
+      - /apdcephfs_wza/share_303937731/0_public_datasets/llm_recaption_think/uiapp_v20_recap/base.json # 787940
+      - /apdcephfs_wza/share_303937731/0_public_datasets/llm_recaption_think/poster_v20_recap/base.json # 190591
+      - /apdcephfs_wza/share_303937731/0_public_datasets/llm_recaption_think/real_t2i_prompts_en_380w/base.json # 3826400
+      - /apdcephfs_wza/share_303937731/0_public_datasets/llm_recaption_think/real_t2i_prompts_zh_380w/base.json # 3822078
+    lm_recaption_ceph_base_inv: '{"zwfy": "/apdcephfs_wza/share_303937731"}'
+    lm_recaption_verbose: 1
+
+  # Language Model
+  lm_instruct_batch_size: 2
+  lm_instruct_task_kwargs:
+    lm_instruct_token_length: 10368 # 10240 + 128
+    lm_instruct_system_prompt_token_length: 128
+    lm_instruct_system_prompt_candidates_type: mix_up@1.0
+    lm_instruct_use_vanilla_system_prompt: True
+    lm_instruct_attn_type: flex
+    lm_instruct_shuffle_seed: 522222
+    lm_instruct_pre_extract_tokens: False
+  lm_instruct_index_kwargs:
+    lm_instruct_index_file:
+      # - /apdcephfs_wza/share_303937731/1_public_models/hymm_ar_assets/dataset/t2t_index/open_instruct_text_12288.json  # 88,991,092
+      - /apdcephfs_wza/share_303937731/1_public_models/hymm_ar_assets/dataset/t2t_index/open_instruct_text_12288_batch_3.json # 82,915,045
+    lm_instruct_ceph_base_inv: '{"zwfy": "/apdcephfs_wza/share_303937731", "nj8": "/apdcephfs_wza/share_303937731"}'
+    lm_instruct_verbose: 1
+    lm_instruct_index_strategy: probability
+    lm_instruct_index_probability: [0.1, 0.9]
+
+
+  # Multimodal Understanding
+  mmu_caption_batch_size: 3
+  mmu_caption_task_kwargs:  # updated
+    mmu_caption_image_size: 1024  # when get_raw_image failed, use this size to create a gray image
+    mmu_caption_vae_base_size: 1024
+    mmu_caption_token_length: 6016  # 4096 vae + 1024 vision encoder + 768 text + 128 system prompt
+    mmu_caption_text_token_length: 768
+    mmu_caption_system_prompt_token_length: 128
+    mmu_caption_system_prompt_candidates_type: mix_up@1.0
+    mmu_caption_use_vanilla_system_prompt: True
+    mmu_caption_drop_last: True
+    mmu_caption_attn_type: flex
+    mmu_caption_shuffle_seed: 622222
+    mmu_caption_image_caption_col_probs:
+      - caption_v3_2_ocr:
+          caption_v3_2_ocr_src: '{"image_caption_v3_2_ocr_en_col": 0.5, "image_caption_v3_2_ocr_zh_col": 0.5}'
+          caption_v3_2_ocr_caption_processor: caption_process_v3
+          caption_v3_2_ocr_caption_sample_ratio: '{"long_long_caption":0.99,"long_caption":0.01,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_2_ocr_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3_2:
+          caption_v3_2_src: '{"image_caption_v3_2_en_col": 0.5, "image_caption_v3_2_zh_col": 0.5}'
+          caption_v3_2_caption_processor: caption_process_v3
+          caption_v3_2_caption_sample_ratio: '{"long_long_caption":0.3,"long_caption":0.35,"medium_caption":0.25,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_2_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3_1:
+          caption_v3_1_src: '{"image_caption_v3_1_en_col": 0.5, "image_caption_v3_1_zh_col": 0.5}'
+          caption_v3_1_caption_processor: caption_process_v3
+          caption_v3_1_caption_sample_ratio: '{"long_long_caption":0.3,"long_caption":0.35,"medium_caption":0.25,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_1_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3:
+          caption_v3_src: '{"image_caption_v3_en_col": 0.5, "image_caption_v3_zh_col": 0.5}'
+          caption_v3_caption_processor: caption_process_v3
+          caption_v3_caption_sample_ratio: '{"long_long_caption":0.3,"long_caption":0.35,"medium_caption":0.25,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_extra_processor: [ 'fix_style', 'filter_shot', 'inject_style_v2' ]
+    mmu_caption_medium_caption_as: "short"
+    mmu_caption_ignore_user_instruct: True
+  mmu_caption_index_kwargs:
+    mmu_caption_index_file:
+      # 1M for test
+      # - /apdcephfs_nj8/share_301739632/1_public_models/hymm_ar_assets/dataset/t2i_index/gemini_json/mb256_cap_v3/base_p4_v3_1m_demo.json
+      # actually used
+      - /apdcephfs_wza/share_303937731/1_public_models/hymm_ar_assets/dataset/t2i_index/gemini_json/mb1024_cap_v3/base_ct_zw.json  # 20,071,335
+    mmu_caption_ceph_base_inv: '{"nj10": "/apdcephfs_wza/share_303937731", "zwfy": "/apdcephfs_wza/share_303937731"}'
+    mmu_caption_verbose: 2
+    mmu_caption_image_key: cache_image
+    mmu_caption_image_caption_v3_2_ocr_en_col: caption_v3_2_ocr_en
+    mmu_caption_image_caption_v3_2_ocr_zh_col: caption_v3_2_ocr_zh
+    mmu_caption_image_caption_v3_2_en_col: caption_v3_2_en
+    mmu_caption_image_caption_v3_2_zh_col: caption_v3_2_zh
+    mmu_caption_image_caption_v3_1_en_col: caption_v3_1_en
+    mmu_caption_image_caption_v3_1_zh_col: caption_v3_1_zh
+    mmu_caption_image_caption_v3_en_col: caption_v3_en
+    mmu_caption_image_caption_v3_zh_col: caption_v3_zh
+    mmu_caption_extra_style_v2_col: style_v2
+    mmu_caption_extra_url_cos_col: url_cos
+    mmu_caption_message_col: messages
+
+
+  # Multimodal Understanding
+  mmu_batch_size: 2
+  mmu_task_kwargs:  # updated
+    mmu_image_size: 1024  # when get_raw_image failed, use this size to create a gray image
+    mmu_vae_base_size: 1024
+    mmu_token_length: 7296  # 4096 vae + 1024 vision encoder + 2048 text + 128 system prompt
+    mmu_text_token_length: 2048
+    mmu_system_prompt_token_length: 128
+    mmu_system_prompt_candidates_type: mix_up@1.0
+    mmu_use_vanilla_system_prompt: True
+    mmu_drop_last: True
+    mmu_attn_type: flex
+    mmu_shuffle_seed: 722222
+    mmu_ignore_user_instruct: True
+  mmu_index_kwargs:
+    mmu_index_file:  # 54,998,529
+      - /apdcephfs_wza/share_303937731/1_public_models/hymm_ar_assets/dataset/mmu_index/opensource.json   # 开源 mmu 数据集, 22,301,019
+      - /apdcephfs_wza/share_303937731/1_public_models/hymm_ar_assets/dataset/mmu_index/mmu_in_house_batch2_ocr.json  # 10,000,000
+      - /apdcephfs_wza/share_303937731/1_public_models/hymm_ar_assets/dataset/mmu_index/mmu_in_house_batch1_qa.json  # 8,055,395
+      - /apdcephfs_wza/share_303937731/1_public_models/hymm_ar_assets/dataset/mmu_index/grit/base.json  # 14,642,115
+#      - /apdcephfs_nj8/share_301739632/1_public_models/hymm_ar_assets/dataset/mmu_index/mmu_single_v2_new.json  # jp in house 的 mmu 数据集, 2kw
+    mmu_ceph_base_inv: '{"nj10": "/apdcephfs_wza/share_303937731", "zwfy": "/apdcephfs_wza/share_303937731"}'
+    mmu_verbose: 2
+    mmu_image_key: cache_image
+    mmu_extra_url_cos_col: url_cos
+    mmu_message_col: messages
+
+# pair person cot
+  pair_person_cot_2_batch_size: 1
+  pair_person_cot_2_task_kwargs:
+    pair_person_cot_2_training_image_size: 1024
+    pair_person_cot_2_max_length: 12288   # 1280 + 4096 + 1024 + 1792 + 4096 = 12288
+    pair_person_cot_2_text_token_length: 512
+    pair_person_cot_2_text_reason_token_length: 1024
+    pair_person_cot_2_text_cot_token_length: 1792  # 256 + 1024 + 512 = 1792
+    pair_person_cot_2_system_prompt_token_length: 1280
+    pair_person_cot_2_system_prompt_candidates_type: mix_up@1.0
+    pair_person_cot_2_use_unified_system_prompt: True
+    pair_person_cot_2_drop_last: True
+    pair_person_cot_2_uncond_p: 0.1
+    pair_person_cot_2_attn_type: flex
+    pair_person_cot_2_shuffle_seed: 822222
+    pair_person_cot_2_inter_type: "cot_recaption@extra_info"   # if only cot_recaption, used root of dict
+    pair_person_cot_2_caption_cot: 'instruction_change_short@0.5/instruction_change_medium@0.5 | instruction_change_long@1.0'
+    pair_person_cot_2_caption_cot_prob: 0.5
+    pair_person_cot_2_reasoning_cot_prob: 0.5
+    pair_person_cot_2_patcher_names: [ 'image_ratio@0.3' ]
+    pair_person_cot_2_image_caption_col_probs:
+      - instruction_v3:
+          instruction_v3_src: '{"image_instruction_v3_zh_key": 0.5, "image_instruction_v3_en_key": 0.5}'
+          instruction_v3_caption_processor: pair_caption_process
+          instruction_v3_caption_sample_ratio: '{"instruction_change_short":0.3, "instruction_change_medium":0.3, "instruction_change_long":0.4, "instruction_keep": 0.5}'
+  pair_person_cot_2_index_kwargs:
+    pair_person_cot_2_index_file:
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1010_cot/pair_and_interleave_add_aigc_tag_250720-person_two_frame_1_0712-base1024_filter_mov/base.json  # 4,012,946
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1010_cot/pair_data-subject_driven_xhs_210020373748-base/base.json  # 13,024,623
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1010_cot/pair_and_interleave_add_aigc_tag_250720-xhs_img_pair_1_0712-base1024/base.json # 1,650 
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1010_cot/pair_data-xhs_person_0729-base_filtered_aigc_and_watermark/base.json  # 8,960,224
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1010_cot/pair_data-photomaker_3801-base_filtered_aigc_and_watermark/base.json  # 1,679,136
+    pair_person_cot_2_multireso: False
+    pair_person_cot_2_ceph_base_inv: '{"wza": "/apdcephfs_wza/share_303937731"}'
+    pair_person_cot_2_message_col: messages
+    pair_person_cot_2_image_key: cache_image
+    pair_person_cot_2_image_instruction_v3_zh_key: instruction_v3_zh  # updated
+    pair_person_cot_2_image_instruction_v3_en_key: instruction_v3_en  # updated
+    pair_person_cot_2_extra_think_en_key: instruction_think
+    pair_person_cot_2_extra_think_zh_key: instruction_think
+    pair_person_cot_2_extra_url_cos_col: url_cos
+    pair_person_cot_2_index_strategy: probability
+    pair_person_cot_2_index_probability: [1.0, 3.0, 3.0, 3.0, 1.0]
+
+
+  pair_inpainting_batch_size: 1
+  pair_inpainting_task_kwargs:
+    pair_inpainting_training_image_size: 1024
+    pair_inpainting_max_length: 11264   # 4096 + 1024 + 768 + 1280 + 4096 = 11264
+    pair_inpainting_text_token_length: 768
+    pair_inpainting_system_prompt_token_length: 1280
+    pair_inpainting_system_prompt_candidates_type: mix_up@1.0
+    pair_inpainting_use_unified_system_prompt: True
+    pair_inpainting_drop_last: True
+    pair_inpainting_uncond_p: 0.1
+    pair_inpainting_attn_type: flex
+    pair_inpainting_shuffle_seed: 922222
+#    pair_inpainting_uncond_p_src: 0.1
+    pair_inpainting_gen_first_img: False
+    pair_inpainting_cond_first_img: False
+    pair_inpainting_sample_lang: '{"zh": 0.5, "en": 0.5}'
+    pair_inpainting_inter_type: "inpainting"
+    pair_inpainting_mask_generator_probs: [0.5, 0.5, 0.0]
+    pair_inpainting_sample_img_cap_ratio: '{"long_long_caption":0.3,"long_caption":0.35,"medium_caption":0.25,"short_caption":0.1,"background":0.1,"style":0.7}'
+    pair_inpainting_caption_processor: caption_process_v3
+  pair_inpainting_index_kwargs:
+    pair_inpainting_index_file:  # 30,986,225
+      - /apdcephfs_wza/share_303937731/0_public_datasets/pair_data/inpainting_randomly_sampled_from_1024_cap_v3_base/base.json
+    pair_inpainting_multireso: False
+    pair_inpainting_ceph_base_inv: '{"zwfy": "/apdcephfs_wza/share_303937731"}'
+    pair_inpainting_message_col: messages
+    pair_inpainting_image_key: cache_image
+    pair_inpainting_extra_url_cos_col: url_cos
+
+
+  pair_controlnet_2_batch_size: 1
+  pair_controlnet_2_task_kwargs:
+    pair_controlnet_2_training_image_size: 1024
+    pair_controlnet_2_max_length: 11264   # 4096 + 1024 + 768 + 1280 + 4096 = 11264
+    pair_controlnet_2_text_token_length: 768
+    pair_controlnet_2_system_prompt_token_length: 1280
+    pair_controlnet_2_system_prompt_candidates_type: mix_up@1.0
+    pair_controlnet_2_use_unified_system_prompt: True
+    pair_controlnet_2_drop_last: True
+    pair_controlnet_2_uncond_p: 0.1
+    pair_controlnet_2_attn_type: flex
+    pair_controlnet_2_shuffle_seed: 1022222
+#    pair_uncond_p_src: 0.1
+    pair_controlnet_2_gen_first_img: False
+    pair_controlnet_2_cond_first_img: False
+    pair_controlnet_2_sample_lang: '{"zh": 0.5, "en": 0.5}'
+    pair_controlnet_2_inter_type: "mixup" 
+    pair_controlnet_2_sample_instruction_ratio: '{"text": 0.6, "reversed_text": 0.4}' # 正向+反向
+  pair_controlnet_2_index_kwargs:
+    pair_controlnet_2_index_file:
+      - /apdcephfs_wza/0_public_datasets/controlnet/standard_arrows_enc_all/ct_uniform/base.json  # 70,051,180
+      - /apdcephfs_wza/0_public_datasets/controlnet/standard_arrows_enc_all/stage5_zw_noocr/base.json # 69,354,806
+      - /apdcephfs_wza/0_public_datasets/controlnet/standard_arrows_enc_all/style_beeru_4w/base.json # 676,070
+    pair_controlnet_2_multireso: False
+    pair_controlnet_2_ceph_base_inv: '{"wza": "/apdcephfs_wza"}'
+    pair_controlnet_2_message_col: messages
+    pair_controlnet_2_image_key: cache_image
+    pair_controlnet_2_extra_url_cos_col: url_cos
+
+  pair_controlnet_cot_batch_size: 1
+  pair_controlnet_cot_task_kwargs:
+    pair_controlnet_cot_training_image_size: 1024
+    pair_controlnet_cot_max_length: 12288   # 1280 + 4096 + 1024 + 1792 + 4096 = 12288
+    pair_controlnet_cot_text_token_length: 512
+    pair_controlnet_cot_text_reason_token_length: 1024
+    pair_controlnet_cot_text_cot_token_length: 1792
+    pair_controlnet_cot_system_prompt_token_length: 1280
+    pair_controlnet_cot_system_prompt_candidates_type: mix_up@1.0
+    pair_controlnet_cot_use_unified_system_prompt: True
+    pair_controlnet_cot_drop_last: True
+    pair_controlnet_cot_uncond_p: 0.1
+    pair_controlnet_cot_attn_type: flex
+    pair_controlnet_cot_shuffle_seed: 1122222
+    pair_controlnet_cot_cot_inter_type: "cot_recaption@extra_info"   # if only cot_recaption, used root of dict
+    pair_controlnet_cot_caption_cot: 'instruction_change_short@0.4/instruction_change_medium@0.4/instruction@0.05/instruction_template@0.05/instruction_short@0.05/instruction_medium@0.05 | instruction_change_long@1.0'
+    pair_controlnet_cot_caption_cot_prob: 1.0
+    pair_controlnet_cot_reasoning_cot_prob: 0.5
+    pair_controlnet_cot_patcher_names: [ 'image_ratio@0.3' ]
+    pair_controlnet_cot_image_caption_col_probs:
+      - instruction_v3:
+          instruction_v3_src: '{"image_instruction_v3_en_key": 0.5, "image_instruction_v3_zh_key": 0.5}'
+          instruction_v3_caption_processor: pair_caption_process
+          instruction_v3_caption_sample_ratio: '{"instruction": 0.05, "instruction_template": 0.05, "instruction_short": 0.05, "instruction_medium": 0.05, "instruction_change_short":0.2, "instruction_change_medium":0.2, "instruction_change_long":0.3, "instruction_keep": 0.5}'
+  pair_controlnet_cot_index_kwargs:
+    pair_controlnet_cot_index_file:
+      - /apdcephfs_wza/0_public_datasets/controlnet_cot_1021/standard_arrows_enc_all/ct_uniform_cot/base.json # 296,297
+    pair_controlnet_cot_multireso: False
+    pair_controlnet_cot_ceph_base_inv: '{"wza": "/apdcephfs_wza"}'
+    pair_controlnet_cot_message_col: messages
+    pair_controlnet_cot_image_key: cache_image
+    pair_controlnet_cot_extra_url_cos_col: url_cos
+    pair_controlnet_cot_image_instruction_v3_en_key: instruction_v3_en  # updated
+    pair_controlnet_cot_image_instruction_v3_zh_key: instruction_v3_zh  # updated
+    pair_controlnet_cot_extra_think_zh_key: instruction_think
+    pair_controlnet_cot_extra_think_en_key: instruction_think
+
+  # pair editing 3
+  pair_editing_3_batch_size: 1
+  pair_editing_3_task_kwargs:
+    pair_editing_3_training_image_size: 1024
+    pair_editing_3_max_length: 11008   # 1280 + 4096 + 1024 + 512 + 4096 = 11008
+    pair_editing_3_text_token_length: 512
+    pair_editing_3_system_prompt_token_length: 1280
+    pair_editing_3_system_prompt_candidates_type: mix_up@1.0
+    pair_editing_3_use_unified_system_prompt: True
+    pair_editing_3_drop_last: True
+    pair_editing_3_uncond_p: 0.1
+    pair_editing_3_attn_type: flex
+    pair_editing_3_shuffle_seed: 1222222
+    pair_editing_3_inter_type: "cot_recaption@extra_info"   # if only cot_recaption, used root of dict
+    pair_editing_3_caption_cot: 'instruction_change_short@0.4/instruction_change_medium@0.4/instruction@0.05/instruction_template@0.05/instruction_short@0.05/instruction_medium@0.05 | instruction_change_long@1.0'
+    pair_editing_3_caption_cot_prob: 0.0
+    pair_editing_3_reasoning_cot_prob: 0.0
+    pair_editing_3_patcher_names: [ 'image_ratio@0.3' ]
+    pair_editing_3_image_caption_col_probs:
+      - instruction_v3:
+          instruction_v3_src: '{"image_instruction_v3_en_key": 0.5, "image_instruction_v3_zh_key": 0.5}'
+          instruction_v3_caption_processor: pair_caption_process
+          instruction_v3_caption_sample_ratio: '{"instruction": 0.05, "instruction_template": 0.05, "instruction_short": 0.05, "instruction_medium": 0.05, "instruction_change_short":0.2, "instruction_change_medium":0.2, "instruction_change_long":0.3, "instruction_keep": 0.5}'
+  pair_editing_3_index_kwargs:
+    pair_editing_3_index_file: # 10999343.0
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/4o_goods_sanshitu/base.json # 30712                                                  
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/banana_20250901_label/base.json # 75032                                              
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/banana_20250917_label/base.json # 24127                                              
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/banana_en_text_replace_reverse/base.json # 87870                                     
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/banana_ip_20250901_label/base.json # 22780                                           
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/banana_multiple_remove_reverse/base.json # 16407                                     
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/banana_old_photo_reverse/base.json # 117017                                          
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/blur_pasd/base.json # 64783                                                          
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/editing_SFT_until_0902/base.json # 463442                                            
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/editing_outpainting_and_crop/base.json # 289401                                      
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/gen4_style_reference/base.json # 57733                                               
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/huoshan_age/base.json # 33193                                                        
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/huoshan_expression/base.json # 94825                                                 
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/huoshan_hairstyle/base.json # 18476                                                  
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/huoshan_hairstyle_changfa_reverse/base.json # 10263                                  
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/kontext_addition_reverse/base.json # 326419                                          
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/kontext_part1_part_reverse_0819/base.json # 21849                                    
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/kontext_part1_reverse_part1/base.json # 281138                                       
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/kontext_part1_reverse_part2/base.json # 174228                                       
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/kontext_part2_2_reverse_0819/base.json # 16610                                       
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/kontext_part2_reverse/base.json # 163639                                             
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/kontext_remove_background_replace_reverse/base.json # 260491                         
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/kontext_remove_text_and_reverse/base.json # 1109641                                  
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/kontext_text_en/base.json # 44803                                                    
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/kontext_text_en_reverse/base.json # 35053                                            
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/kontextmax_background/base.json # 8125                                               
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/kontextmax_hair_color_reverse/base.json # 39384                                      
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/kontextmax_old_photo/base.json # 26565                                               
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/meitu_beautify_valid/base.json # 16017                                               
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/meitu_shoushen/base.json # 3523 
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/p2wl_zh/base.json # 1496147
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/p3_zh/base.json # 852113
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/realrain_1kH/base.json # 1120
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/rendering_camera/base.json # 18196
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/seededit3_add_delete_multiple_human/base.json # 33156
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/seededit3_add_snow/base.json # 85211
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/seededit3_add_snow_reverse/base.json # 85211
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/seededit3_defog/base.json # 13006
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/seededit3_derain/base.json # 7832
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/seededit3_fukan_shuliang_rongqi/base.json # 9930
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/seededit3_human_add_remove_age/base.json # 18738
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/seededit3_human_angle/base.json # 1437
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/seededit3_human_angle_part2/base.json # 12535
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/seededit3_human_angle_reverse/base.json # 1118
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/seededit3_human_pose/base.json # 16052
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/seededit3_pose/base.json # 19413
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/seededit3_state/base.json # 18043
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/seededit3_textedit_part2/base.json # 39706
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/seededit3_tryon/base.json # 28265
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/seededit3_tryon_reverse/base.json # 30385
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/seededit_text_zh/base.json # 29158
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/seededit_text_zh_reverse/base.json # 38911
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/source_id_530394384381/base.json # 50815
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/source_id_530394384382/base.json # 19079
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/source_id_530394384383/base.json # 6753
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/style_transfer_0826/base.json # 9593
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/style_transfer_0826_reverse/base.json # 9593
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/style_transfer_0829/base.json # 3681
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/style_transfer_0829_reverse/base.json # 3681
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/style_transfer_0830/base.json # 230
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/style_transfer_0830_reverse/base.json # 230
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/style_transfer_valid_4o_0815/base.json # 13828
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/style_transfer_valid_4o_0815_reverse/base.json # 13828
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/style_transfer_valid_4o_0816/base.json # 3803
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/style_transfer_valid_4o_0816_reverse/base.json # 3803
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/style_transfer_valid_seededit3_0815/base.json # 11419
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/style_transfer_valid_seededit3_0815_reverse/base.json # 11419
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/style_transfer_valid_seededit3_0816/base.json # 8521
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/style_transfer_valid_seededit3_0816_reverse/base.json # 8521
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/style_transfer_valid_style_lora_0816/base.json # 1843
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/style_transfer_valid_style_lora_0816_reverse/base.json # 1843
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/synthetic_broken_composite/base.json # 99983
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/synthetic_repair/base.json # 331402
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/synthetic_repair_8w_0805/base.json # 86144
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/synthetic_repair_face/base.json # 14411
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/twoframe_twopair_60w_20250806/base.json # 430169
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/watermark_dataset/base.json # 683135
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/wirestock_add_remove/base.json # 130126
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013/zoominout_4k_8k/base.json # 90504
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_ps_1014/ps_editng_data_0905_0928/base.json # 362481
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017/00_1014_yizhixingfenggehua_batch3/base.json # 12817 # TODO
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017/00_qqtouxiang_reverse/base.json # 93049
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017/01_1014_yizhixingfenggehua_batch2/base.json # 44319 # TODO
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017/01_meizhuang/base.json # 73157
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017/02_1014_yizhixingfenggehua/base.json # 35882 # TODO
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017/02_pifumeibai/base.json # 79734
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017/03_1014_sediaoqianyi/base.json # 106918 # TODO
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017/03_fusexuanze/base.json # 79479
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017/04_1014_fenggeqianyi_batch2/base.json # 18370 # TODO
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017/04_fusexuanze_xiaomai/base.json # 79124
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017/05_1014_quyu/base.json # 75022 # TODO
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017/05_lvjing/base.json # 94131
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017/06_1014_pifuxuanze_ziran/base.json # 39193 # TODO
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017/06_yijianzonghemeiyan/base.json # 107820 # TODO
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017/07_1014_pifuxuanze_xiaomai/base.json # 38950 # TODO
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017/07_tupianchaofen/base.json # 499977
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017/08_1014_pifumeibai/base.json # 39077 # TODO
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017/09_1014_tupianchicunxiugai_batch2/base.json # 70844 # TODO
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017/09_xiangaoshangse/base.json # 124386
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017/10_1014_wenzicaizhi_batch2/base.json # 7068 # TODO
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017/11_1014_wenzicaizhi_batch1/base.json # 6533
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017/12_1014_wenziyanse_batch2/base.json # 55167 # TODO
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017/13_1014_wenziyanse_batch1/base.json # 18259 # TODO
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1021/00_1016_qqtouxiangzhengxiang_crop_expand/base.json # 32665
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1021/00_1020_yijianzonghemeiyanp2/base.json  # 80760
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1021/01_1016_qqtouxiangnixiang_crop_expand/base.json  # 32211
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1021/01_1020_yizhixingfenggehua/base.json  # 9120
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1021/02_1016_yijianzonghemeiyan/base.json  # 257168
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1021/02_1020_chicunxiugai_prompt_revised/base.json  # 47502
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1021/03_1016_bianhuanweizhi_chicundaxiao_3d/base.json  # 18589
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1021/03_1020_jingbiegaibianV2/base.json  # 6706
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1021/04_1016_qqtouxiangzhengxiang_prompt_revised/base.json  # 94287
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1021/04_1020_bianhuanweizhi_chicundaxiao/base.json  # 34378
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1021/14_1014_newwenzi_ziti/base.json  # 65480
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1021/15_1014_newwenzi_yanse/base.json  # 61323
+    pair_editing_3_multireso: False
+    pair_editing_3_ceph_base_inv: '{"zwfy": "/apdcephfs_wza/share_303937731"}'
+    pair_editing_3_message_col: messages
+    pair_editing_3_image_key: cache_image
+    pair_editing_3_image_instruction_v3_en_key: instruction_v3_en  # updated
+    pair_editing_3_image_instruction_v3_zh_key: instruction_v3_zh  # updated
+    pair_editing_3_extra_think_zh_key: instruction_think
+    pair_editing_3_extra_think_en_key: instruction_think
+    pair_editing_3_extra_url_cos_col: url_cos
+
+  # pair editing 3 cot
+  pair_editing_3_cot_batch_size: 1
+  pair_editing_3_cot_task_kwargs:
+    pair_editing_3_cot_training_image_size: 1024
+    pair_editing_3_cot_max_length: 12288   # 1280 + 4096 + 1024 + 1792 + 4096 = 12288
+    pair_editing_3_cot_text_token_length: 512
+    pair_editing_3_cot_text_reason_token_length: 1024
+    pair_editing_3_cot_text_cot_token_length: 1792  #  256 + 1024 + 512 = 1792
+    pair_editing_3_cot_system_prompt_token_length: 1280
+    pair_editing_3_cot_system_prompt_candidates_type: mix_up@1.0
+    pair_editing_3_cot_use_unified_system_prompt: True
+    pair_editing_3_cot_drop_last: True
+    pair_editing_3_cot_uncond_p: 0.1
+    pair_editing_3_cot_attn_type: flex
+    pair_editing_3_cot_shuffle_seed: 1322222
+    pair_editing_3_cot_inter_type: "cot_recaption@extra_info"   # if only cot_recaption, used root of dict
+    pair_editing_3_cot_caption_cot: 'instruction_change_short@0.4/instruction_change_medium@0.4/instruction@0.05/instruction_template@0.05/instruction_short@0.05/instruction_medium@0.05 | instruction_change_long@1.0'
+    pair_editing_3_cot_caption_cot_prob: 1.0
+    pair_editing_3_cot_reasoning_cot_prob: 0.5
+    pair_editing_3_cot_patcher_names: [ 'image_ratio@0.3' ]
+    pair_editing_3_cot_image_caption_col_probs:
+      - instruction_v3:
+          instruction_v3_src: '{"image_instruction_v3_en_key": 0.5, "image_instruction_v3_zh_key": 0.5}'
+          instruction_v3_caption_processor: pair_caption_process
+          instruction_v3_caption_sample_ratio: '{"instruction": 0.05, "instruction_template": 0.05, "instruction_short": 0.05, "instruction_medium": 0.05, "instruction_change_short":0.2, "instruction_change_medium":0.2, "instruction_change_long":0.3, "instruction_keep": 0.5}'
+  pair_editing_3_cot_index_kwargs:
+    pair_editing_3_cot_index_file: # 10612567.0
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/4o_goods_sanshitu/base.json # 30712                                              
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/banana_20250901_label/base.json # 75028                                          
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/banana_20250917_label/base.json # 24123                                          
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/banana_en_text_replace_reverse/base.json # 87870                                 
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/banana_ip_20250901_label/base.json # 22775                                       
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/banana_multiple_remove_reverse/base.json # 16407                                 
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/banana_old_photo_reverse/base.json # 117017                                      
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/blur_pasd/base.json # 64783                                                      
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/editing_SFT_until_0902/base.json # 463382                                        
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/gen4_style_reference/base.json # 57733                                           
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/huoshan_age/base.json # 33193                                                    
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/huoshan_expression/base.json # 94825                                             
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/huoshan_hairstyle/base.json # 18476                                              
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/huoshan_hairstyle_changfa_reverse/base.json # 10263                              
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/kontext_addition_reverse/base.json # 326418                                      
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/kontext_part1_part_reverse_0819/base.json # 21849                                
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/kontext_part1_reverse_part1/base.json # 281138                                   
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/kontext_part1_reverse_part2/base.json # 174228                                   
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/kontext_part2_2_reverse_0819/base.json # 16610                                   
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/kontext_part2_reverse/base.json # 163639                                         
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/kontext_remove_background_replace_reverse/base.json # 260491                     
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/kontext_remove_text_and_reverse/base.json # 1107634                              
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/kontext_text_en/base.json # 44803                                                
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/kontext_text_en_reverse/base.json # 35053                                        
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/kontextmax_background/base.json # 8125
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/kontextmax_hair_color_reverse/base.json # 39384
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/kontextmax_old_photo/base.json # 26564
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/meitu_beautify_valid/base.json # 16017
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/meitu_shoushen/base.json # 3522
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/p2wl_zh/base.json # 1496125
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/p3_zh/base.json # 852107
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/realrain_1kH/base.json # 1120
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/seededit3_add_delete_multiple_human/base.json # 33156
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/seededit3_add_snow/base.json # 85210
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/seededit3_add_snow_reverse/base.json # 85210
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/seededit3_defog/base.json # 13006
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/seededit3_derain/base.json # 7832
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/seededit3_fukan_shuliang_rongqi/base.json # 9930
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/seededit3_human_add_remove_age/base.json # 18738
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/seededit3_human_angle/base.json # 1437
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/seededit3_human_angle_part2/base.json # 12535
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/seededit3_human_angle_reverse/base.json # 1118
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/seededit3_human_pose/base.json # 16052
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/seededit3_pose/base.json # 19413
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/seededit3_state/base.json # 18043
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/seededit3_textedit_part2/base.json # 39706
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/seededit3_tryon/base.json # 28265
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/seededit3_tryon_reverse/base.json # 30385
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/seededit_text_zh/base.json # 29158
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/seededit_text_zh_reverse/base.json # 38911
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/style_transfer_0826/base.json # 9593
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/style_transfer_0826_reverse/base.json # 9593
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/style_transfer_0829/base.json # 3681
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/style_transfer_0829_reverse/base.json # 3681
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/style_transfer_0830/base.json # 230
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/style_transfer_0830_reverse/base.json # 230
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/style_transfer_valid_4o_0815/base.json # 13828
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/style_transfer_valid_4o_0815_reverse/base.json # 13828
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/style_transfer_valid_4o_0816/base.json # 3803
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/style_transfer_valid_4o_0816_reverse/base.json # 3803
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/style_transfer_valid_seededit3_0815/base.json # 11419
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/style_transfer_valid_seededit3_0815_reverse/base.json # 11419
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/style_transfer_valid_seededit3_0816/base.json # 8521
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/style_transfer_valid_seededit3_0816_reverse/base.json # 8521
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/style_transfer_valid_style_lora_0816/base.json # 1843
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/style_transfer_valid_style_lora_0816_reverse/base.json # 1843
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/synthetic_broken_composite/base.json # 99970
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/synthetic_repair/base.json # 331401
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/synthetic_repair_8w_0805/base.json # 86144
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/synthetic_repair_face/base.json # 14403
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/twoframe_twopair_60w_20250806/base.json # 430169
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/watermark_dataset/base.json # 683094
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/wirestock_add_remove/base.json # 130118
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1013_cot/zoominout_4k_8k/base.json # 90503
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_ps_1014_cot/ps_editng_data_0905_0928/base.json # 362299
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017_cot/00_1014_yizhixingfenggehua_batch3/base.json # 12817 # TODO
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017_cot/00_qqtouxiang_reverse/base.json # 93049
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017_cot/01_1014_yizhixingfenggehua_batch2/base.json # 44319 # TODO
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017_cot/01_meizhuang/base.json # 73102
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017_cot/02_1014_yizhixingfenggehua/base.json # 35882 # TODO
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017_cot/02_pifumeibai/base.json # 79733
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017_cot/03_1014_sediaoqianyi/base.json # 106916 # TODO
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017_cot/03_fusexuanze/base.json # 79459
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017_cot/04_1014_fenggeqianyi_batch2/base.json # 18370 # TODO
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017_cot/04_fusexuanze_xiaomai/base.json # 79118
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017_cot/05_1014_quyu/base.json # 75022 # TODO
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017_cot/05_lvjing/base.json # 94100
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017_cot/06_1014_pifuxuanze_ziran/base.json # 39190 # TODO
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017_cot/06_yijianzonghemeiyan/base.json # 107820 # TODO
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017_cot/07_1014_pifuxuanze_xiaomai/base.json # 38949 # TODO
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017_cot/07_tupianchaofen/base.json # 499939
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017_cot/08_1014_pifumeibai/base.json # 39077 # TODO
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017_cot/09_1014_tupianchicunxiugai_batch2/base.json # 70844 # TODO
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017_cot/09_xiangaoshangse/base.json # 124386
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017_cot/10_1014_wenzicaizhi_batch2/base.json # 7068 # TODO
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017_cot/11_1014_wenzicaizhi_batch1/base.json # 6532
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017_cot/12_1014_wenziyanse_batch2/base.json # 55166 # TODO
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1017_cot/13_1014_wenziyanse_batch1/base.json # 18253 # TODO
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1021_cot/00_1016_qqtouxiangzhengxiang_crop_expand/base.json  # 32,665
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1021_cot/00_1020_yijianzonghemeiyanp2/base.json  # 80,757
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1021_cot/01_1016_qqtouxiangnixiang_crop_expand/base.json  # 32,211
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1021_cot/01_1020_yizhixingfenggehua/base.json  # 9,120
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1021_cot/02_1016_yijianzonghemeiyan/base.json  # 257,167
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1021_cot/02_1020_chicunxiugai_prompt_revised/base.json  # 47,502
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1021_cot/03_1016_bianhuanweizhi_chicundaxiao_3d/base.json  # 18,581
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1021_cot/03_1020_jingbiegaibianV2/base.json  # 6706
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1021_cot/04_1016_qqtouxiangzhengxiang_prompt_revised/base.json  # 94,287
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1021_cot/04_1020_bianhuanweizhi_chicundaxiao/base.json  # 34,368
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1021_cot/14_1014_newwenzi_ziti/base.json  # 65,473
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_1021_cot/15_1014_newwenzi_yanse/base.json  # 61,319
+    pair_editing_3_cot_multireso: False
+    pair_editing_3_cot_ceph_base_inv: '{"zwfy": "/apdcephfs_wza/share_303937731"}'
+    pair_editing_3_cot_message_col: messages
+    pair_editing_3_cot_image_key: cache_image
+    pair_editing_3_cot_image_instruction_v3_en_key: instruction_v3_en  # updated
+    pair_editing_3_cot_image_instruction_v3_zh_key: instruction_v3_zh  # updated
+    pair_editing_3_cot_extra_think_zh_key: instruction_think
+    pair_editing_3_cot_extra_think_en_key: instruction_think
+    pair_editing_3_cot_extra_url_cos_col: url_cos
+
+  # pair editing game
+  pair_editing_game_batch_size: 1
+  pair_editing_game_task_kwargs:
+    pair_editing_game_training_image_size: 1024
+    pair_editing_game_max_length: 11008   # 1280 + 4096 + 1024 + 512 + 4096 = 11008
+    pair_editing_game_text_token_length: 512
+    pair_editing_game_system_prompt_token_length: 1280
+    pair_editing_game_system_prompt_candidates_type: mix_up@1.0
+    pair_editing_game_use_unified_system_prompt: True
+    pair_editing_game_drop_last: True
+    pair_editing_game_uncond_p: 0.1
+    pair_editing_game_attn_type: flex
+    pair_editing_game_shuffle_seed: 1422222
+    pair_editing_game_inter_type: "cot_recaption@extra_info"   # if only cot_recaption, used root of dict
+    pair_editing_game_caption_cot: 'instruction_change_short@0.4/instruction@0.05/instruction_template@0.5/instruction_short@0.05 | instruction_medium@0.2/instruction_change_medium@0.2/instruction_change_long@0.6'
+    pair_editing_game_caption_cot_prob: 0.0
+    pair_editing_game_reasoning_cot_prob: 0.0
+    pair_editing_game_patcher_names: [ 'image_ratio@0.3' ]
+    pair_editing_game_image_caption_col_probs:
+      - instruction_v3:
+          instruction_v3_src: '{"image_instruction_v3_en_key": 0.5, "image_instruction_v3_zh_key": 0.5}'
+          instruction_v3_caption_processor: pair_caption_process
+          instruction_v3_caption_sample_ratio: '{"instruction": 0.0, "instruction_template": 0.1, "instruction_short": 0.0, "instruction_medium": 0.3, "instruction_change_short":0.1, "instruction_change_medium":0.2, "instruction_change_long":0.3, "instruction_keep": 0.5}'
+  pair_editing_game_index_kwargs:
+    pair_editing_game_index_file: # 252799.0
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_1015/arrows_v0-A_pose/base.json # 36978
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_1015/arrows_v0-T_pose/base.json # 3515
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_1015/arrows_v0-三视图/base.json # 36897
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_1015/arrows_v0-深度图控制生图/base.json # 12694
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_1015/arrows_v0-白模控制生成/base.json # 2162
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_1015/arrows_v0-草图控制生成/base.json # 8406
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_1015/arrows_withtag_v1_incremental_makein20250930-A_pose-A_pose_render_v1/base.json # 52
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_1015/arrows_withtag_v1_incremental_makein20250930-lineart控制生图-lineart控制生图_v1/base.json # 31484
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_1015/arrows_withtag_v1_incremental_makein20250930-T_pose-T_pose_v1/base.json # 3784
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_1015/arrows_withtag_v1_incremental_makein20250930-三视图-三视图_api_v1/base.json # 942
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_1015/arrows_withtag_v1_incremental_makein20250930-三视图-三视图_render_v1/base.json # 133
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_1015/arrows_withtag_v1_incremental_makein20250930-深度图控制生图-深度图控制生图_v1/base.json # 17198
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_1015/arrows_withtag_v1_incremental_makein20250930-白模控制生成-白模控制生成_v1/base.json # 3
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_1015/arrows_withtag_v1-A_pose-A_pose_render_v1/base.json # 36978
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_1015/arrows_withtag_v1-lineart控制生图-lineart控制生图_v1/base.json # 6466
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_1015/arrows_withtag_v1-T_pose-T_pose_v1/base.json # 3515
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_1015/arrows_withtag_v1-三视图-三视图_render_v1/base.json # 35873
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_1015/arrows_withtag_v1-深度图控制生图-深度图控制生图_v1/base.json # 12694
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_1015/arrows_withtag_v1-白模控制生成-白模控制生成_v1/base.json # 2162
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_1015/arrows_withtag_v1-草图控制生成-草图控制生成_v1/base.json # 863
+    pair_editing_game_multireso: False
+    pair_editing_game_ceph_base_inv: '{"zwfy": "/apdcephfs_wza/share_303937731"}'
+    pair_editing_game_message_col: messages
+    pair_editing_game_image_key: cache_image
+    pair_editing_game_image_instruction_v3_en_key: instruction_v3_en  # updated
+    pair_editing_game_image_instruction_v3_zh_key: instruction_v3_zh  # updated
+    pair_editing_game_extra_think_zh_key: instruction_think
+    pair_editing_game_extra_think_en_key: instruction_think
+    pair_editing_game_extra_url_cos_col: url_cos
+
+  # pair editing game cot
+  pair_editing_game_cot_batch_size: 1
+  pair_editing_game_cot_task_kwargs:
+    pair_editing_game_cot_training_image_size: 1024
+    pair_editing_game_cot_max_length: 12288   # 1280 + 4096 + 1024 + 1792 + 4096 = 12288
+    pair_editing_game_cot_text_token_length: 512
+    pair_editing_game_cot_text_reason_token_length: 1024
+    pair_editing_game_cot_text_cot_token_length: 1792  #  256 + 1024 + 512 = 1792
+    pair_editing_game_cot_system_prompt_token_length: 1280
+    pair_editing_game_cot_system_prompt_candidates_type: mix_up@1.0
+    pair_editing_game_cot_use_unified_system_prompt: True
+    pair_editing_game_cot_drop_last: True
+    pair_editing_game_cot_uncond_p: 0.1
+    pair_editing_game_cot_attn_type: flex
+    pair_editing_game_cot_shuffle_seed: 1522222
+    pair_editing_game_cot_inter_type: "cot_recaption@extra_info"   # if only cot_recaption, used root of dict
+    pair_editing_game_cot_caption_cot: 'instruction_change_short@0.4/instruction@0.05/instruction_template@0.5/instruction_short@0.05 | instruction_medium@0.2/instruction_change_medium@0.2/instruction_change_long@0.6'
+    pair_editing_game_cot_caption_cot_prob: 1.0
+    pair_editing_game_cot_reasoning_cot_prob: 0.5
+    pair_editing_game_cot_patcher_names: [ 'image_ratio@0.3' ]
+    pair_editing_game_cot_image_caption_col_probs:
+      - instruction_v3:
+          instruction_v3_src: '{"image_instruction_v3_en_key": 0.5, "image_instruction_v3_zh_key": 0.5}'
+          instruction_v3_caption_processor: pair_caption_process
+          instruction_v3_caption_sample_ratio: '{"instruction": 0.0, "instruction_template": 0.1, "instruction_short": 0.0, "instruction_medium": 0.3, "instruction_change_short":0.1, "instruction_change_medium":0.2, "instruction_change_long":0.3, "instruction_keep": 0.5}'
+  pair_editing_game_cot_index_kwargs:
+    pair_editing_game_cot_index_file: # 252775.0
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_1015_cot/arrows_v0-A_pose/base.json # 36977
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_1015_cot/arrows_v0-T_pose/base.json # 3515
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_1015_cot/arrows_v0-三视图/base.json # 36897
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_1015_cot/arrows_v0-深度图控制生图/base.json # 12693
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_1015_cot/arrows_v0-白模控制生成/base.json # 2160
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_1015_cot/arrows_v0-草图控制生成/base.json # 8405
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_1015_cot/arrows_withtag_v1_incremental_makein20250930-A_pose-A_pose_render_v1/base.json # 52
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_1015_cot/arrows_withtag_v1_incremental_makein20250930-lineart控制生图-lineart控制生图_v1/base.json # 31474
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_1015_cot/arrows_withtag_v1_incremental_makein20250930-T_pose-T_pose_v1/base.json # 3784
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_1015_cot/arrows_withtag_v1_incremental_makein20250930-三视图-三视图_api_v1/base.json # 942
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_1015_cot/arrows_withtag_v1_incremental_makein20250930-三视图-三视图_render_v1/base.json # 133
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_1015_cot/arrows_withtag_v1_incremental_makein20250930-深度图控制生图-深度图控制生图_v1/base.json # 17192
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_1015_cot/arrows_withtag_v1_incremental_makein20250930-白模控制生成-白模控制生成_v1/base.json # 3
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_1015_cot/arrows_withtag_v1-A_pose-A_pose_render_v1/base.json # 36978
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_1015_cot/arrows_withtag_v1-lineart控制生图-lineart控制生图_v1/base.json # 6465
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_1015_cot/arrows_withtag_v1-T_pose-T_pose_v1/base.json # 3515
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_1015_cot/arrows_withtag_v1-三视图-三视图_render_v1/base.json # 35873
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_1015_cot/arrows_withtag_v1-深度图控制生图-深度图控制生图_v1/base.json # 12694
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_1015_cot/arrows_withtag_v1-白模控制生成-白模控制生成_v1/base.json # 2160
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_1015_cot/arrows_withtag_v1-草图控制生成-草图控制生成_v1/base.json # 863
+    pair_editing_game_cot_multireso: False
+    pair_editing_game_cot_ceph_base_inv: '{"zwfy": "/apdcephfs_wza/share_303937731"}'
+    pair_editing_game_cot_message_col: messages
+    pair_editing_game_cot_image_key: cache_image
+    pair_editing_game_cot_image_instruction_v3_en_key: instruction_v3_en  # updated
+    pair_editing_game_cot_image_instruction_v3_zh_key: instruction_v3_zh  # updated
+    pair_editing_game_cot_extra_think_zh_key: instruction_think
+    pair_editing_game_cot_extra_think_en_key: instruction_think
+    pair_editing_game_cot_extra_url_cos_col: url_cos
+
+  # pair multiref 2
+  pair_multiref_2_batch_size: 1
+  pair_multiref_2_task_kwargs:
+    pair_multiref_2_training_image_size: 1024
+    pair_multiref_2_max_length: 21248   # 1280 + (4096 + 1024) * 3 + 512 + 4096 = 21248
+    pair_multiref_2_text_token_length: 512
+    pair_multiref_2_system_prompt_token_length: 1280
+    pair_multiref_2_system_prompt_candidates_type: mix_up@1.0
+    pair_multiref_2_use_unified_system_prompt: True
+    pair_multiref_2_drop_last: True
+    pair_multiref_2_uncond_p: 0.1
+    pair_multiref_2_attn_type: flex
+    pair_multiref_2_shuffle_seed: 1622222
+    pair_multiref_2_inter_type: "cot_recaption@extra_info"   # if only cot_recaption, used root of dict
+    pair_multiref_2_caption_cot: 'instruction@1.0 | instruction_relation@1.0'
+    pair_multiref_2_caption_cot_prob: 0.0
+    pair_multiref_2_reasoning_cot_prob: 0.0
+    pair_multiref_2_patcher_names: [ 'image_ratio@0.3' ]
+    pair_multiref_2_image_caption_col_probs:
+      - instruction_v1:
+          instruction_v1_src: '{"image_instruction_v1_zh_key": 0.5, "image_instruction_v1_en_key": 0.5}'
+          instruction_v1_caption_processor: pair_caption_process
+          instruction_v1_caption_sample_ratio: '{"instruction": 0.5, "instruction_rewritten": 0.5}'
+  pair_multiref_2_index_kwargs:
+    pair_multiref_2_index_file: # 634235.0
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_shuping_jiaofu_1009/yuansuronghe-renbiaotongguo-geshixiufu/base_filter_23ref.json # 5159  
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_shuping_jiaofu_1009/1011-yuansuronghe-batch2/base.json # 9463                             
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_shuping_jiaofu_1009/1011-jububianji-caizhitihuan/base.json # 21501                        
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017/huoshan_expression/base.json # 94825                                        
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017/huoshan_expression_exchange/base.json # 94825                               
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017_fixed/style_transfer_0826/base.json # 9593                                        
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017_fixed/style_transfer_0829/base.json # 3681 # TODO                                    
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017_fixed/style_transfer_0830/base.json # 230                                         
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017_fixed/style_transfer_valid_4o_0815/base.json # 13828
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017_fixed/style_transfer_valid_4o_0816/base.json # 3803
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017_fixed/style_transfer_valid_seededit3_0815/base.json # 11419
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017_fixed/style_transfer_valid_seededit3_0816/base.json # 8521
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017_fixed/style_transfer_valid_style_lora_0816/base.json # 1843
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017/word_material/base.json # 6752
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017/word_material_exchange/base.json # 6752
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017_fixed/gen4_style_reference/base.json # 16292 # TODO   
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017_v2/1013-caizhitihuan-batch2_download_fba2a0aaae534abb8020b2fa86dead43/base.json # 34968
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017_v2/1013-cankaotubianhuan_download_87117ef5d983456aa4b37105c55cbb2d/base.json # 7284
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017_v2/1014-caizhitihuan_download_612506a42ec54d56ac11bfb685714ff6/base.json # 23638
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017_v2/1014-changjingronghe_download_648ccae4b23549908e440d646fbe50f3/base.json # 4300
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017_v2/1014-fenggeqianyi-daicankaotu_download_aafdcc84d4ce479d9feda2d1b410d71a/base.json # 18446
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017_v2/1014-yuansubianhuan_download_00bf7b6dc5f446af896ea8bee0d9a24c/base.json # 46152
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017_v2/1014-yuansuronghe-batch1_download_4ed6ffecbde1488a80470674f35d6d7f/base.json # 15235
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017_v2/p9_control_pose/base.json # 48489 # TODO   
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017_v2/p9_control_RGBcontrol/base.json # 9988 # TODO   
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017_v2/p9_control_tradition/base.json # 86969 # TODO   
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_multiref_1015_fix_cache_image/arrows_v0-材质迁移/base.json # 558
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_multiref_1015_fix_cache_image/arrows_v0-武器换装/base.json # 106
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_multiref_1015_fix_cache_image/arrows_v0-白模参考生成/base.json # 5923
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_multiref_1015_fix_cache_image/arrows_v0-草图参考生成/base.json # 2458
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_multiref_1015_fix_cache_image/arrows_v0-角色上色/base.json # 389
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_multiref_1015_fix_cache_image/arrows_v0-角色换装/base.json # 1305
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_multiref_1015_fix_cache_image/arrows_withtag_v1_incremental_makein20250930-lineart参考生图-lineart参考生图_v1/base.json # 6068
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_multiref_1015_fix_cache_image/arrows_withtag_v1_incremental_makein20250930-武器换装-武器换装_v0/base.json # 2
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_multiref_1015_fix_cache_image/arrows_withtag_v1_incremental_makein20250930-深度图参考生图-深度图参考生图_v1/base.json # 2684
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_multiref_1015_fix_cache_image/arrows_withtag_v1_incremental_makein20250930-白模参考生成-白模参考生成_v1/base.json # 2
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_multiref_1015_fix_cache_image/arrows_withtag_v1_incremental_makein20250930-草图参考生成-草图参考生成_v1/base.json # 2
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_multiref_1015_fix_cache_image/arrows_withtag_v1_incremental_makein20250930-角色上色-角色上色_v3/base.json # 15
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_multiref_1015_fix_cache_image/arrows_withtag_v1-材质迁移-材质迁移_v2/base.json # 564
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_multiref_1015_fix_cache_image/arrows_withtag_v1-武器换装-武器换装_v0/base.json # 64
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_multiref_1015_fix_cache_image/arrows_withtag_v1-武器换装-武器换装_v1/base.json # 41
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_multiref_1015_fix_cache_image/arrows_withtag_v1-白模参考生成-白模参考生成_v1/base.json # 5948
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_multiref_1015_fix_cache_image/arrows_withtag_v1-草图参考生成-草图参考生成_v1/base.json # 2451
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_multiref_1015_fix_cache_image/arrows_withtag_v1-角色上色-角色上色_v1/base.json # 365
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_multiref_1015_fix_cache_image/arrows_withtag_v1-角色上色-角色上色_v2/base.json # 31
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_multiref_1015_fix_cache_image/arrows_withtag_v1-角色换装-角色换装_v1/base.json # 1303
+    pair_multiref_2_multireso: False
+    pair_multiref_2_ceph_base_inv: '{"zwfy": "/apdcephfs_wza/share_303937731"}'
+    pair_multiref_2_message_col: messages
+    pair_multiref_2_image_key: cache_image
+    pair_multiref_2_image_instruction_v1_zh_key: instruction_v1_zh  # updated
+    pair_multiref_2_image_instruction_v1_en_key: instruction_v1_en  # updated
+    pair_multiref_2_extra_think_zh_key: instruction_think
+    pair_multiref_2_extra_think_en_key: instruction_think
+    pair_multiref_2_extra_url_cos_col: url_cos
+
+  # pair multiref 2 cot
+  pair_multiref_2_cot_batch_size: 1
+  pair_multiref_2_cot_task_kwargs:
+    pair_multiref_2_cot_training_image_size: 1024
+    pair_multiref_2_cot_max_length: 22528   # 1280 + (4096 + 1024) * 3 + 1792 + 4096 = 22528
+    pair_multiref_2_cot_text_token_length: 512
+    pair_multiref_2_cot_text_reason_token_length: 1024
+    pair_multiref_2_cot_text_cot_token_length: 1792  #  256 + 1024 + 512 = 1792
+    pair_multiref_2_cot_system_prompt_token_length: 1280
+    pair_multiref_2_cot_system_prompt_candidates_type: mix_up@1.0
+    pair_multiref_2_cot_use_unified_system_prompt: True
+    pair_multiref_2_cot_drop_last: True
+    pair_multiref_2_cot_uncond_p: 0.1
+    pair_multiref_2_cot_attn_type: flex
+    pair_multiref_2_cot_shuffle_seed: 1722222
+    pair_multiref_2_cot_inter_type: "cot_recaption@extra_info"   # if only cot_recaption, used root of dict
+    pair_multiref_2_cot_caption_cot: 'instruction@1.0 | instruction_relation@1.0'
+    pair_multiref_2_cot_caption_cot_prob: 1.0
+    pair_multiref_2_cot_reasoning_cot_prob: 0.5
+    pair_multiref_2_cot_patcher_names: [ 'image_ratio@0.3' ]
+    pair_multiref_2_cot_image_caption_col_probs:
+      - instruction_v1:
+          instruction_v1_src: '{"image_instruction_v1_zh_key": 0.5, "image_instruction_v1_en_key": 0.5}'
+          instruction_v1_caption_processor: pair_caption_process
+          instruction_v1_caption_sample_ratio: '{"instruction": 0.5, "instruction_rewritten": 0.5}'
+  pair_multiref_2_cot_index_kwargs:
+    pair_multiref_2_cot_index_file: # 630803.0
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_shuping_jiaofu_1009/yuansuronghe-renbiaotongguo-geshixiufu/base_filter_23ref.json # 5159  
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_shuping_jiaofu_1009/1011-yuansuronghe-batch2/base.json # 9463                             
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_shuping_jiaofu_1009/1011-jububianji-caizhitihuan/base.json # 21501                        
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017_cot/huoshan_expression/base.json # 94812                                    
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017_cot/huoshan_expression_exchange/base.json # 94811                           
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017_fixed_cot/style_transfer_0826/base.json # 9588                                    
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017_fixed_cot/style_transfer_0829/base.json # 3680 # TODO                              
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017_fixed_cot/style_transfer_0830/base.json # 230                                     
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017_fixed_cot/style_transfer_valid_4o_0815/base.json # 13827 
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017_fixed_cot/style_transfer_valid_4o_0816/base.json # 3803
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017_fixed_cot/style_transfer_valid_seededit3_0815/base.json # 11416
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017_fixed_cot/style_transfer_valid_seededit3_0816/base.json # 8519
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017_fixed_cot/style_transfer_valid_style_lora_0816/base.json # 1842
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017_cot/word_material/base.json # 6752
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017_cot/word_material_exchange/base.json # 6752
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017_fixed_cot/gen4_style_reference/base.json # 16276 # TODO    
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017_v2_cot/1013-caizhitihuan-batch2_download_fba2a0aaae534abb8020b2fa86dead43/base.json # 34968
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017_v2_cot/1013-cankaotubianhuan_download_87117ef5d983456aa4b37105c55cbb2d/base.json # 7284
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017_v2_cot/1014-caizhitihuan_download_612506a42ec54d56ac11bfb685714ff6/base.json # 23638
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017_v2_cot/1014-changjingronghe_download_648ccae4b23549908e440d646fbe50f3/base.json # 4299
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017_v2_cot/1014-fenggeqianyi-daicankaotu_download_aafdcc84d4ce479d9feda2d1b410d71a/base.json # 18444
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017_v2_cot/1014-yuansubianhuan_download_00bf7b6dc5f446af896ea8bee0d9a24c/base.json # 46152
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017_v2_cot/1014-yuansuronghe-batch1_download_4ed6ffecbde1488a80470674f35d6d7f/base.json # 15226
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017_v2_cot/p9_control_pose/base.json # 48443 # TODO    
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017_v2_cot/p9_control_RGBcontrol/base.json # 9988 # TODO    
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_multiref_1017_v2_cot/p9_control_tradition/base.json # 86933 # TODO    
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_multiref_1015_cot_fix_cache_image/arrows_v0-材质迁移/base.json # 533
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_multiref_1015_cot_fix_cache_image/arrows_v0-武器换装/base.json # 102
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_multiref_1015_cot_fix_cache_image/arrows_v0-白模参考生成/base.json # 5568
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_multiref_1015_cot_fix_cache_image/arrows_v0-草图参考生成/base.json # 2314
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_multiref_1015_cot_fix_cache_image/arrows_v0-角色上色/base.json # 371
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_multiref_1015_cot_fix_cache_image/arrows_v0-角色换装/base.json # 1228
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_multiref_1015_cot_fix_cache_image/arrows_withtag_v1_incremental_makein20250930-lineart参考生图-lineart参考生图_v1/base.json # 5661
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_multiref_1015_cot_fix_cache_image/arrows_withtag_v1_incremental_makein20250930-武器换装-武器换装_v0/base.json # 1
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_multiref_1015_cot_fix_cache_image/arrows_withtag_v1_incremental_makein20250930-深度图参考生图-深度图参考生图_v1/base.json # 2510
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_multiref_1015_cot_fix_cache_image/arrows_withtag_v1_incremental_makein20250930-白模参考生成-白模参考生成_v1/base.json # 2
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_multiref_1015_cot_fix_cache_image/arrows_withtag_v1_incremental_makein20250930-草图参考生成-草图参考生成_v1/base.json # 2
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_multiref_1015_cot_fix_cache_image/arrows_withtag_v1_incremental_makein20250930-角色上色-角色上色_v3/base.json # 15
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_multiref_1015_cot_fix_cache_image/arrows_withtag_v1-材质迁移-材质迁移_v2/base.json # 539
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_multiref_1015_cot_fix_cache_image/arrows_withtag_v1-武器换装-武器换装_v0/base.json # 62
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_multiref_1015_cot_fix_cache_image/arrows_withtag_v1-武器换装-武器换装_v1/base.json # 39
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_multiref_1015_cot_fix_cache_image/arrows_withtag_v1-白模参考生成-白模参考生成_v1/base.json # 5231
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_multiref_1015_cot_fix_cache_image/arrows_withtag_v1-草图参考生成-草图参考生成_v1/base.json # 2308
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_multiref_1015_cot_fix_cache_image/arrows_withtag_v1-角色上色-角色上色_v1/base.json # 357
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_multiref_1015_cot_fix_cache_image/arrows_withtag_v1-角色上色-角色上色_v2/base.json # 31
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_game_multiref_1015_cot_fix_cache_image/arrows_withtag_v1-角色换装-角色换装_v1/base.json # 123
+    pair_multiref_2_cot_multireso: False
+    pair_multiref_2_cot_ceph_base_inv: '{"zwfy": "/apdcephfs_wza/share_303937731"}'
+    pair_multiref_2_cot_message_col: messages
+    pair_multiref_2_cot_image_key: cache_image
+    pair_multiref_2_cot_image_instruction_v1_zh_key: instruction_v1_zh  # updated
+    pair_multiref_2_cot_image_instruction_v1_en_key: instruction_v1_en  # updated
+    pair_multiref_2_cot_extra_think_zh_key: instruction_think
+    pair_multiref_2_cot_extra_think_en_key: instruction_think
+    pair_multiref_2_cot_extra_url_cos_col: url_cos
+
+  # pair 3 ref cot
+  pair_3_ref_cot_batch_size: 1
+  pair_3_ref_cot_task_kwargs:
+    pair_3_ref_cot_training_image_size: 1024
+    pair_3_ref_cot_max_length: 22528   # 1280 + (4096 + 1024) * 3 + 1792 + 4096 = 22528
+    pair_3_ref_cot_text_token_length: 512
+    pair_3_ref_cot_text_reason_token_length: 1024
+    pair_3_ref_cot_text_cot_token_length: 1792  #  256 + 1024 + 512 = 1792
+    pair_3_ref_cot_system_prompt_token_length: 1280
+    pair_3_ref_cot_system_prompt_candidates_type: mix_up@1.0
+    pair_3_ref_cot_use_unified_system_prompt: True
+    pair_3_ref_cot_drop_last: True
+    pair_3_ref_cot_uncond_p: 0.1
+    pair_3_ref_cot_attn_type: flex
+    pair_3_ref_cot_shuffle_seed: 1822222
+    pair_3_ref_cot_inter_type: "cot_recaption@extra_info"   # if only cot_recaption, used root of dict
+    pair_3_ref_cot_caption_cot: 'instruction@1.0 | instruction_relation@1.0'
+    pair_3_ref_cot_caption_cot_prob: 1.0
+    pair_3_ref_cot_reasoning_cot_prob: 0.5
+    pair_3_ref_cot_patcher_names: [ 'image_ratio@0.3' ]
+    pair_3_ref_cot_image_caption_col_probs:
+      - instruction_v1:
+          instruction_v1_src: '{"image_instruction_v1_zh_key": 0.5, "image_instruction_v1_en_key": 0.5}'
+          instruction_v1_caption_processor: pair_caption_process
+          instruction_v1_caption_sample_ratio: '{"instruction": 0.5, "instruction_rewritten": 0.5}'
+  pair_3_ref_cot_index_kwargs:
+    pair_3_ref_cot_index_file:
+      - /apdcephfs_wza/share_303937731/0_public_datasets/edit_data_3ref_1021_cot/util_1021_3refs/base.json  # 12,506
+    pair_3_ref_cot_multireso: False
+    pair_3_ref_cot_ceph_base_inv: '{"zwfy": "/apdcephfs_wza/share_303937731"}'
+    pair_3_ref_cot_message_col: messages
+    pair_3_ref_cot_image_key: cache_image
+    pair_3_ref_cot_image_instruction_v1_zh_key: instruction_v1_zh  # updated
+    pair_3_ref_cot_image_instruction_v1_en_key: instruction_v1_en  # updated
+    pair_3_ref_cot_extra_think_zh_key: instruction_think
+    pair_3_ref_cot_extra_think_en_key: instruction_think
+    pair_3_ref_cot_extra_url_cos_col: url_cos
+
+  # Dataloader
+  dataloader_params:
+    num_workers: 4
+    pin_memory: True
+    prefetch_factor: 4
+    persistent_workers: True

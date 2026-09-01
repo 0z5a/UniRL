@@ -1,0 +1,295 @@
+# IMPORTANT NOTE: Write PTM args in YAML format:
+# 0. all arguments specified here are one-one correspondences with PTM arguments; un-specified arguments use PTM default values.
+# 1. arguments like '--hidden-size=2560' are written as 'hidden-size: 2560' (see below, note the space after colon).
+# 2. YAML format is like a tree, and only the leaf nodes are considered as arguments.
+#    Non-leaf nodes and structures are ignored, so arguments can be grouped as you like.
+# 3. arguments like '--sequence-parallel' can be written as 'enabled: \n  - sequence-parallel' (see below, note the indent).
+#    multiple `enabled` arguments in a same sub-tree must be put in a `enabled` list (see below for an example).
+
+__GLOBAL_VARS__:
+  _DEFAULT_OUTPUT_PATH: ""
+  DATA_PATH: "/root/dummy_data"
+  OUTPUT_PATH: ${oc.env:OUTPUT_PATH,${__GLOBAL_VARS__._DEFAULT_OUTPUT_PATH}}
+
+MODEL_ARGS:
+  model-name: diffusion.leo-2-dense-3b
+  model-structure: LeoModel
+  text-branch-model-name: diffusion.leo-2-dense-3b-txt-branch
+
+  init-device: meta  # [cpu, cuda, meta] pure torch specific
+  autocast-dtype: bf16  # pure torch specific
+  enabled:
+    - bf16
+    - main-params-fp32
+    - fsdp-cast-forward-inputs
+  noise-dtype: fp32
+
+  # num-layers: 4
+  patch-size: 1
+
+  max-position-embeddings: 8192
+  seq-length: ${MODEL_ARGS.max-position-embeddings}
+
+EXTRA_MODEL_ARGS:
+  enabled:
+    - use-vae
+    - use-text-encoder
+    # - use-repa
+
+  # vae-type: 16x16x4-48c-hy-v3
+  # vae-latent-dim: 48
+  # vae-precision: fp32
+  # vae-autocast-dtype: fp16
+  # vae-encode-type: mode
+  vae-type: 16x16-64c-hy3.5
+  vae-latent-dim: 64
+  vae-precision: fp32
+  vae-autocast-dtype: fp32
+  img-latent-in-channels: 64
+  vit-type: anyres-vit-for-a3b
+
+  text-encoder-type: qwen-3-vl-8b-instruct
+  __FROZEN__TEXT_ENCODER_ARGS:
+    text_encoder_prompt_template: li-dit-encode-image-qwen-vl-v2
+    text_encoder_text_len: 1024
+    text_encoder_precision: fp16  # TODO(leo2): should be bf16
+    text_encoder_hidden_state_skip_layer: 2
+    text_encoder_uncond_token: "<|im_end|>"
+
+    repa_encoder_type: DINOv3
+    repa_encoder_precision: fp16  # TODO(leo2): should be fp32
+
+    img_proj_ndim: 2
+
+
+DENOISE_ARGS:
+  denoise-type: flow
+  flow-path-type: linear
+  flow-predict-type: velocity
+  flow-snr-type: lognorm
+  flow-reverse: True
+  flow-shift: 1.65
+
+
+DATA_ARGS:
+  tokenizer-type: NullTokenizer
+  dataloader-type: external
+  tokenizer-name: qwen-3-vl-8b-instruct
+  tokenizer-class: tokenization_qwen_multimodal.Qwen2TokenizerFast
+  conv-template: qwen-vl-v2-li-dit
+  sequence-template: instruct
+  uncond-length: single
+
+  # extra args provider
+  shuffle-by: dataset
+  combined-iterator-sampling-mode: fixed
+  cos-base:
+    - "/cos_nj1/share_302243067 -> /apdcephfs_wza_common/hunyuan_data/{stem2}"
+  enabled:
+    - cos-file-is-encrypted
+    - enable-resample
+    - drop-resampled-samples
+    - fast-shuffle
+    # - no-shuffle
+    - use-numpy-indices
+
+  # vae
+  vae-image-token-length: 256
+  # -- resolution group kwargs
+  reso-base-size: 256
+  reso-align: 16
+  reso-preset: sdxl
+
+  modality: [ vae_image ]
+  gen-image-template: dit_it
+  sampling-probs: '{"t2i": 0.5, "t2i_ocr": 0.5}'
+
+  # Dataloader
+  num-workers: 4
+  prefetch-factor: 2
+
+
+__FROZEN__DATA_ARGS:
+  t2i_task_kwargs:
+    # required
+    batch_size: 4
+    modality: [ vae_image ]
+    max_token_length: 842   # 512+74+256
+    attn_type: flash
+    shuffle_seed: 1111
+    random_crop: False
+    # dit specific
+    prompt_first: False   # Put text tokens after image tokens for adapting flash attention.
+    remove_unused_images: False
+    extra_num_tokens: 0
+    crop_start: 74
+    # sp
+    system_prompt_type: li-dit-encode-image-qwen-vl-v2
+    system_prompt_token_length: 100
+    # image caption
+    uncond_p: 0.0
+    prompt_token_length: 512
+    image_caption_resource:
+      - caption_v5:
+          caption_v5_src: '{"caption_v5_en_col": 0.5, "caption_v5_zh_col": 0.5}'
+          caption_v5_caption_processor: caption_process_v4
+          caption_v5_caption_sample_ratio: '{"long_long_caption":0.455,"long_caption":0.195,"medium_caption":0.1,"short_caption":0.25,"style":1.0,"shot_type":0.1}'
+    reasoning_token_length: 0
+    cot_kwargs:
+      recaption_cot_prob: 0
+      recaption_cot: 'short_caption@0.4/medium_caption@0.4/long_caption@0.2 | long_caption@0.000001/long_long_caption@0.999999'
+      reasoning_cot_prob: 0
+  t2i_index_kwargs:
+    index_file:
+      - /apdcephfs_wza/0_public_datasets/hymm_3.5/CT_tmp_0320/ct_t2i_nonocr/base.json
+      # - /apdcephfs_wza/0_public_datasets/hymm_3.5/stage1-256px-data/t2i/base_shuffle_seed42.json
+    online_bucketing: True
+    reso_bucket_kwargs:
+      base_size: ${DATA_ARGS.reso-base-size}
+      align: ${DATA_ARGS.reso-align}
+      preset: ${DATA_ARGS.reso-preset}
+    ceph_base_inv: '{"wza": "/apdcephfs_wza/"}'
+    verbose: 1
+    index_columns:
+      image_col: cache_image
+      caption_v5_en_col: caption_en
+      caption_v5_zh_col: caption_zh
+      url_cos_col: url_cos
+
+
+  t2i_ocr_task_kwargs:
+    # required
+    batch_size: 4
+    modality: [ vae_image ]
+    max_token_length: 842   # 512+74+256
+    attn_type: flash
+    shuffle_seed: 1111
+    random_crop: False
+    # dit specific
+    prompt_first: False   # Put text tokens after image tokens for adapting flash attention.
+    remove_unused_images: False
+    extra_num_tokens: 0
+    crop_start: 74
+    # sp
+    system_prompt_type: li-dit-encode-image-qwen-vl-v2
+    system_prompt_token_length: 100
+    # image caption
+    uncond_p: 0.0
+    prompt_token_length: 512
+    image_caption_resource:
+      - caption_v5:
+          caption_v5_src: '{"caption_v5_en_col": 0.5, "caption_v5_zh_col": 0.5}'
+          caption_v5_caption_processor: caption_process_v4
+          caption_v5_caption_sample_ratio: '{"long_long_caption":0.999999,"long_caption":0.000001,"style":1.0,"shot_type":0.1}'
+    reasoning_token_length: 0
+    cot_kwargs:
+      recaption_cot_prob: 0
+      recaption_cot: 'short_caption@0.4/medium_caption@0.4/long_caption@0.2 | long_caption@0.000001/long_long_caption@0.999999'
+      reasoning_cot_prob: 0
+  t2i_ocr_index_kwargs:
+    index_file:
+      - /apdcephfs_wza/0_public_datasets/hymm_3.5/CT_tmp_0320/ct_t2i_ocr/base.json
+    online_bucketing: True
+    reso_bucket_kwargs:
+      base_size: ${DATA_ARGS.reso-base-size}
+      align: ${DATA_ARGS.reso-align}
+      preset: ${DATA_ARGS.reso-preset}
+    ceph_base_inv: '{"wza": "/apdcephfs_wza/"}'
+    verbose: 1
+    index_columns:
+      image_col: cache_image
+      caption_v5_en_col: caption_en
+      caption_v5_zh_col: caption_zh
+      url_cos_col: url_cos
+
+
+TRAINING_ARGS:
+  micro-batch-size: 1
+  global-batch-size: ${oc.env:GLOBAL_BATCH_SIZE,8}
+  lr: 1e-4
+  train-iters: 100_000_000
+  lr-decay-iters: 100_000_000
+  lr-decay-style: cosine
+  optimizer: adam
+  adam-beta1: 0.9
+  adam-beta2: 0.999
+  min-lr: 1e-4
+  weight-decay: 0.0001
+  lr-warmup-iters: 1000
+  clip-grad: 1.0
+  eval-interval: 1000
+  eval-iters: 0
+  seed: 42
+    # - optimizer-cpu-offload
+    # - use-precision-aware-optimizer
+  __FROZEN__OPTIMIZER_ARGS:  # pure torch specific
+    optimizer_params:
+      lr: ${TRAINING_ARGS.lr}
+      betas:
+      - ${TRAINING_ARGS.adam-beta1}
+      - ${TRAINING_ARGS.adam-beta2}
+      weight_decay: ${TRAINING_ARGS.weight-decay}
+      eps: 0.00000001
+  __FROZEN__LR_SCHEDULER_ARGS:  # pure torch specific
+    lr_scheduler_params:
+      num_warmup_steps: ${TRAINING_ARGS.lr-warmup-iters}
+      num_training_steps: ${TRAINING_ARGS.train-iters}
+      min_lr: ${TRAINING_ARGS.min-lr}
+
+  image-loss-weight: 1.0
+
+
+PERFORMANCE_ARGS:
+  manual-gc-interval: 5
+#  recompute-granularity: full
+  enabled:
+    - manual-gc
+    - use-flash-attn
+    # - moe-enable-deepep
+    - enable-experimental
+    # - moe-permute-fusion
+    # - moe-router-fusion
+    # - moe-shared-expert-overlap
+    - overlap-grad-reduce
+    - overlap-param-gather
+
+
+MODEL_PARALLEL_ARGS:
+  tensor-model-parallel-size: 1
+  pipeline-model-parallel-size: 1
+  expert-model-parallel-size: 1
+  enabled:
+    - use-distributed-optimizer
+    # - tp-comm-overlap
+    # - sequence-parallel
+
+
+CHECKPOINT_ARGS:
+  ckpt-format: torch_dist
+  dist-ckpt-strictness: log_all
+  save-interval: 5_000
+  save: ${__GLOBAL_VARS__.OUTPUT_PATH}/ckpt
+#  load: /apdcephfs_nj10/share_301739632/jarvizhang/pure_torch/debug_trans/2026.02.28-14.57.32/global_step-1000/hf
+#  ckpt: /apdcephfs_nj10/share_301739632/jarvizhang/pure_torch/debug_trans/2026.02.28-14.57.32/global_step-1000/hf
+  enabled:
+    - resume
+    - use-dist-ckpt
+#    - no-load-optim
+#    - no-load-rng
+#    - finetune
+    - ckpt-fully-parallel-load
+    - ckpt-fully-parallel-save
+
+
+LOGGING_ARGS:
+  log-interval: 1
+  tensorboard-dir: ${__GLOBAL_VARS__.OUTPUT_PATH}/events
+  saved-training-batch-dir: ${__GLOBAL_VARS__.OUTPUT_PATH}/saved_training_data
+  save-n-training-data: 4
+  enabled:
+    - log-timers-to-tensorboard
+    - log-memory-to-tensorboard
+    - log-num-zeros-in-grad
+    - log-params-norm
+    - log-validation-ppl-to-tensorboard
+    - log-throughput

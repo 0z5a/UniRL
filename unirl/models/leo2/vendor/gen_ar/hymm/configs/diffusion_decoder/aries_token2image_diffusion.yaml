@@ -1,0 +1,133 @@
+training_config:
+  trainer_name: Token2ImageDiffusionTrainer
+  micro_batch_size: 4
+  gradient_accumulation_steps: 1
+  global_batch_size: null
+  global_seed: 3409
+  zero_stage: 2
+  log_every: 1
+  tensorboard: True
+  gradient_checkpoint: False
+  gradient_checkpoint_layers: -1
+  use_compile: False
+  benchmark: False
+
+  overlap_comm: True
+  reduce_bucket_size: 5e7
+
+  max_training_steps: 1_000_000_000
+  ckpt_every: 1000
+
+  init_save: False
+  final_save: True
+
+  resume: null
+  resume_dataloader: False
+  no_load_optim_states: False
+  no_load_ema: False
+  default_rank0_ss: False
+  fix_lr_scheduler: False
+
+  validation_at_steps: []
+  validation_every: -1
+  validation_metrics: []
+  validation_metrics_save_image: False
+
+sampling_config:
+  image_size: 256
+  image_seq_len: 1024
+  load_key: module
+  batch_size: 1
+  evaluation_metrics: []
+  evaluation_metrics_save_image: False
+  interactive: False
+
+model_config:
+  model_name: Aries-B/2
+  precision: bf16
+  autocast_dtype: bf16
+  media_vocab_size: 0
+
+  model_kwargs:
+    in_channels: 64
+    patch_size: 1
+    rope_dim_list: null
+    rope_theta: 256
+    condition_projection: "linear"
+    condition_dim: 1152
+    use_attention_mask: True
+
+    vision_encoder_max_num_patches: 1024
+    vision_encoder:
+      vision_encoder_type: siglip2-so400m-patch16-naflex
+      vision_encoder_precision: fp32
+      vision_encoder_autocast_dtype: fp32
+      vision_encoder_freeze: True
+
+extra_model_config:
+  vae_type: 32x32-64c-hy_v2
+  vae_precision: fp32
+  vae_autocast_dtype: fp32
+  vae_latent_dim: 32
+
+
+diffusion_config:
+  # ddpm_noise_schedule: "scaled_linear"
+  # ddpm_predict_type: "v_prediction"
+  # enforce_zero_terminal_snr: False
+  # ddpm_learn_sigma: False
+  # ddpm_beta_start: 0.00085
+  # ddpm_beta_end: 0.012
+  # ddpm_noise_offset: 0.0
+  # ddpm_shift_snr: 1.0
+  denoise_type: "flow"
+  flow_path_type: "linear"
+  flow_predict_type: "velocity"
+  flow_loss_weight: null
+  flow_train_eps: null
+  flow_sample_eps: null
+  flow_snr_type: "lognorm"
+  flow_reverse: True
+  flow_solver: "euler"
+  flow_shift: 1.0
+  sample_flow_shift: 1.0
+  use_flux_shift: False
+  flux_base_shift: 0.5
+  flux_max_shift: 1.15
+
+
+optimizer_config:
+  optimizer_name: AdamW
+  gradient_clipping: 1.0
+  optimizer_params:
+    lr: 0.00001
+    betas: [0.9, 0.95]
+    eps: 0.000001
+    weight_decay: 0.01
+
+lr_scheduler_config:
+  lr_schedule: WarmupCosineLR
+  lr_scheduler_params:
+    warmup_num_steps: 5000
+    cos_min_ratio: 1.0
+    total_num_steps: 1_000_000_000
+
+
+dataloader_config:
+  training_image_size: 512
+  index_file:
+    - /apdcephfs_nj8/share_301739632/jarvizhang/workspace/hymm_ar/__data/pretrain/t2i/demo_mb512.json
+  multireso: True
+  mix_scale: False
+  anchor_size: 512
+  fast_shuffle: True
+  index_kwargs:
+    index_strategy: uniform
+    index_probability: null
+    caption_sample_ratio: null
+    image_key: cache_image
+  dataloader_params:
+    num_workers: 4
+    pin_memory: True
+    prefetch_factor: 4
+  

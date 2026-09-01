@@ -1,0 +1,471 @@
+# IMPORTANT NOTE: Write PTM args in YAML format:
+# 0. all arguments specified here are one-one correspondences with PTM arguments; un-specified arguments use PTM default values.
+# 1. arguments like '--hidden-size=2560' are written as 'hidden-size: 2560' (see below, note the space after colon).
+# 2. YAML format is like a tree, and only the leaf nodes are considered as arguments.
+#    Non-leaf nodes and structures are ignored, so arguments can be grouped as you like.
+# 3. arguments like '--sequence-parallel' can be written as 'enabled: \n  - sequence-parallel' (see below, note the indent).
+#    multiple `enabled` arguments in a same sub-tree must be put in a `enabled` list (see below for an example).
+
+__GLOBAL_VARS__:
+  _DEFAULT_OUTPUT_PATH: "/apdcephfs_zwfy/share_303937731/jarvizhang/pure_torch/hunyuan_moe_a13b_example"
+  DATA_PATH: "/root/dummy_data"
+  OUTPUT_PATH: ${oc.env:OUTPUT_PATH,${__GLOBAL_VARS__._DEFAULT_OUTPUT_PATH}}
+
+MODEL_ARGS:
+  model-name: multimodal.hunyuan-moe-a3b-vlm-gemini
+  model-structure: HunyuanMultimodal
+
+  # Mcore required.
+  num-layers: 48
+  hidden-size: 2048
+  num-attention-heads: 32
+  ffn-hidden-size: 6912
+  kv-channels: 128
+  max-position-embeddings: 23040
+  seq-length: ${MODEL_ARGS.max-position-embeddings}
+  vocab-size: 126309
+  normalization: RMSNorm
+  num-query-groups: 4
+  num-experts: 128
+  init-method-std: 0.012757759
+  moe-router-topk: 8
+  moe-ffn-hidden-size: 768
+  moe-shared-expert-intermediate-size: 768
+  #moe-layer-freq: '([0]+[1]*1)'
+  moe-layer-freq: '([0]+[1]*47)'
+  moe-router-load-balancing-type: aux_loss
+  moe-token-dispatcher-type: flex
+  moe-router-dtype: fp32
+  attention-dropout: 0.0
+  hidden-dropout: 0.0
+
+  init-device: meta  # [cpu, cuda, meta] pure torch specific
+  autocast-dtype: bf16  # pure torch specific
+  enabled:
+      # common
+    - bf16
+      # mcore
+    - qk-layernorm
+    - group-query-attention
+    - swiglu
+    - use-mcore-models
+    - moe-grouped-gemm
+    - use-hunyuan-arch
+    - disable-bias-linear
+      # torch
+    - split-qkv
+    - split-gate-and-up
+
+  patch-size: 1
+  rope-type-extended: "2d"
+  moe-impl: hunyuan
+  cond-image-type: vae_vit
+  cond-token-attn-type: full_causal
+
+
+EXTRA_MODEL_ARGS:
+  enabled:
+    - use-vae
+    - use-vit
+#    - vit-frozen
+  vae-type: 16x16x4-32c-hy-image
+  vae-latent-dim: 32
+  vae-precision: fp32
+  vae-autocast-dtype: fp16
+  vit-type: anyres-vit-for-a3b
+
+
+DENOISE_ARGS:
+  denoise-type: flow
+  flow-path-type: linear
+  flow-predict-type: velocity
+  flow-snr-type: lognorm
+  flow-reverse: True
+  flow-shift: 1.0
+
+
+DATA_ARGS:
+  tokenizer-type: NullTokenizer
+  dataloader-type: external
+
+  # extra args provider
+  tokenizer-name: hunyuan-moe-a3b-multimodal-v3
+  tokenizer-class: tokenization_hunyuan_multimodal.HunyuanMultimodalTokenizerFast
+  shuffle-by: dataset
+  fast-shuffle: True
+  use-numpy-indices: True
+  add-timestep-token: True
+  add-image-shape-token: True
+  use-front-boi-token: True
+  use-front-src-image: True
+  sequence-template: pretrain
+  combined-iterator-sampling-mode: fixed
+  cos-base:
+    - "/cos_nj1/share_302243067 -> /apdcephfs_wza/milesjyang/{bucket}"
+    - "/cos_zw1/share_303793872 -> /apdcephfs_wza/milesjyang/{bucket}"
+    - "/apdcephfs_zwfy/share_303937731 -> /apdcephfs_wza/share_303937731"
+  cos-file-is-encrypted: True
+  enable-resample: True
+  ignore-start-tokens: []
+
+  # vae
+  vae-image-token-length: 256
+  # -- resolution group kwargs
+  reso-base-size: 256
+  reso-align: 16
+  reso-preset: arc33
+  # vit
+  vit-image-token-length: 4354  # 2048*2048/32/32+(2048*4/32)+2
+
+  modality: [ text, vae_image, vit_image ]
+  sampling-probs: '{"t2i": 0.2, "t2i_long_long": 0.2, "lm": 0.2, "mmu_caption": 0.2, "mmu": 0.2}'
+#  sampling-probs: '{"lm": 1.0}'
+
+  # Dataloader
+  num-workers: 4
+  prefetch-factor: 2
+
+
+__FROZEN__DATA_ARGS:
+  t2i_task_kwargs:
+    # required
+    batch_size: 8
+    modality: [ vae_image ]
+    max_token_length: 512
+    attn_type: flex
+    shuffle_seed: 1111
+    # image caption
+    uncond_p: 0.1
+    prompt_token_length: 256
+    patcher_names: []
+    instruct_type: none
+    image_caption_resource:
+      - caption_v3_2_ip:
+          caption_v3_2_ip_src: '{"caption_v3_2_ip_en_col": 0.5, "caption_v3_2_ip_zh_col": 0.5}'
+          caption_v3_2_ip_caption_processor: caption_process_v3
+          caption_v3_2_ip_caption_sample_ratio: '{"long_long_caption":0.455,"long_caption":0.195,"medium_caption":0.1,"short_caption":0.25,"background":0.1,"style":0.7,"shot_type":0.1}'
+          caption_v3_2_ip_caption_processor_kwargs: '{"force_use_style_tag":true}'
+          caption_v3_2_ip_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3_2_ocr:
+          caption_v3_2_ocr_src: '{"caption_v3_2_ocr_en_col": 0.5, "caption_v3_2_ocr_zh_col": 0.5}'
+          caption_v3_2_ocr_caption_processor: caption_process_v3
+          caption_v3_2_ocr_caption_sample_ratio: '{"long_long_caption":0.99,"long_caption":0.001,"medium_caption":0.003,"short_caption":0.006,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_2_ocr_caption_processor_kwargs: '{"force_use_style_tag":true}'
+          caption_v3_2_ocr_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3_2:
+          caption_v3_2_src: '{"caption_v3_2_en_col": 0.5, "caption_v3_2_zh_col": 0.5}'
+          caption_v3_2_caption_processor: caption_process_v3
+          caption_v3_2_caption_sample_ratio: '{"long_long_caption":0.455,"long_caption":0.195,"medium_caption":0.1,"short_caption":0.25,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_2_caption_processor_kwargs: '{"force_use_style_tag":true}'
+          caption_v3_2_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3_1:
+          caption_v3_1_src: '{"caption_v3_1_en_col": 0.5, "caption_v3_1_zh_col": 0.5}'
+          caption_v3_1_caption_processor: caption_process_v3
+          caption_v3_1_caption_sample_ratio: '{"long_long_caption":0.455,"long_caption":0.195,"medium_caption":0.1,"short_caption":0.25,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_1_caption_processor_kwargs: '{"force_use_style_tag":true}'
+          caption_v3_1_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3:
+          caption_v3_src: '{"caption_v3_en_col": 0.5, "caption_v3_zh_col": 0.5}'
+          caption_v3_caption_processor: caption_process_v3
+          caption_v3_caption_sample_ratio: '{"long_long_caption":0.455,"long_caption":0.195,"medium_caption":0.1,"short_caption":0.25,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_caption_processor_kwargs: '{"force_use_style_tag":true}'
+          caption_v3_extra_processor: [ 'fix_style', 'filter_shot', 'inject_style_v2' ]
+    reasoning_token_length: 0
+    cot_kwargs:
+      recaption_cot_prob: 0
+      recaption_cot: 'short_caption@0.4/medium_caption@0.4/long_caption@0.2 | long_caption@0.000001/long_long_caption@0.999999'
+      reasoning_cot_prob: 0
+    # system prompt
+    system_prompt_token_length: 0
+    system_prompt_type: none
+  t2i_index_kwargs:
+    index_file:
+      - /apdcephfs_wza/jarvizhang/share/example_index/mb256_ct_uniform_distribution.json
+    multireso: True
+    ceph_base_inv: '{"prefix": "/apdcephfs_wza/share_303937731"}'
+    verbose: 1
+    index_columns:
+      image_col: cache_image
+      caption_v3_2_ocr_en_col: caption_v3_2_ocr_en
+      caption_v3_2_ocr_zh_col: caption_v3_2_ocr_zh
+      caption_v3_2_en_col: caption_v3_2_en
+      caption_v3_2_zh_col: caption_v3_2_zh
+      caption_v3_1_en_col: caption_v3_1_en
+      caption_v3_1_zh_col: caption_v3_1_zh
+      caption_v3_en_col: caption_v3_en
+      caption_v3_zh_col: caption_v3_zh
+      caption_v3_2_ip_en_col: caption_v3_2_ip_en
+      caption_v3_2_ip_zh_col: caption_v3_2_ip_zh
+      style_v2_col: style_v2
+      url_cos_col: url_cos
+
+  t2i_long_long_task_kwargs:
+    # required
+    batch_size: 4
+    modality: [ vae_image ]
+    max_token_length: 1024
+    attn_type: flex
+    shuffle_seed: 2222
+    # image caption
+    uncond_p: 0.1
+    prompt_token_length: 768
+    patcher_names: []
+    instruct_type: none
+    image_caption_resource:
+      - caption_v3_2_ip:
+          caption_v3_2_ip_src: '{"caption_v3_2_ip_en_col": 0.5, "caption_v3_2_ip_zh_col": 0.5}'
+          caption_v3_2_ip_caption_processor: caption_process_v3
+          caption_v3_2_ip_caption_sample_ratio: '{"long_long_caption":0.999999,"long_caption":0.000001,"background":0.1,"style":0.7,"shot_type":0.1}'
+          caption_v3_2_ip_caption_processor_kwargs: '{"force_use_style_tag":true}'
+          caption_v3_2_ip_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3_2_ocr:
+          caption_v3_2_ocr_src: '{"caption_v3_2_ocr_en_col": 0.5, "caption_v3_2_ocr_zh_col": 0.5}'
+          caption_v3_2_ocr_caption_processor: caption_process_v3
+          caption_v3_2_ocr_caption_sample_ratio: '{"long_long_caption":0.999999,"long_caption":0.000001,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_2_ocr_caption_processor_kwargs: '{"force_use_style_tag":true}'
+          caption_v3_2_ocr_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3_2:
+          caption_v3_2_src: '{"caption_v3_2_en_col": 0.5, "caption_v3_2_zh_col": 0.5}'
+          caption_v3_2_caption_processor: caption_process_v3
+          caption_v3_2_caption_sample_ratio: '{"long_long_caption":0.999999,"long_caption":0.000001,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_2_caption_processor_kwargs: '{"force_use_style_tag":true}'
+          caption_v3_2_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3_1:
+          caption_v3_1_src: '{"caption_v3_1_en_col": 0.5, "caption_v3_1_zh_col": 0.5}'
+          caption_v3_1_caption_processor: caption_process_v3
+          caption_v3_1_caption_sample_ratio: '{"long_long_caption":0.999999,"long_caption":0.000001,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_1_caption_processor_kwargs: '{"force_use_style_tag":true}'
+          caption_v3_1_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3:
+          caption_v3_src: '{"caption_v3_en_col": 0.5, "caption_v3_zh_col": 0.5}'
+          caption_v3_caption_processor: caption_process_v3
+          caption_v3_caption_sample_ratio: '{"long_long_caption":0.999999,"long_caption":0.000001,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_caption_processor_kwargs: '{"force_use_style_tag":true}'
+          caption_v3_extra_processor: [ 'fix_style', 'filter_shot', 'inject_style_v2' ]
+    reasoning_token_length: 0
+    cot_kwargs:
+      recaption_cot_prob: 0
+      recaption_cot: 'short_caption@0.4/medium_caption@0.4/long_caption@0.2 | long_caption@0.000001/long_long_caption@0.999999'
+      reasoning_cot_prob: 0
+    # system prompt
+    system_prompt_token_length: 0
+    system_prompt_type: none
+  t2i_long_long_index_kwargs:
+    index_file:
+      - /apdcephfs_wza/jarvizhang/share/example_index/mb256_ct_uniform_distribution.json
+    multireso: True
+    ceph_base_inv: '{"prefix": "/apdcephfs_wza/share_303937731"}'
+    verbose: 1
+    index_columns:
+      image_col: cache_image
+      caption_v3_2_ocr_en_col: caption_v3_2_ocr_en
+      caption_v3_2_ocr_zh_col: caption_v3_2_ocr_zh
+      caption_v3_2_en_col: caption_v3_2_en
+      caption_v3_2_zh_col: caption_v3_2_zh
+      caption_v3_1_en_col: caption_v3_1_en
+      caption_v3_1_zh_col: caption_v3_1_zh
+      caption_v3_en_col: caption_v3_en
+      caption_v3_zh_col: caption_v3_zh
+      caption_v3_2_ip_en_col: caption_v3_2_ip_en
+      caption_v3_2_ip_zh_col: caption_v3_2_ip_zh
+      style_v2_col: style_v2
+      url_cos_col: url_cos
+
+  lm_task_kwargs:
+    # required
+    batch_size: 1
+    modality: [ text, vae_image ]   # Add vae_image for prerunning vae
+    max_token_length: 4096
+    input_max_token_length: 3072
+    attn_type: flex
+    shuffle_seed: 3333
+    # task specific
+    data_format: pure_text  # [pure_text, conversation]
+    pre_extract_tokens: False  # [True, False]
+    # system prompt
+    system_prompt_token_length: 0
+    system_prompt_type: none
+  lm_index_kwargs:
+    index_file:
+       - /apdcephfs_wza/jarvizhang/share/example_index/llm_0to11_10m_demo.yaml.json
+    ceph_base_inv: '{"prefix": "/apdcephfs_wza"}'
+    index_columns:
+      text_col: text  # [text, tokens]
+      conversation_col: conversations
+    verbose: 1
+
+  mmu_caption_task_kwargs:
+    # required
+    batch_size: 1
+    modality: [ vae_image, vit_image, text ]
+    max_token_length: 5504  # 256 vae + 4354 vision encoder + 768 text
+    input_max_token_length: 512   # 256 for special tokens and output text
+    attn_type: flex
+    shuffle_seed: 4444
+    # task specific
+    data_format: captioning   # [captioning, conversation]
+    drop_last: True
+    short_keys: [ short_caption, medium_caption ]
+    image_caption_resource:
+      - caption_v3_2_ocr:
+          caption_v3_2_ocr_src: '{"caption_v3_2_ocr_en_col": 0.5, "caption_v3_2_ocr_zh_col": 0.5}'
+          caption_v3_2_ocr_caption_processor: caption_process_v3
+          caption_v3_2_ocr_caption_sample_ratio: '{"long_long_caption":0.99,"long_caption":0.01,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_2_ocr_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3_2:
+          caption_v3_2_src: '{"caption_v3_2_en_col": 0.5, "caption_v3_2_zh_col": 0.5}'
+          caption_v3_2_caption_processor: caption_process_v3
+          caption_v3_2_caption_sample_ratio: '{"long_long_caption":0.3,"long_caption":0.35,"medium_caption":0.25,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_2_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3_1:
+          caption_v3_1_src: '{"caption_v3_1_en_col": 0.5, "caption_v3_1_zh_col": 0.5}'
+          caption_v3_1_caption_processor: caption_process_v3
+          caption_v3_1_caption_sample_ratio: '{"long_long_caption":0.3,"long_caption":0.35,"medium_caption":0.25,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_1_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3:
+          caption_v3_src: '{"caption_v3_en_col": 0.5, "caption_v3_zh_col": 0.5}'
+          caption_v3_caption_processor: caption_process_v3
+          caption_v3_caption_sample_ratio: '{"long_long_caption":0.3,"long_caption":0.35,"medium_caption":0.25,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_extra_processor: [ 'fix_style', 'filter_shot', 'inject_style_v2' ]
+    # system prompt
+    system_prompt_token_length: 0
+    system_prompt_type: none
+  mmu_caption_index_kwargs:
+    index_file:
+      - /apdcephfs_wza/jarvizhang/share/example_index/base_ct_uniform_distribution.json
+    ceph_base_inv: '{"prefix": "/apdcephfs_wza/share_303937731"}'
+    verbose: 2
+    index_columns:
+      image_col: cache_image
+      caption_v3_2_ocr_en_col: caption_v3_2_ocr_en
+      caption_v3_2_ocr_zh_col: caption_v3_2_ocr_zh
+      caption_v3_2_en_col: caption_v3_2_en
+      caption_v3_2_zh_col: caption_v3_2_zh
+      caption_v3_1_en_col: caption_v3_1_en
+      caption_v3_1_zh_col: caption_v3_1_zh
+      caption_v3_en_col: caption_v3_en
+      caption_v3_zh_col: caption_v3_zh
+      style_v2_col: style_v2
+      url_cos_col: url_cos
+
+  mmu_task_kwargs:
+    # required
+    batch_size: 1
+    modality: [ vae_image, vit_image, text ]
+    max_token_length: 5504  # 256 vae + 4354 vision encoder + 768 text
+    input_max_token_length: 512   # 256 for special tokens and output text
+    attn_type: flex
+    shuffle_seed: 5555
+    # task specific
+    data_format: message  # [message, captioning]
+    # system prompt
+    system_prompt_token_length: 0
+    system_prompt_type: none
+  mmu_index_kwargs:
+    index_file:
+      - /apdcephfs_wza/share_303937731/1_public_models/hymm_ar_assets/dataset/mmu_index/opensource.json
+    ceph_base_inv: '{"nj10": "/apdcephfs_wza/share_303937731"}'
+    verbose: 2
+    index_columns:
+      message_col: messages
+    index_keys:
+      image_key: cache_image
+      url_cos_key: url_cos
+
+
+TRAINING_ARGS:
+  micro-batch-size: 1
+  global-batch-size: ${oc.env:GLOBAL_BATCH_SIZE,8}
+  lr: 1e-4
+  train-iters: 100_000_000
+  lr-decay-iters: 100_000_000
+  lr-decay-style: cosine
+  optimizer: adam
+  adam-beta1: 0.9
+  adam-beta2: 0.95
+  min-lr: 1e-4
+  weight-decay: 0.1
+  lr-warmup-iters: 2000
+  clip-grad: 1.0
+  eval-interval: 1000
+  eval-iters: 0
+  seed: 1234
+    # - optimizer-cpu-offload
+    # - use-precision-aware-optimizer
+  __FROZEN__OPTIMIZER_ARGS:  # pure torch specific
+    optimizer_params:
+      lr: ${TRAINING_ARGS.lr}
+      betas:
+      - ${TRAINING_ARGS.adam-beta1}
+      - ${TRAINING_ARGS.adam-beta2}
+      weight_decay: ${TRAINING_ARGS.weight-decay}
+      eps: 0.000001
+  __FROZEN__LR_SCHEDULER_ARGS:  # pure torch specific
+    lr_scheduler_params:
+      num_warmup_steps: ${TRAINING_ARGS.lr-warmup-iters}
+      num_training_steps: ${TRAINING_ARGS.train-iters}
+      min_lr: ${TRAINING_ARGS.min-lr}
+
+  # loss related
+  image-loss-weight: 5.0
+  moe-aux-loss-coeff: 0.01
+  enabled:
+    - moe-aux-loss
+
+
+PERFORMANCE_ARGS:
+  manual-gc-interval: 5
+  #recompute-granularity: full
+  enabled:
+    - manual-gc
+    - use-flash-attn
+    - moe-enable-deepep
+    - enable-experimental
+    - moe-permute-fusion
+    - moe-router-fusion
+    # - moe-shared-expert-overlap
+    - overlap-grad-reduce
+    - overlap-param-gather
+
+
+MODEL_PARALLEL_ARGS:
+  tensor-model-parallel-size: 1
+  pipeline-model-parallel-size: 1
+  expert-model-parallel-size: 8
+  enabled:
+    - use-distributed-optimizer
+    # - tp-comm-overlap
+    # - sequence-parallel
+
+
+CHECKPOINT_ARGS:
+  ckpt-format: torch_dist
+  dist-ckpt-strictness: log_all
+  save-interval: 10_000
+  save: ${__GLOBAL_VARS__.OUTPUT_PATH}/ckpt
+#  load: /apdcephfs_zwfy/share_303937731/1_public_models/hymm_ar_assets/pretrained_llm/raw_vlm/hunyuan_a3b_vlm_pretrain_stage2_500B/hf
+#  ckpt: ${CHECKPOINT_ARGS.load}
+  key-mapping: []
+  enabled:
+    - resume
+    - use-dist-ckpt
+#    - no-load-optim
+#    - no-load-rng   # saving/loading rng is not supported yet
+#    - finetune
+    - ckpt-fully-parallel-load
+    - ckpt-fully-parallel-save
+
+
+LOGGING_ARGS:
+  log-interval: 1
+  tensorboard-dir: ${__GLOBAL_VARS__.OUTPUT_PATH}/events
+  saved-training-batch-dir: ${__GLOBAL_VARS__.OUTPUT_PATH}/saved_training_data
+  save-n-training-data: 16
+  enabled:
+    - log-timers-to-tensorboard
+    - log-memory-to-tensorboard
+    - log-num-zeros-in-grad
+    - log-params-norm
+    - log-validation-ppl-to-tensorboard
+    - log-throughput
+

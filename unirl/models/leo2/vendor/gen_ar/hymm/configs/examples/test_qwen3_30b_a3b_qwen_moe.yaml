@@ -1,0 +1,209 @@
+# IMPORTANT NOTE: Write PTM args in YAML format:
+# 0. all arguments specified here are one-one correspondences with PTM arguments; un-specified arguments use PTM default values.
+# 1. arguments like '--hidden-size=2560' are written as 'hidden-size: 2560' (see below, note the space after colon).
+# 2. YAML format is like a tree, and only the leaf nodes are considered as arguments.
+#    Non-leaf nodes and structures are ignored, so arguments can be grouped as you like.
+# 3. arguments like '--sequence-parallel' can be written as 'enabled: \n  - sequence-parallel' (see below, note the indent).
+#    multiple `enabled` arguments in a same sub-tree must be put in a `enabled` list (see below for an example).
+
+__GLOBAL_VARS__:
+  _DEFAULT_OUTPUT_PATH: "/apdcephfs_nj8/share_301739632/milesjyang/workspace/hunyuan_multimoda_gen_ar/my_out"
+  DATA_PATH: "/root/dummy_data"
+  OUTPUT_PATH: ${oc.env:OUTPUT_PATH,${__GLOBAL_VARS__._DEFAULT_OUTPUT_PATH}}
+
+MODEL_ARGS:
+  model-name: multimodal.qwen-vl-30b-a3b-instruct
+  model-structure: HunyuanMultimodal
+
+  # Mcore required.
+#  num-layers: 4
+#  hidden-size: 4096
+#  num-attention-heads: 32
+#  ffn-hidden-size: 3072
+#  max-position-embeddings: 6144
+#  seq-length: ${MODEL_ARGS.max-position-embeddings}
+#  vocab-size: 133120
+
+  init-device: meta  # [cpu, cuda, meta] pure torch specific
+  autocast-dtype: bf16  # pure torch specific
+  enabled:
+    - bf16
+    - split-gate-and-up
+
+  patch-size: 1
+  split-qkv: True
+  # rope-type-extended: "default"
+  moe-impl: qwen3
+  rope-type-extended: "interleaved_mrope"
+  cond-image-type: vit
+  cond-token-attn-type: causal
+
+
+EXTRA_MODEL_ARGS:
+  enabled:
+    - use-vit
+    - vit-frozen
+  vit-type: qwen3vl-vit-for-30b-a3b
+
+
+DENOISE_ARGS:
+  denoise-type: flow
+  flow-path-type: linear
+  flow-predict-type: velocity
+  flow-snr-type: lognorm
+  flow-reverse: True
+  flow-shift: 1.0
+
+
+DATA_ARGS:
+  tokenizer-type: NullTokenizer
+  dataloader-type: external
+
+  # extra args provider
+  tokenizer-name: qwen3-vl-30b-a3b-instruct
+  tokenizer-class: tokenization_qwen_multimodal.QwenMultimodalTokenizerFast
+  shuffle-by: dataset
+  fast-shuffle: True
+  use-numpy-indices: True
+  add-timestep-token: True
+  add-image-shape-token: True
+  use-front-boi-token: True
+  use-front-src-image: True
+  sequence-template: instruct
+  combined-iterator-sampling-mode: fixed
+  enable-resample: True
+  ignore-start-tokens: []
+
+  # vit
+  vit-image-token-length: 1024
+
+  modality: [ text, vit_image ]
+  sampling-probs: '{"lm": 1.0}'
+
+  # Dataloader
+  num-workers: 4
+  prefetch-factor: 2
+
+
+__FROZEN__DATA_ARGS:
+  lm_task_kwargs:
+    # required
+    batch_size: 1
+    modality: [ text ]
+    max_token_length: 4096
+    input_max_token_length: 3072
+    attn_type: flex
+    shuffle_seed: 3333
+    # task specific
+    data_format: pure_text  # [pure_text, conversation]
+    pre_extract_tokens: False  # [True, False]
+    # system prompt
+    system_prompt_token_length: 0
+    system_prompt_type: none
+  lm_index_kwargs:
+    index_file:
+       - /apdcephfs_zwfy/share_303937731/1_public_models/hymm_ar_assets/dataset/t2t_index/hy_text_v2_p4_10m_demo.json
+#       - /apdcephfs_zwfy2/share_303937731/jarvizhang/share/hyimage3_data/lm/base.json
+    index_columns:
+      text_col: text  # [text, tokens]
+      conversation_col: conversations
+    verbose: 1
+
+
+TRAINING_ARGS:
+  micro-batch-size: 1
+  global-batch-size: ${oc.env:GLOBAL_BATCH_SIZE,8}
+  lr: 1e-4
+  train-iters: 100_000_000
+  lr-decay-iters: 100_000_000
+  lr-decay-style: cosine
+  optimizer: adam
+  adam-beta1: 0.9
+  adam-beta2: 0.95
+  min-lr: 3e-5
+  weight-decay: 0.1
+  lr-warmup-iters: 2000
+  clip-grad: 1.0
+  eval-interval: 1000
+  eval-iters: 0
+  seed: 1234
+    # - optimizer-cpu-offload
+    # - use-precision-aware-optimizer
+  __FROZEN__OPTIMIZER_ARGS:  # pure torch specific
+    optimizer_params:
+      lr: ${TRAINING_ARGS.lr}
+      betas:
+      - ${TRAINING_ARGS.adam-beta1}
+      - ${TRAINING_ARGS.adam-beta2}
+      weight_decay: ${TRAINING_ARGS.weight-decay}
+      eps: 0.000001
+  __FROZEN__LR_SCHEDULER_ARGS:  # pure torch specific
+    lr_scheduler_params:
+      num_warmup_steps: ${TRAINING_ARGS.lr-warmup-iters}
+      num_training_steps: ${TRAINING_ARGS.train-iters}
+      min_lr: ${TRAINING_ARGS.min-lr}
+
+  # loss related
+  image-loss-weight: 5.0
+  moe-aux-loss-coeff: 0.01
+  enabled:
+    - moe-aux-loss
+
+
+PERFORMANCE_ARGS:
+  manual-gc-interval: 5
+  recompute-granularity: full
+  enabled:
+    - manual-gc
+    - use-flash-attn
+    # - moe-enable-deepep
+    - enable-experimental
+    # - moe-permute-fusion
+    # - moe-router-fusion
+    # - moe-shared-expert-overlap
+    - overlap-grad-reduce
+    - overlap-param-gather
+
+
+MODEL_PARALLEL_ARGS:
+  tensor-model-parallel-size: 1
+  pipeline-model-parallel-size: 1
+  expert-model-parallel-size: 1
+  enabled:
+    - use-distributed-optimizer
+    # - tp-comm-overlap
+    # - sequence-parallel
+
+
+CHECKPOINT_ARGS:
+  ckpt-format: torch_dist
+  dist-ckpt-strictness: log_all
+  save-interval: 10_000
+  save: ${__GLOBAL_VARS__.OUTPUT_PATH}/ckpt
+  load: ${oc.env:ASSETS_BASE}/pretrained_llm/Qwen3-VL-30B-A3B-Instruct/
+  ckpt: ${CHECKPOINT_ARGS.load}
+  key-mapping:
+    - 'model\.language_model\.layers\.(\d+)\.self_attn\.q_norm:model.layers.\1.self_attn.query_layernorm'
+    - 'model\.language_model\.layers\.(\d+)\.self_attn\.k_norm:model.layers.\1.self_attn.key_layernorm'
+    - 'language_model\.:'
+    - 'model\.visual:vit'
+  enabled:
+    - fuse-experts-in-load
+    - resume
+    - use-dist-ckpt
+    - ckpt-fully-parallel-load
+    - ckpt-fully-parallel-save
+
+
+LOGGING_ARGS:
+  log-interval: 1
+  tensorboard-dir: ${__GLOBAL_VARS__.OUTPUT_PATH}/events
+  saved-training-batch-dir: ${__GLOBAL_VARS__.OUTPUT_PATH}/saved_training_data
+  save-n-training-data: 16
+  enabled:
+    - log-timers-to-tensorboard
+    - log-memory-to-tensorboard
+    - log-num-zeros-in-grad
+    - log-params-norm
+    - log-validation-ppl-to-tensorboard
+    - log-throughput

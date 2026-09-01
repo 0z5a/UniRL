@@ -1,0 +1,630 @@
+# IMPORTANT NOTE: Write PTM args in YAML format:
+# 0. all arguments specified here are one-one correspondences with PTM arguments; un-specified arguments use PTM default values.
+# 1. arguments like '--hidden-size=2560' are written as 'hidden-size: 2560' (see below, note the space after colon).
+# 2. YAML format is like a tree, and only the leaf nodes are considered as arguments.
+#    Non-leaf nodes and structures are ignored, so arguments can be grouped as you like.
+# 3. arguments like '--sequence-parallel' can be written as 'enabled: \n  - sequence-parallel' (see below, note the indent).
+#    multiple `enabled` arguments in a same sub-tree must be put in a `enabled` list (see below for an example).
+#
+# === DATA REFRESH (v2) ===
+# 仅相对 config.yaml 修改了 DATA_ARGS / __FROZEN__DATA_ARGS：
+#   1) sampling-probs 扩到 8 个任务（新增 LLM-search / VLM-search / UMM-search）
+#   2) pair_T2I_sft 新增 OCRase72k zh + en
+#   3) pair_umm_search 路径更新到 merged_0509_hy35_clean2_vitPrefix_base.json
+#   4) pair_I2I_sft 的"新数据"段 路径改为 new_stage2/dantu, new_stage2/duotu
+#   下面带 [v2] 注释的位置即为本次改动点。
+
+__GLOBAL_VARS__:
+  _DEFAULT_OUTPUT_PATH: "/apdcephfs_wza3/hyimage35_sft_ckpt/"
+  DATA_PATH: "/root/dummy_data"
+  OUTPUT_PATH: ${oc.env:OUTPUT_PATH,${__GLOBAL_VARS__._DEFAULT_OUTPUT_PATH}}
+
+MODEL_ARGS:
+  model-name: multimodal.hunyuan3-moe-a3b-gemini-mot-gen-a10b
+  model-structure: HunyuanMultimodal
+
+  # Mcore required.
+  num-layers: 48
+  hidden-size: 2048
+  num-attention-heads: 32
+  ffn-hidden-size: 6912
+  kv-channels: 128
+  # max-position-embeddings: 131072 # 128k
+  # max-position-embeddings: 262144 # 256k
+  max-position-embeddings: 153600 # 150k
+  # max-position-embeddings: 163840 # 160k
+  # max-position-embeddings: 358400 # 350k
+  seq-length: ${MODEL_ARGS.max-position-embeddings}
+  vocab-size: 126309
+  normalization: RMSNorm
+  num-query-groups: 4
+  num-experts: 128
+  init-method-std: 0.006
+  moe-router-topk: 8
+  moe-ffn-hidden-size: 768
+  moe-shared-expert-intermediate-size: 768
+  moe-layer-freq: '([0]+[1]*47)'
+  # moe-layer-freq: '([0]+[1]*1)'
+  moe-token-dispatcher-type: flex
+  moe-router-dtype: fp32
+  attention-dropout: 0.0
+  hidden-dropout: 0.0
+  # gen a10b
+  hidden-size-mot-gen: 3200
+  moe-topk-mot-gen: 16
+  # other
+  moe-router-load-balancing-type: seq_aux_loss
+  moe-aux-loss-coeff: 0.0001
+  moe-router-bias-update-rate: 0.001
+  moe-router-score-function: sigmoid
+  position-embedding-type: rope
+  rotary-base: 11158840 
+  embedding-init-method-std: 6e-3  # ds-v3 init std
+  moe-router-topk-scaling-factor: 2.826
+  transformer-impl: local
+  extra-weight-decay-param-substrings:
+    - "layernorm"
+    - "layer_norm"
+
+  init-device: meta  # [cpu, cuda, meta] pure torch specific
+  autocast-dtype: bf16  # pure torch specific
+  enabled:
+      # common
+    - bf16
+    # mcore
+    - use-mcore-models
+    - group-query-attention
+    - swiglu
+    - disable-bias-linear
+    - qk-layernorm
+    - moe-grouped-gemm
+    - moe-use-legacy-grouped-gemm
+    - use-pre-qk-norm  #先qk-norm再rope
+    - untie-embeddings-and-output-weights #untie
+    - embedding-no-weight-decay
+    - use-unified-init-method # output_layer unify init
+    - moe-router-enable-expert-bias
+    - disable-flash-attn-3
+    - moe-router-enable-expert-bias-zero-mean-update
+    - use-gate-torch-mm
+    # torch
+    - split-qkv
+    - split-gate-and-up
+    # mot
+    - use-mot
+    # - mot-und-frozen
+    # - mot-embed-norm-lm-head-frozen
+    - use-global-diffusion-loss-average
+    - use-global-discrete-loss-average
+    - dist-ckpt-save-pre-mcore-014  # 沿用旧逻辑，不拆分weights_w和weights_v
+
+  patch-size: 1
+  moe-impl: ep_moe
+  gate-impl: deepseek
+  rope-type-extended: "interleaved_mrope"
+  cond-image-type: vae_vit
+  cond-token-attn-type: full
+
+
+EXTRA_MODEL_ARGS:
+  enabled:
+    - use-vae
+    - use-vit
+    # - vit-frozen
+    - vit-recompute
+    - vae-recompute
+    - text-loss-recompute
+  vae-type: 16x16-128c-flux2
+  vae-latent-dim: 128
+  vae-precision: fp32
+  vae-autocast-dtype: fp32
+  vit-type: anyres-vit-for-hy3-a3b
+  compute-text-loss-chunk-num: 4
+
+DENOISE_ARGS:
+  denoise-type: flow
+  flow-path-type: linear
+  flow-predict-type: velocity
+  flow-snr-type: lognorm
+  flow-reverse: True
+  use-flux2-shift: True
+
+DATA_ARGS:
+  tokenizer-type: NullTokenizer
+  dataloader-type: external
+
+  # extra args provider
+  tokenizer-name: hunyuan3-moe-a3b-hymm-v3-5
+  tokenizer-class: tokenization_hy3mm_v3_5.Hunyuan3MultimodalV3d5TokenizerFast
+  conv-template: hunyuan3-moe-a3b-gemini-mot-gen-a10b
+  sequence-template: pretrain
+  gen-image-template: default
+  shuffle-by: dataset
+  combined-iterator-sampling-mode: fixed
+  cos-base:
+    - "/cos_nj1/share_302243067 -> /apdcephfs_wza_common/hunyuan_data/{stem2}"
+  ignore-start-tokens: []
+  enabled:
+    - cos-file-is-encrypted
+    - enable-resample
+    - fast-shuffle
+    # - first-epoch-no-shuffle
+    - use-numpy-indices
+    - add-timestep-token
+    - add-tw-th-token
+    - timestep-vae-full-attn
+    - use-front-src-image
+    # - independent-seq-length
+    - use-rope-sample-offsets
+
+  # vae
+  vae-image-token-length: 16384 # 2048*2048/16/16
+  # -- resolution group kwargs
+  reso-base-size: 1024
+  reso-max-size: 8192
+  reso-strategy: anyres
+  reso-max-area: 4194304 # 2048*2048
+  reso-align: 16
+  # vit
+  vit-image-token-length: 4352  # 2048*2048/32/32+(2048*4/32)+2
+
+  modality: [ text, vae_image, vit_image ]
+  dummy-type: ["ts_proj", "vit"]
+
+  # 图像生成/编辑为主 (pair_T2I_sft 0.90 + pair_T2I_search 0.00 + pair_I2I_sft 0.00 + pair_cot_no_gen 0.00 = 0.90)
+  # 理解类 (pair_llm_sft 0.09 + pair_llm_search 0.01 + pair_vlm_sft 0.00 = 0.10)
+  # agent/搜索 (pair_llm_search 0.01 + pair_T2I_search 0.00 = 0.01)
+  # sampling-probs: '{"pair_llm_sft": 0.1, "pair_llm_search": 0.00, "pair_vlm_sft": 0.00, "pair_T2I_sft": 0.90, "pair_T2I_search": 0.00, "pair_I2I_sft": 0.00, "pair_cot_no_gen": 0.00}'
+  sampling-probs: '{"interleave_LLM_sft": 0.10, "pair_llm_search": 0.00, "pair_vlm_sft": 0.00, "interleave_T2I_sft": 0.90, "pair_T2I_search": 0.00, "pair_I2I_sft": 0.00, "pair_cot_no_gen": 0.00}'
+
+  und-token-type: [ "bos", "text", "boi", "vit", "eoi", "joint_image_sep", "eoi", "eos", "pad", "vae_info" ]
+  gen-token-type: [ "vae" ]
+
+  # Dataloader
+  num-workers: 24
+  prefetch-factor: 12
+
+  # pack-buffer-factor: 1 # TODO
+
+
+__FROZEN__DATA_ARGS:
+
+  # ===================== 1. LLM SFT =====================
+  interleave_LLM_sft_task_kwargs:
+    # required
+    batch_size: 1
+    modality: [ text, vae_image ]
+    max_token_length: 66560
+    input_max_token_length: 66560 # 8192
+    attn_type: flex
+    drop_last: True
+    sequence_pack: True
+    shuffle_seed: 42
+    # task specific
+    # system prompt
+    system_prompt_token_length: 66560 # 4096
+    system_prompt_type: none
+    # gen_text_token_length: 66560 # 17480
+    interleave_only_last_round: False
+  interleave_LLM_sft_index_kwargs:
+    index_file:
+      # LLM-SFT-260527
+      - /apdcephfs_wza_common/hyimage35_sft_data/llm_sft_260527/fast/base_ct.json # 166,007
+      - /apdcephfs_wza_common/hyimage35_sft_data/llm_sft_260527/think/base_ct.json # 182,323
+      # 348330
+    ceph_base_inv: '{"wza": "/apdcephfs_wza_common/hyimage35_sft_data"}'
+    verbose: 2
+    index_columns:
+      message_col: messages
+
+
+  # ===================== 3. T2I SFT =====================
+  # 这里不能有t2i，因为会触发代码中的逻辑，走到t2i数据的分支，而不是pair的分支
+  interleave_T2I_sft_task_kwargs:
+    # required
+    # drop_text_loss_prob: 0
+    # drop_wh_token_loss_prob: 0
+    batch_size: 1
+    modality: [ vae_image, text, vit_image ]
+    max_token_length: 66560
+    input_max_token_length: 4096
+    attn_type: flex
+    shuffle_seed: 42
+    sequence_pack: True
+    # system prompt
+    system_prompt_token_length: 2048
+    system_prompt_type: none
+    # gen_text_token_length: 8192 # max new tokens for text response
+    # drop_last_message: True
+    interleave_only_last_round: False
+  interleave_T2I_sft_index_kwargs:
+    index_file:
+      # 通用 + 风格 + IP + OCR设计感 + OCR信息图
+      - /apdcephfs_wza_common/hyimage35_sft_data/t2i_realistic/0610_nocot/base_ct.json # 16.3w
+      - /apdcephfs_wza_common/hyimage35_sft_data/t2i_style/0610_nocot/base_ct.json # 7.3w
+      - /apdcephfs_wza_common/hyimage35_sft_data/t2i_ip/0610_nocot/base_ct.json # 5.3w
+      - /apdcephfs_wza_common/hyimage35_sft_data/t2i_meixue_ocr/0610_nocot/base_ct.json # 4w
+      - /apdcephfs_wza_common/hyimage35_sft_data/t2i_dense_ocr/0610_nocot/base_ct.json #573
+    ceph_base_inv: '{"wza": "/apdcephfs_wza_common/hyimage35_sft_data"}'
+    verbose: 2
+    index_columns:
+      message_col: messages
+    index_keys:
+      image_key: cache_image
+      url_cos_key: url_cos
+
+  # ===================== 4. I2I SFT =====================
+  # pair_I2I_sft_task_kwargs:
+  #   # required
+  #   drop_text_loss_prob: 0
+  #   drop_wh_token_loss_prob: 0
+  #   batch_size: 1
+  #   modality: [ vae_image, vit_image, text ]
+  #   max_token_length: 66560
+  #   input_max_token_length: 4096
+  #   attn_type: flex
+  #   shuffle_seed: 42
+  #   sequence_pack: True
+  #   # system prompt
+  #   system_prompt_token_length: 2048
+  #   gen_text_token_length: 8192 # max new tokens for text response
+  #   drop_last_message: True
+  # pair_I2I_sft_index_kwargs:
+  #   index_file:
+  #     # 通用元宝
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/general_data/new_stage2_new_cot_dantu_260526_fixreso_0605/base.json # 62,498  
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/general_data/new_stage2_new_cot_duotu23_260526_fixreso_0605/base.json # 787
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/general_data/new_stage2_new_cot_duotu45_260526_fixreso_0605/base.json # 79
+  #     # 63364
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/general_data/old_stage2_v2_new_cot_1_ref_img_260526_fixreso_0605/base.json # 69,652
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/general_data/old_stage2_v2_new_cot_2_ref_img_260526_fixreso_0605/base.json # 24,409
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/general_data/old_stage2_v2_new_cot_3_ref_img_260526_fixreso_0605/base.json # 480
+  #     # 94541
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/general_data/ct_sample_0609_fix_0609/base.json # 134216 ct sample
+  #     # 134216
+
+  #     # 人像编辑
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/human_editing/caimai_shengao_shencai_suxing_16k_260605_fixreso_0606/base.json # 14952                                                     
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/human_editing/caimai_bizi_4k_260605_fixreso_0606/base.json # 3255                                                                         
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/human_editing/caimai_meimao_3k_260605_fixreso_0606/base.json # 2629                                                                       
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/human_editing/caimai_etou_2k_260605_fixreso_0606/base.json # 2094                                                                         
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/human_editing/api_daxiao_1k_wochaofen_260605_fixreso_0606/base.json # 1371                                                                
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/human_editing/caimai_biaoqing_1k_260605_fixreso_0606/base.json # 1025                                                                     
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/human_editing/caimai_mianbu_zhengti_3k_260605_fixreso_0606/base.json # 3154                                                               
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/human_editing/caimai_shengao_shencai_pangshou_6k_260605_fixreso_0606/base.json # 5586                                                     
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/human_editing/api_luchixiao_1k_260605_fixreso_0606/base.json # 1175                                                                       
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/human_editing/api_minzuixiao_1k_260605_fixreso_0606/base.json # 1331                                                                      
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/human_editing/api_yansu_2k_260605_fixreso_0606/base.json # 1655                                                                           
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/human_editing/caimai_toufa_4k_260605_fixreso_0606/base.json # 3466                                                                        
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/human_editing/sop_faliang_4k_260605_fixreso_0606/base.json # 3899                                                                         
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/human_editing/caimai_xiaba_3k_260605_fixreso_0606/base.json # 2683                                                                        
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/human_editing/caimai_yachi_4k_260605_fixreso_0606/base.json # 3203                                                                        
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/human_editing/distill_man_specific_faxing_1k_260605_fixreso_0606/base.json # 780                                                          
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/human_editing/distill_suitable_hairtype_2_1k_260605_fixreso_0606/base.json # 739                                                          
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/human_editing/sop_fase_3k_260605_fixreso_0606/base.json # 2498                                                                            
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/human_editing/caimai_yanjing_5k_260605_fixreso_0606/base.json # 4245                                                                      
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/human_editing/caimai_zuichun_5k_260605_fixreso_0606/base.json # 4403                                                                      
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/human_editing/api_dayan_merge_4k_260605_fixreso_0606/base.json # 3724                                                                     
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/human_editing/api_xiaoyan_merge_2k_260605_fixreso_0606/base.json # 2145                                                                   
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/human_editing/api_zhengyan_merge_4k_260605_fixreso_0606/base.json # 3896                                                                  
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/human_editing/api_zuijiao_3k_260605_fixreso_0606/base.json # 2847                                                                         
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/human_editing/sop_faxing_vip_4k_260605_fixreso_0606/base.json # 3376
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/human_editing/sop_shouduzi_0p4k_260606/base.json # 350
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/human_editing/api_meibai_11k_260607/base.json # 10335
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/human_editing/api_fengxiong_4k_260606/base.json # 3327
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/human_editing/api_fuji_0p2k_260606/base.json # 183
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/human_editing/distill_multi_person_4k_260606/base.json # 3556     
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/human_editing/api_meiyan_17k_260610/base.json # 15289
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/human_editing/sop_meiyan_8k_260610/base.json # 7403
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/human_editing/sop_meizhuang_woman_1_2k_260610/base.json # 1795
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/human_editing/sop_fengtun_0p2k_260610/base.json # 225
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/human_editing/api_shoulian_8k_260610/base.json # 8125
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/human_editing/api_mopi_1k_260610/base.json # 1187
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/human_editing/sop_meizhuang_man_2k_260610/base.json # 1512
+  #     # 总行数 133418
+
+
+  #     # 游戏编辑
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/game_editing/20260605_v2_game_editing_count1_merged_fixreso_0606/base.json #15,623
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/game_editing/20260605_v2_game_editing_count2_merged_fixreso_0606/base.json #585
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/game_editing/20260605_v2_game_editing_count1_merged_ct_fixreso_0606/base.json #36720
+  #     #共52928
+    
+
+  #     # 元宝badcase训生图
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/yuanbao_badcase_editing/20260526_v1_yuanbao_count1_part3_fixreso_0605/base.json #1278
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/game_editing/20260526_v1_yuanbao_badcase_count1_part1_fixreso_0605/base.json #1646
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/game_editing/20260526_v1_local_style_count1_part1_fixreso_0605/base.json #3332
+
+
+  #     # 文字编辑
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/ocr_editing/yuanbao_0_fixsp_0607_temp/base.json #14314
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/ocr_editing/yuanbao_1_fixsp_0607_temp/base.json # 14875
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/ocr_editing/densetext_0_fixsp_0607_temp/base.json # 46997
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/ocr_editing/densetext_1_fixsp_0607_temp/base.json # 19475
+
+  #     # 风格参考
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/i2i_style_wza/0607_fixreso_0605/base.json # 7515
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/i2i_style_wza/no_real_0609_fixreso_0605/base.json # 29936
+
+  #     # 人物ID
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/human_id/yinglouheying_2k_260605_fixreso_0605/base.json # 793
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/human_id/boss_groupphoto_2k_260527_fixreso_0605/base.json # 1432
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/human_id/kuaciyuan_2k_260529_fixreso_0605/base.json # 2496
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/human_id/yuanbao_batch1_3k_260529_fixreso_0605/base.json # 3307
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/human_id/animate_group_photo_2k_260529_fixreso_0605/base.json # 2077
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/human_id/yuanbao_batch2_3k_260529_fixreso_0605/base.json # 2997
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/human_id/task3_stage1_sample_300k_for_label_1_ref_img_has_zh_fixreso_0605/base.json # 21346  
+  #     # 34448
+
+  #     # TI2TI 多轮
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/multiround/ti2i_hq_26k_2600604_fix_cot_filter_ref_gen_fixreso_0605/base.json # 26045
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/multiround/ti2i_hq_26k_2600604_fix_cot_filter_ref_gen_recur_extra/base.json # 4860
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/multiround/ti2i_zijian/t_i_i1_1/target_train_localpath_ratio_fixed_5974/base.json # 5974
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/multiround/ti2i_zijian/t_i_i1_n/target_train_localpath_ratio_fixed_2397/base.json # 2397
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/multiround/ti2i_zijian/ti_i_i1_1/target_train_localpath_ratio_fixed_5215/base.json # 5215
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/multiround/ti2i_zijian/ti_i_i1_n/target_train_localpath_ratio_fixed_1717/base.json # 1717
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/multiround/ti2i_zijian/t_i_in_1/target_train_localpath_ratio_fixed_5474/base.json # 5474
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/multiround/ti2i_zijian/t_i_in_n/target_train_localpath_ratio_fixed_1542/base.json # 1541
+  #     # 53223
+    
+  #   ceph_base_inv: '{"wza": "/apdcephfs_wza_common/hyimage35_sft_data"}'
+  #   verbose: 1
+  #   index_columns:
+  #     message_col: std_messages
+
+  # ===================== 5. T2I Search Agent =====================
+  # pair_T2I_search_task_kwargs:
+  #   # required
+  #   drop_text_loss_prob: 0
+  #   drop_wh_token_loss_prob: 0
+  #   batch_size: 1
+  #   modality: [ vae_image, vit_image, text ]
+  #   max_token_length: 66560
+  #   input_max_token_length: 4096
+  #   attn_type: flex
+  #   shuffle_seed: 322
+  #   sequence_pack: True
+  #   # system prompt
+  #   system_prompt_token_length: 2048
+  #   gen_text_token_length: 8192 # max new tokens for text response
+  #   drop_last_message: True
+  # pair_T2I_search_index_kwargs:
+  #   index_file:
+  #     # T2I Search Agent
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/search_agent/golden_5k_260608/base.json # 5077
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/search_agent/multiip_4k_260609/base.json # 4426 
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/search_agent/merged_5k_38k_260606/base.json # 26328 
+
+  #   ceph_base_inv: '{"wza": "/apdcephfs_wza_common/hyimage35_sft_data"}'
+  #   verbose: 1
+  #   index_columns:
+  #     message_col: std_messages
+
+  # gen image loss mask=0
+  # ===================== 6. cot no gen =====================
+  # pair_cot_no_gen_task_kwargs:
+  #   # required
+  #   drop_text_loss_prob: 0
+  #   drop_wh_token_loss_prob: 0 # 不训生图但是要训shape token
+  #   batch_size: 1
+  #   modality: [ vae_image, vit_image, text ]
+  #   max_token_length: 66560
+  #   input_max_token_length: 4096
+  #   attn_type: flex
+  #   shuffle_seed: 322
+  #   sequence_pack: True
+  #   # system prompt
+  #   system_prompt_token_length: 2048
+  #   gen_text_token_length: 8192 # max new tokens for text response
+  #   drop_last_message: True
+  # pair_cot_no_gen_index_kwargs:
+  #   index_file:
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/yuanbao_badcase_editing/20260526_v1_yuanbao_count1_part1/base.json  #3922，图生图，单图
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/yuanbao_badcase_t2i/20260526_v1_yuanbao_t2i_aspect_count3_part1/base.json #3263，文生图
+  #     #共7185
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/yuanbao_badcase_editing/20260526_v1_yuanbao_count2_part1/base.json  #1357，双图
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/yuanbao_badcase_editing/20260526_v1_yuanbao_count3_part1/base.json  #369，三图
+  #     #共1726
+
+  #   ceph_base_inv: '{"wza": "/apdcephfs_wza_common/hyimage35_sft_data"}'
+  #   verbose: 1
+  #   index_columns:
+  #     message_col: std_messages
+
+  # ===================== 7. no shape no gen =====================
+  # pair_no_shape_no_gen_task_kwargs:
+  #   # required
+  #   drop_text_loss_prob: 0
+  #   drop_wh_token_loss_prob: 1 # 不训shape token
+  #   batch_size: 1
+  #   modality: [ vae_image, vit_image, text ]
+  #   max_token_length: 66560
+  #   input_max_token_length: 4096
+  #   attn_type: flex
+  #   shuffle_seed: 322
+  #   sequence_pack: True
+  #   # system prompt
+  #   system_prompt_token_length: 2048
+  #   gen_text_token_length: 8192 # max new tokens for text response
+  #   drop_last_message: True
+  # pair_no_shape_no_gen_index_kwargs:
+  #   index_file:
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/multiround/yuanbao_cot_260609/infographic_train_6k/base.json # 5803
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/multiround/yuanbao_cot_260609/infographic_train_600/base.json # 686
+  #     # 6492
+  #   ceph_base_inv: '{"wza": "/apdcephfs_wza_common/hyimage35_sft_data"}'
+  #   verbose: 1
+  #   index_columns:
+  #     message_col: std_messages
+
+  # ===================== 8. LLM Search =====================
+  # pair_llm_search_task_kwargs:
+  #   # required
+  #   batch_size: 1
+  #   modality: [ text ]
+  #   max_token_length: 66560  # 4096 vae + 1024 vision encoder + 768 text
+  #   input_max_token_length: 8192   # 256 for special tokens and output text
+  #   attn_type: flex
+  #   drop_last: True
+  #   shuffle_seed: 42
+  #   sequence_pack: True
+  #   # task specific
+  #   # system prompt
+  #   system_prompt_token_length: 4096
+  #   gen_text_token_length: 66560 # max new tokens for text response
+  # pair_llm_search_index_kwargs:
+  #   index_file:
+  #     # LLM Search
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/llm_search_0525/subset-01/base.json # 4900
+  #     - /apdcephfs_wza_common/hyimage35_sft_data/llm_search_0525/subset-02/base.json # 29,029
+  #   ceph_base_inv: '{"wza": "/apdcephfs_wza_common/hyimage35_sft_data"}'
+  #   verbose: 1
+  #   index_columns:
+  #     message_col: std_messages
+
+
+TRAINING_ARGS:
+  micro-batch-size: 1
+  gradient-accumulation-steps: 1 # global_batch_size = 1024 on 512 GPUs
+  # global-batch-size: ${mul:${div:${mul:${oc.env:HOST_GPU_NUM}, ${oc.env:HOST_NUM}}, ${mul:${MODEL_PARALLEL_ARGS.tensor-model-parallel-size}, ${MODEL_PARALLEL_ARGS.pipeline-model-parallel-size}}}, ${mul:${TRAINING_ARGS.gradient-accumulation-steps}, ${TRAINING_ARGS.micro-batch-size}}} # GLOBAL_BATCH_SIZE = HOST_GPU_NUM * HOST_NUM / (TP_SIZE*PP_SIZE*CP_SIZE) * GRADIENT_ACCUMULATION_STEPS * MICRO_BATCH_SIZE
+  global-batch-size: ${mul:${div:${mul:${oc.env:HOST_GPU_NUM}, ${oc.env:HOST_NUM}}, ${mul:${mul:${MODEL_PARALLEL_ARGS.tensor-model-parallel-size}, ${MODEL_PARALLEL_ARGS.pipeline-model-parallel-size}}, ${MODEL_PARALLEL_ARGS.context-parallel-size}}}, ${mul:${TRAINING_ARGS.gradient-accumulation-steps}, ${TRAINING_ARGS.micro-batch-size}}} # GLOBAL_BATCH_SIZE = HOST_GPU_NUM * HOST_NUM / (TP_SIZE*PP_SIZE*CP_SIZE) * GRADIENT_ACCUMULATION_STEPS * MICRO_BATCH_SIZE
+  lr: 2e-5
+  train-iters: 100_000_000
+  lr-decay-iters: 100_000_000
+  lr-decay-style: constant
+  optimizer: muon
+  muon-ema-gradient: True  # 对应sum_decay_momentum为False的情况
+  muon-momentum: 0.95
+  adam-beta1: 0.9
+  adam-beta2: 0.95
+  min-lr: 2e-5
+  weight-decay: 0.1
+  lr-warmup-iters: 50
+  clip-grad: 1.0
+  eval-interval: 1000
+  eval-iters: 0
+  seed: 1234
+    # - optimizer-cpu-offload
+    # - use-precision-aware-optimizer
+  __FROZEN__OPTIMIZER_ARGS:  # pure torch specific
+    optimizer_params:
+      lr: ${TRAINING_ARGS.lr}
+      adamw_betas:
+      - ${TRAINING_ARGS.adam-beta1}
+      - ${TRAINING_ARGS.adam-beta2}
+      weight_decay: ${TRAINING_ARGS.weight-decay}
+      momentum: ${TRAINING_ARGS.muon-momentum}
+      adamw_eps: 0.00000001 # adam eps 1e-8
+    special_adamw_params: ["*embed_tokens*", "*lm_head*", "*final_layer*", "*time_embed*", "*timestep_emb*", "*patch_embed*", "*embedding*", "*perceive.proj*"]
+  __FROZEN__LR_SCHEDULER_ARGS:  # pure torch specific
+    lr_scheduler_params:
+      num_warmup_steps: ${TRAINING_ARGS.lr-warmup-iters}
+      num_training_steps: ${TRAINING_ARGS.train-iters}
+      min_lr: ${TRAINING_ARGS.min-lr}
+
+  # loss related
+  image-loss-weight: 1.0
+  moe-expert-bias-update-rate: 0.00
+  moe-score-func: "sigmoid"
+  moe-aux-loss-coeff: 0.0001
+  enabled:
+    # - check-for-spiky-loss
+    - accumulate-allreduce-grads-in-fp32
+    - deterministic-mode
+    # - override-opt_param-scheduler
+    - use-dynamic-global-batch-size-convert-iters-to-samples
+    # - moe-router-keep-high-precision-params
+    # - calculate-per-token-loss
+    - moe-enable-router-expert-bias
+    - moe-enable-expert-bias-zero-mean-update
+    - moe-aux-loss
+    - moe-seq-aux-loss
+    # - broadcast-data
+
+
+PERFORMANCE_ARGS:
+  manual-gc-interval: 100
+  recompute-granularity: full
+  recompute-method: uniform
+  recompute-num-layers: 1
+  # recompute-method: block
+  # recompute-num-layers: 6
+  # per-stage-recompute-num-layers: [6, 6, 4, 0]
+  # dp-load-balance-task-priority: ["lm", "interleave", "mmu", "t2i"]
+  enabled:
+    - manual-gc
+    # - use-flash-attn
+    - moe-enable-deepep
+    - enable-experimental
+    - moe-permute-fusion
+    # - cross-entropy-loss-fusion
+    # - moe-router-fusion
+    # - moe-shared-expert-overlap # mcore目前实现不支持和deepep一起使用
+    - overlap-grad-reduce
+    - overlap-param-gather
+    # - overlap-moe-expert-parallel-comm
+    - no-persist-layer-norm
+    - no-gradient-accumulation-fusion
+    - no-masked-softmax-fusion
+    - no-bias-swiglu-fusion
+    - use-out-place-mask-local-attn
+    - use-index-add-local-unpermute
+    - deepep-moe-shared-expert-overlap
+    - muon-overlap-momentum-gather
+    - muon-use-batch-p2p-gather
+    # - no-bias-dropout-fusion
+    # - no-rope-fusion
+    # - moe-router-force-load-balancing
+    - no-align-grad-reduce
+    - disable-gloo-process-groups
+    - disable-fill-uninitialized-memory
+    - moe-router-correct-valid-tokens
+    # - dp-load-balance
+
+
+MODEL_PARALLEL_ARGS:
+  tensor-model-parallel-size: 1
+  pipeline-model-parallel-size: 2
+  pipeline-model-parallel-layout: Et*20|t*28L
+  context-parallel-size: 4
+  expert-model-parallel-size: 8
+  distributed-timeout-minutes: 30  # 增加分布式超时时间，解决进程组初始化超时问题（默认10分钟）
+  enabled:
+    - use-distributed-optimizer
+    # - tp-comm-overlap
+    # - sequence-parallel
+
+
+CHECKPOINT_ARGS:
+  ckpt-format: torch_dist
+  dist-ckpt-strictness: log_all
+  save-interval: 100
+  save: ${__GLOBAL_VARS__.OUTPUT_PATH}/ckpt
+  # ckpt: ${CHECKPOINT_ARGS.load}
+  load: "/apdcephfs_wza2/share_304227829/hunyuan/milesjyang/basic_train_milesjyang_20260407202045_a5b8364b/8b2027419e884dbd019e8beef8ca014e/ckpt/"
+  ckpt-step: 1200
+  key-mapping: []
+  generation-config: /apdcephfs_wza/1_public_models/hymm_ar_assets/pretrained_llm/HunyuanImage3.5/hunyuan3-moe-a3b-gemini-mot-gen-a10b.json
+  enabled:
+    - fuse-experts-in-load
+    - resume
+    - use-dist-ckpt
+    - no-load-optim
+    - no-load-rng   # saving/loading rng is not supported yet
+    - finetune
+    - ckpt-fully-parallel-save
+    - ckpt-assume-constant-structure
+
+LOGGING_ARGS:
+  log-interval: 1
+  tensorboard-dir: ${__GLOBAL_VARS__.OUTPUT_PATH}/events
+  saved-training-batch-dir: ${__GLOBAL_VARS__.OUTPUT_PATH}/saved_training_data
+  save-n-training-data: 16
+  enabled:
+    - log-timers-to-tensorboard
+    - log-memory-to-tensorboard
+    - log-num-zeros-in-grad
+    - log-params-norm
+    - log-validation-ppl-to-tensorboard
+    - log-throughput

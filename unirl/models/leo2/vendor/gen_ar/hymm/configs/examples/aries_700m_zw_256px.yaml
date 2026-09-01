@@ -1,0 +1,245 @@
+# IMPORTANT NOTE: Write PTM args in YAML format:
+# 0. all arguments specified here are one-one correspondences with PTM arguments; un-specified arguments use PTM default values.
+# 1. arguments like '--hidden-size=2560' are written as 'hidden-size: 2560' (see below, note the space after colon).
+# 2. YAML format is like a tree, and only the leaf nodes are considered as arguments.
+#    Non-leaf nodes and structures are ignored, so arguments can be grouped as you like.
+# 3. arguments like '--sequence-parallel' can be written as 'enabled: \n  - sequence-parallel' (see below, note the indent).
+#    multiple `enabled` arguments in a same sub-tree must be put in a `enabled` list (see below for an example).
+
+__GLOBAL_VARS__:
+  _DEFAULT_OUTPUT_PATH: ""
+  DATA_PATH: "/root/dummy_data"
+  OUTPUT_PATH: ${oc.env:OUTPUT_PATH,${__GLOBAL_VARS__._DEFAULT_OUTPUT_PATH}}
+
+MODEL_ARGS:
+  model-name: diffusion.Aries-L/2-R
+  model-structure: Aries
+
+  init-device: meta  # [cpu, cuda, meta] pure torch specific
+  autocast-dtype: bf16  # pure torch specific
+  enabled:
+    - bf16
+
+  patch-size: 1
+  rope-type-extended: "2d"
+  rope-theta: 256.0
+  rope-dim-list: [48, 48]
+  __FROZEN__MODEL_KWARGS:
+    model_kwargs:
+      patch_size: ${MODEL_ARGS.patch-size}
+      in_channels: ${EXTRA_MODEL_ARGS.vae-latent-dim}
+      condition_dim: 4096
+      use_attention_mask: True
+      attn_mode: flash
+
+
+EXTRA_MODEL_ARGS:
+  vae-type: 16x16x4-32c-hy-image
+  vae-latent-dim: 32
+  vae-precision: fp32
+  vae-autocast-dtype: fp16
+
+  text-encoder-type: llava-llama-3-8b
+  tokenizer-name: llava-llama-3-8b
+  __FROZEN__TEXT_ENCODER_ARGS:
+    text_encoder_text_len: 256
+    text_encoder_prompt_template: li-dit-encode-llava-3
+    text_encoder_precision: bf16
+    text_encoder_use_attention_mask: True
+    text_encoder_infer_mode: encoder
+    text_encoder_hidden_state_skip_layer: null
+    text_encoder_apply_final_norm: False
+
+
+DENOISE_ARGS:
+  denoise-type: flow
+  flow-path-type: linear
+  flow-predict-type: velocity
+  flow-snr-type: lognorm
+  flow-reverse: True
+  flow-shift: 1.0
+
+
+
+DATA_ARGS:
+  tokenizer-type: NullTokenizer
+  dataloader-type: external
+
+  # extra args provider
+  shuffle-by: dataset
+  fast-shuffle: True
+  use-numpy-indices: True
+  combined-iterator-sampling-mode: fixed
+  cos-base:
+    - "/cos_nj1/share_302243067 -> /cos_zw1/share_303793872"
+#  cos-file-is-encrypted: True
+  enable-resample: True
+  ignore-start-tokens: []
+
+  # vae
+  vae-image-token-length: 256
+  # -- resolution group kwargs
+  reso-base-size: 256
+  reso-align: 16
+  reso-preset: sdxl
+
+  modality: [ vae_image ]
+  sampling-probs: '{"t2i": 1.0}'
+
+  # Dataloader
+  num-workers: 4
+  prefetch-factor: 2
+
+
+__FROZEN__DATA_ARGS:
+  t2i_task_kwargs:
+    # required
+    batch_size: 64
+    modality: [ vae_image ]
+    max_token_length: 512
+    attn_type: flex
+    shuffle_seed: 1111
+    # image caption
+    uncond_p: 0.1
+    prompt_token_length: 256
+    patcher_names: []
+    instruct_type: none
+    image_caption_resource:
+      - caption_v3_2_ip:
+          caption_v3_2_ip_src: '{"caption_v3_2_ip_en_col": 0.5, "caption_v3_2_ip_zh_col": 0.5}'
+          caption_v3_2_ip_caption_processor: caption_process_v3
+          caption_v3_2_ip_caption_sample_ratio: '{"long_long_caption":0.455,"long_caption":0.5,"medium_caption":0.2,"short_caption":0.3,"background":0.1,"style":0.7,"shot_type":0.1}'
+          caption_v3_2_ip_caption_processor_kwargs: '{"force_use_style_tag":true}'
+          caption_v3_2_ip_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3_2_ocr:
+          caption_v3_2_ocr_src: '{"caption_v3_2_ocr_en_col": 0.5, "caption_v3_2_ocr_zh_col": 0.5}'
+          caption_v3_2_ocr_caption_processor: caption_process_v3
+          caption_v3_2_ocr_caption_sample_ratio: '{"long_caption":0.9999,"medium_caption":0.00004,"short_caption":0.00006,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_2_ocr_caption_processor_kwargs: '{"force_use_style_tag":true}'
+          caption_v3_2_ocr_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3_2:
+          caption_v3_2_src: '{"caption_v3_2_en_col": 0.5, "caption_v3_2_zh_col": 0.5}'
+          caption_v3_2_caption_processor: caption_process_v3
+          caption_v3_2_caption_sample_ratio: '{"long_caption":0.5,"medium_caption":0.2,"short_caption":0.3,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_2_caption_processor_kwargs: '{"force_use_style_tag":true}'
+          caption_v3_2_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3_1:
+          caption_v3_1_src: '{"caption_v3_1_en_col": 0.5, "caption_v3_1_zh_col": 0.5}'
+          caption_v3_1_caption_processor: caption_process_v3
+          caption_v3_1_caption_sample_ratio: '{"long_caption":0.5,"medium_caption":0.2,"short_caption":0.3,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_1_caption_processor_kwargs: '{"force_use_style_tag":true}'
+          caption_v3_1_extra_processor: [ 'filter_shot', 'inject_style_v2' ]
+      - caption_v3:
+          caption_v3_src: '{"caption_v3_en_col": 0.5, "caption_v3_zh_col": 0.5}'
+          caption_v3_caption_processor: caption_process_v3
+          caption_v3_caption_sample_ratio: '{"long_caption":0.5,"medium_caption":0.2,"short_caption":0.3,"background":0.1,"style":0.7,"shot_type":0.1,"IP":0.5}'
+          caption_v3_caption_processor_kwargs: '{"force_use_style_tag":true}'
+          caption_v3_extra_processor: [ 'fix_style', 'filter_shot', 'inject_style_v2' ]
+  t2i_index_kwargs:
+    index_file:
+      - /apdcephfs_zwfy2/share_303937731/jarvizhang/share/hyimage3_data/t2i_1024p/mb256.json  # 100m
+    multireso: True
+    ceph_base_inv: '{"prefix": "/apdcephfs_zwfy2/share_303937731"}'
+    verbose: 1
+    index_columns:
+      image_col: cache_image
+      caption_v3_2_ocr_en_col: caption_v3_2_ocr_en
+      caption_v3_2_ocr_zh_col: caption_v3_2_ocr_zh
+      caption_v3_2_en_col: caption_v3_2_en
+      caption_v3_2_zh_col: caption_v3_2_zh
+      caption_v3_1_en_col: caption_v3_1_en
+      caption_v3_1_zh_col: caption_v3_1_zh
+      caption_v3_en_col: caption_v3_en
+      caption_v3_zh_col: caption_v3_zh
+      caption_v3_2_ip_en_col: caption_v3_2_ip_en
+      caption_v3_2_ip_zh_col: caption_v3_2_ip_zh
+      style_v2_col: style_v2
+      url_cos_col: url_cos
+
+
+TRAINING_ARGS:
+  micro-batch-size: 1
+  global-batch-size: ${oc.env:GLOBAL_BATCH_SIZE,8}
+  lr: 1e-4
+  train-iters: 100_000_000
+  lr-decay-iters: 100_000_000
+  lr-decay-style: cosine
+  optimizer: adam
+  adam-beta1: 0.9
+  adam-beta2: 0.95
+  min-lr: 3e-5
+  weight-decay: 0.1
+  lr-warmup-iters: 2000
+  clip-grad: 1.0
+  eval-interval: 1000
+  eval-iters: 0
+  seed: 1234
+    # - optimizer-cpu-offload
+    # - use-precision-aware-optimizer
+  __FROZEN__OPTIMIZER_ARGS:  # pure torch specific
+    optimizer_params:
+      lr: ${TRAINING_ARGS.lr}
+      betas:
+      - ${TRAINING_ARGS.adam-beta1}
+      - ${TRAINING_ARGS.adam-beta2}
+      weight_decay: ${TRAINING_ARGS.weight-decay}
+      eps: 0.000001
+  __FROZEN__LR_SCHEDULER_ARGS:  # pure torch specific
+    lr_scheduler_params:
+      num_warmup_steps: ${TRAINING_ARGS.lr-warmup-iters}
+      num_training_steps: ${TRAINING_ARGS.train-iters}
+      min_lr: ${TRAINING_ARGS.min-lr}
+
+
+PERFORMANCE_ARGS:
+  manual-gc-interval: 5
+#  recompute-granularity: full
+  enabled:
+    - manual-gc
+    - use-flash-attn
+    # - moe-enable-deepep
+    - enable-experimental
+    # - moe-permute-fusion
+    # - moe-router-fusion
+    # - moe-shared-expert-overlap
+    - overlap-grad-reduce
+    - overlap-param-gather
+
+
+MODEL_PARALLEL_ARGS:
+  tensor-model-parallel-size: 1
+  pipeline-model-parallel-size: 1
+  expert-model-parallel-size: 1
+  enabled:
+    - use-distributed-optimizer
+    # - tp-comm-overlap
+    # - sequence-parallel
+
+
+CHECKPOINT_ARGS:
+  ckpt-format: torch_dist
+  dist-ckpt-strictness: log_all
+  save-interval: 5_000
+  save: ${__GLOBAL_VARS__.OUTPUT_PATH}/ckpt
+  enabled:
+    - resume
+    - use-dist-ckpt
+#    - no-load-optim
+#    - no-load-rng
+#    - finetune
+    - ckpt-fully-parallel-load
+    - ckpt-fully-parallel-save
+
+
+LOGGING_ARGS:
+  log-interval: 1
+  tensorboard-dir: ${__GLOBAL_VARS__.OUTPUT_PATH}/events
+  saved-training-batch-dir: ${__GLOBAL_VARS__.OUTPUT_PATH}/saved_training_data
+  save-n-training-data: 4
+  enabled:
+    - log-timers-to-tensorboard
+    - log-memory-to-tensorboard
+    - log-num-zeros-in-grad
+    - log-params-norm
+    - log-validation-ppl-to-tensorboard
+    - log-throughput

@@ -1,0 +1,403 @@
+# Create Date: 20250430-20:37
+# This config is copied from the hunyuan7b_gemini_beta_deepspeed_mm_instruction_tuning_v3.yaml
+# The `merged_v1` version corresponding to a variant that:
+# 1. use face_id_embedding with condition type of 'face_embedding_src_image'. dataset not changed
+# 2. change subject_driven dataset to {flux_two_role, xhs_single_role, image_guided}
+# 3. add editing cot task with dataset {seededit}
+# 4. task {t2i, editing, editcot, subject_driven, face_id_embedding} remove instructions
+
+training_config:
+  trainer_name: multimodal_gemini_beta_trainer.MultiModalGeminiBetaTrainer
+  micro_batch_size: 1
+  gradient_accumulation_steps: 1
+  global_batch_size: null
+  global_seed: 3409
+  zero_stage: 2
+  log_every: 1
+  tensorboard: True
+  gradient_checkpoint: True
+  gradient_checkpoint_layers: -1
+  use_compile: False
+  benchmark: False
+
+  skip_nan_grad: False
+  overlap_comm: True
+  reduce_bucket_size: 5e7
+
+  max_training_steps: 1_000_000_000
+  ckpt_every: 2500
+
+  init_save: False
+  final_save: True
+
+  resume: null
+  resume_dataloader: False
+  no_load_optim_states: False
+  no_load_ema: False
+  default_rank0_ss: False
+  fix_lr_scheduler: False
+
+  validation_at_steps: []
+  validation_every: -1
+  validation_metrics: []
+  validation_metrics_save_image: False
+
+sampling_config:
+  ckpt: null
+  load_key: module
+  metric_image_size: 1024
+  metric_batch_size: 8
+  evaluation_metrics: [fid@coco30k, clip_score@coco30k, hpsv2@coco30k, t2i_compbench]
+  rerank: 1
+  sample_image_size: 1024
+  sample_batch_size: 8
+  seed_type: auto
+  seed: 123456
+  guidance_scale: 6.0
+  diff_infer_steps: 100
+  sample_flow_shift: 1.0
+  sample_use_flux_shift: False
+  do_sample: True
+
+  logits_processors_cfg:
+    - TemperatureLogitsWarper:
+        temperature: 0.6
+    - TopKLogitsWarper:
+        top_k: 1024
+    - TopPLogitsWarper:
+        top_p: 0.95
+
+model_config:
+  model_name: hunyuan-dense-7b
+  model_structure: MultiModalTransfusion
+  tokenizer_name: hunyuan-dense-7b-tokenizer-refactor
+  pretrained_ckpt: /apdcephfs_nj10/share_301739632/2_public_experiments/log_EXP_gemini_beta/jarvizhang/log_EXP/0042_hunyuan_dense_7b_20250420_013331_n415_hunyuan7b_gemini_beta_deepspeed_mm_pretrain_stage3_1/checkpoints/0019000/mp_rank_00_model_states.pt
+  precision: bf16
+  autocast_dtype: bf16
+  media_vocab_size: 0
+
+  denoise_type: flow
+  flow_path_type: linear
+  flow_predict_type: velocity
+  flow_loss_weight: null
+  flow_train_eps: null
+  flow_sample_eps: null
+  flow_snr_type: lognorm
+  flow_reverse: True
+  flow_shift: 3.0
+  sample_flow_shift: 3.0
+  use_flux_shift: False
+  flux_base_shift: null
+  flux_max_shift: null
+
+  model_kwargs:
+    block_size: 17000
+    face_aligner:
+      face_aligner_type: self
+      face_aligner_precision: bf16
+      face_aligner_autocast_dtype: bf16
+      face_aligner_freeze: False
+      face_aligner_params:
+        face_aligner_depth: 4
+        face_aligner_output_dim: 4096
+        face_aligner_dim: 4096
+        face_aligner_embedding_dim: 512
+        face_aligner_num_queries: 16
+
+  image_loss_weight: 5.0
+  gather_text_tokens: True
+
+  img_proj_type: unet
+  patch_embed_hidden_dim: 1024
+  patch_size: 1
+
+extra_model_config:
+  vae_type: 16x16x4-32c-hy-image
+  vae_precision: fp32
+  vae_autocast_dtype: fp32
+  vae_latent_dim: 32
+#  vae_sample_size: 768
+#  vae_spatial_tiling: True
+
+optimizer_config:
+  optimizer_name: AdamW
+  gradient_clipping: 1.0
+  optimizer_params:
+    lr: 0.00001
+    betas: [0.9, 0.95]
+    eps: 0.000001
+    weight_decay: 0.01
+
+lr_scheduler_config:
+  lr_schedule: WarmupCosineLR
+  lr_scheduler_params:
+    warmup_num_steps: 5000
+    cos_min_ratio: 1.0
+    total_num_steps: 1_000_000_000
+
+dataloader_config:
+  # Common
+  shuffle_by: dataset
+  fast_shuffle: True
+  add_iw_ih_token: False
+  add_timestep_token: True
+  add_image_shape_token: True
+  use_front_boi_token: True
+  use_front_src_image: True
+  sequence_template: instruct
+  combined_iterator_sampling_mode: fixed
+
+  sampling_probs: '{"t2i": 0.33, "lm": 0.33, "editing": 0.5, "editcot": 0.5, "subject_driven": 1.0, "face_id_embedding": 0.5}'
+
+  # Text-to-Image
+  t2i_batch_size: 3
+  t2i_task_kwargs:
+    training_image_size: 1024 # only used when multireso is False
+    image_token_length: 4096
+    text_token_length: 384
+    uncond_p: 0.1
+    try_first_use_source_text: False    # Must be False
+    caption_processor: caption_process_v2
+    caption_processor_kwargs: '{"ocr_only_long_caption": true}'
+    use_general_style: True
+    image_caption_rate: 1.0   # 使用 caption 的比例
+    caption_sample_ratio: '{"long_caption":0.4,"medium_caption":0.3,"short_caption":0.25,"background":0.08,"shot_type":0.08,"style":0.08,"light":0.08,"atmosphere":0.08,"composition":0.08,"IP":0.08}'
+    attn_type: flex
+    instruction_candidates_type: 'off'
+  t2i_index_kwargs:
+    index_file:
+      - /apdcephfs_nj8/share_301739632/yestinlong/data/taurus_train_data/1024p_high_quality/v12_20250311/data/multires/p1/p1_multires.json    # (1.00 * 1,507,352 = 1,507,352)
+      - /apdcephfs_nj8/share_301739632/yestinlong/data/taurus_train_data/1024p_high_quality/v12_20250311/data/multires/p2/p2_multires.json    # (3.00 *    10,709 =    32,127)
+      - /apdcephfs_nj8/share_301739632/yestinlong/data/taurus_train_data/1024p_high_quality/v12_20250311/data/multires/p3/p3_multires.json    # (0.12 * 2,161,954 =   259,434)
+      - /apdcephfs_nj8/share_301739632/yestinlong/data/taurus_train_data/1024p_high_quality/v12_20250311/data/multires/p4/p4_multires.json    # (1.00 *   182,238 =   182,238)
+      - /apdcephfs_nj8/share_301739632/yestinlong/data/taurus_train_data/1024p_high_quality/v12_20250311/data/multires/p5/p5_multires.json    # (1.00 *    10,104 =    10,104)
+      - /apdcephfs_nj8/share_301739632/yestinlong/data/taurus_train_data/1024p_high_quality/v12_20250311/data/multires/p6/p6_multires.json    # (1.00 *    42,736 =    42,736)
+      - /apdcephfs_nj8/share_301739632/yestinlong/data/taurus_train_data/1024p_high_quality/v12_20250311/data/multires/p7/p7_multires.json    # (1.00 *   106,525 =   106,525)
+      - /apdcephfs_nj8/share_301739632/yestinlong/data/taurus_train_data/1024p_high_quality/v12_20250311/data/multires/p8/p8_multires.json    # (0.12 * 1,773,439 =   212,812)
+      - /apdcephfs_nj8/share_301739632/yestinlong/data/taurus_train_data/1024p_high_quality/v12_20250311/data/multires/p9/p9_multires.json    # (1.00 *    50,799 =    50,799)
+      - /apdcephfs_nj8/share_301739632/yestinlong/data/taurus_train_data/1024p_high_quality/v12_20250311/data/multires/p10/p10_multires.json  # (1.00 *   174,308 =   174,308)
+      - /apdcephfs_nj8/share_301739632/yestinlong/data/taurus_train_data/1024p_high_quality/v12_20250311/data/multires/p12/p12_multires.json  # (1.00 *    84,828 =    84,828)
+      - /apdcephfs_nj8/share_301739632/yestinlong/data/taurus_train_data/1024p_high_quality/v12_20250311/data/multires/p13/p13_multires.json  # (0.12 *   207,232 =    24,867)  p1-p13总计: 2,688,130
+      - /apdcephfs_nj10/share_301739632/jacobkong/gitpackages/data_process/data/text2image/arrow_biaoqingbao250404/train_json/biaoqingbao250404_mb1024.json               #     43,152  emoji
+      - /apdcephfs_nj10/share_301739632/jacobkong/gitpackages/data_process/data/text2image/arrows_boutique_game/train_json/game_470w_multireso_mb1024.json                #  4,656,619  game data from application
+      - /apdcephfs_nj8/share_301739632/1_public_models/hymm_ar_assets/dataset/t2i_index/gemini_json/4panel_comics/mb1024_4panel_comic.json                                #    335,493  4panel comic
+      - /apdcephfs_nj8/share_301739632/1_public_models/hymm_ar_assets/dataset/t2i_index/gemini_json/mb1024_v2/t2i_application_human_data_gold_mb1024_filter_cap.json   # (1.00 * 1,648,548 = 1,648,548)
+      - /apdcephfs_nj8/share_301739632/0_public_datasets/text2image_gemini/gemini_json/sft/game_data_count_multireso_1205_nj.json             # (1.00 * 4,707,081 = 4,707,081)
+      - /apdcephfs_nj8/share_301739632/0_public_datasets/text2image_gemini/gemini_json/sft/china_vcg_0901_multireso.json                      # (1.00 *   237,288 =   237,288)
+      - /apdcephfs_nj8/share_301739632/0_public_datasets/text2image_gemini/gemini_json/sft/class_china_caimai_0212_multireso.json             # (1.00 *   364,904 =   364,904)
+      - /apdcephfs_nj8/share_301739632/0_public_datasets/text2image_gemini/gemini_json/sft/class_badcase_0108_multireso.json                  # (1.00 *   247,161 =   247,161)
+      - /apdcephfs_nj8/share_301739632/0_public_datasets/text2image_gemini/gemini_json/sft/class_mj_ai_0110_multireso_zh.json                 # (1.00 * 1,520,657 = 1,520,657)
+      - /apdcephfs_nj8/share_301739632/0_public_datasets/text2image_gemini/gemini_json/sft/flux_ai_12w_fliter_hsv_multi_zh.json               # (1.00 *   128,843 =   128,843)
+      - /apdcephfs_nj8/share_301739632/0_public_datasets/text2image_gemini/gemini_json/sft/20241223_美学top2k_mb1024.json                      # (1.00 *     1,571 =     1,571)
+      - /apdcephfs_nj8/share_301739632/0_public_datasets/text2image_gemini/gemini_json/sft/game_1220_10w_multireso_mb1024.json                # (1.00 *   109,222 =   109,222)
+      - /apdcephfs_nj8/share_301739632/0_public_datasets/text2image_gemini/gemini_json/sft/0101_diamod_400_multi_mb1024.json                  # (1.00 *       419 =       419)
+      - /apdcephfs_nj8/share_301739632/0_public_datasets/text2image_gemini/gemini_json/sft/0102_human170_multi_mb1024.json                    # (1.00 *       171 =       171)
+      - /apdcephfs_nj8/share_301739632/0_public_datasets/text2image_gemini/gemini_json/sft/class_kavyar_0104_multireso_mb1024.json            # (1.00 *     2,580 =     2,580)
+      - /apdcephfs_nj8/share_301739632/0_public_datasets/text2image_gemini/gemini_json/sft/20250101_china_item_multi_3.4k_mb1024.json         # (1.00 *     3,253 =     3,253)
+      - /apdcephfs_nj8/share_301739632/0_public_datasets/text2image_gemini/gemini_json/sft/class_doubao_human_0114_multireso_mb1024.json      # (1.00 *     7,997 =     7,997)
+      - /apdcephfs_nj8/share_301739632/0_public_datasets/text2image_gemini/gemini_json/sft/class_doubao_text_6k_0115_multireso_mb1024.json    # (1.00 *     6,278 =     6,278)
+      - /apdcephfs_nj8/share_301739632/0_public_datasets/text2image_gemini/gemini_json/sft/class_hq_0213_multireso_mb1024.json                # (1.00 *    38,114 =    38,114)
+      - /apdcephfs_nj10/share_301739632/jacobkong/gitpackages/data_process/data/text2image/arrows_text_rendering/train_json_1/wenzi_from_kris_20250404_multi_mb1024.json  #  3,536,038  text
+      # - /apdcephfs_nj8/share_301739632/jarvizhang/workspace/hymm_ar/__data/pretrain/t2i/demo_mb1024.json  # for testing
+    multireso: True
+    ceph_base_inv: '{"nj8": "/apdcephfs_nj8/share_301739632", "gy4": "/apdcephfs_nj8/share_301739632", "gy2": "/apdcephfs_nj10/share_301739632", "nj8_3019": "/apdcephfs_nj8/share_301932837", "nj10": "/apdcephfs_nj10/share_301739632"}'
+    image_col: cache_image
+    image_col_2: image
+    image_caption_col: caption_v2
+    image_caption_col_2: simple_caption
+    image_caption_col_3: gemini_beta_zh_caption@_gemini_beta    # image
+    image_text_col: text_source
+    index_strategy: probability
+    index_probability: [
+      1.0,    # (1,507,352) p1
+      3.0,    # (   32,127) p2
+      0.12,   # (  259,434) p3
+      1.0,    # (  182,238) p4
+      1.0,    # (   10,104) p5
+      1.0,    # (   42,736) p6
+      1.0,    # (  106,525) p7
+      0.12,   # (  212,812) p8
+      1.0,    # (   50,799) p9
+      1.0,    # (  174,308) p10
+      1.0,    # (   84,828) p12
+      0.12,   # (   24,867) p13  p1-p13总计: 2,688,130
+      1.0,    # (   43,152) biaoqingbao250404_mb1024
+      0.1,    # (4,656,619) game_470w_multireso_mb1024
+      1.0,    # (  335,493) mb1024_4panel_comic   ---- Engligh 350w
+      1.0,    # (1,648,548) t2i_application_human_data_gold_mb1024_filter_cap
+      0.1,    # (4,707,081) game_data_count_multireso_1205_nj
+      1.0,    # (  237,288) china_vcg_0901_multireso
+      1.0,    # (  364,904) class_china_caimai_0212_multireso
+      1.0,    # (  247,161) class_badcase_0108_multireso
+      0.002,  # (1,520,657) class_mj_ai_0110_multireso_zh   (app 0.002)
+      0.05,   # (  128,843) flux_ai_12w_fliter_hsv_multi_zh (app 0.05)
+      1.0,    # (    1,571) 20241223_美学top2k_mb1024
+      0.02,   # (  109,222) game_1220_10w_multireso_mb1024  (app 0.02)
+      1.0,    # (      419) 0101_diamod_400_multi_mb1024
+      1.0,    # (      171) 0102_human170_multi_mb1024
+      1.0,    # (    2,580) class_kavyar_0104_multireso_mb1024
+      1.0,    # (    3,253) 20250101_china_item_multi_3
+      1.0,    # (    7,997) class_doubao_human_0114_multireso_mb1024
+      1.0,    # (    6,278) class_doubao_text_6k_0115_multireso_mb1024
+      0.1,    # (   38,114) class_hq_0213_multireso_mb1024   (app 0.1, zh)    --- Chinese 300w
+      0.3     # (3,536,038) wenzi_from_kris_20250404_multi_mb1024  (zh)       --- Chinese 100w
+    ]
+
+  # Editing 932w
+  editing_batch_size: 2
+  editing_task_kwargs:
+    editing_training_image_size: 1024
+    editing_image_token_length: 4096
+    editing_text_token_length: 384
+    editing_uncond_p: 0.1
+    editing_caption_processor: caption_process_v2
+    editing_caption_processor_kwargs: '{"ocr_only_long_caption": true}'
+    editing_image_caption_rate: 1.0
+    editing_inpainting_lama_ratio: 0.5
+    editing_caption_sample_ratio: '{"long_caption":0.4,"medium_caption":0.3,"short_caption":0.25,"background":0.08,"shot_type":0.08,"style":0.08,"light":0.08,"atmosphere":0.08,"composition":0.08,"IP":0.08}'
+    editing_mask_generator_probs: [0.4, 0.4, 0.2]
+    editing_grounding_with_caption: True
+    # editing_grounding_n_select: 1
+    editing_grounding_pred_mask_type: masked_image
+    editing_grounding_coco_sample_mask_rate: 0.9
+    editing_grounding_grit_box_score_threshold: 0.65
+    editing_attn_type: flex
+    editing_instruction_candidates_type: 'off'  # The quotation mark is required to avoid yaml parsing to False
+  editing_index_kwargs:
+    editing_index_file:
+      - /apdcephfs_nj8/share_301739632/1_public_models/hymm_ar_assets/dataset/generative_instruction_tuning/image_editing/Video2Frame/new/mb1024.json       #  1,283,614
+      - /apdcephfs_nj8/share_301739632/0_public_datasets/instruction_tuning_gemini/image_editing/OmniEdit/mb1024.json                                       #  1,144,844
+      - /apdcephfs_nj8/share_301739632/1_public_models/hymm_ar_assets/dataset/generative_instruction_tuning/image_editing/SeedEdit/mb1024.json              #    845,809
+      - /apdcephfs_nj8/share_301739632/1_public_models/hymm_ar_assets/dataset/generative_instruction_tuning/image_editing/Caimai/mb1024.json                #    235,997
+      - /apdcephfs_nj8/share_301739632/1_public_models/hymm_ar_assets/dataset/generative_instruction_tuning/image_inpainting/golden/new/mb1024.json         # 17,494,969
+      - /apdcephfs_nj8/share_301739632/1_public_models/hymm_ar_assets/dataset/generative_instruction_tuning/controlnet/new/mb1024.json                      #  9,365,599
+      - /apdcephfs_nj8/share_301739632/1_public_models/hymm_ar_assets/dataset/generative_instruction_tuning/style_transfer/text_guided/new1024/mb1024.json  #     97,847
+    editing_multireso: True
+    editing_ceph_base_inv: '{"nj8": "/apdcephfs_nj8/share_301739632"}'
+    editing_src_image_col: src_img_bytes
+    editing_tgt_image_col: tgt_img_bytes
+    editing_extra_src_image_col: src_cache_image
+    editing_extra_tgt_image_col: tgt_cache_image
+    editing_image_caption_col: instruction
+    editing_inpainting_image_col: image
+    editing_inpainting_caption_col: tgt_caption_v2
+    editing_controlnet_caption_v2_col: tgt_caption_v2
+    editing_controlnet_pred_condition_ratio: 0.3
+    editing_controlnet_src_cols: [
+      "pose_img_full", "pose_img_only_body", "depth_midas", "depth_zoe", "normal_bae", "lineart", "lineart_coarse",
+      "mlsd", "scribble_hed", "scribble_pidi", "edge_hed_results", "edge_hed_results_safe", "edge_pidi_results",
+      "edge_pidi_results_safe", "seg_uniformer", "seg_oneformer_coco", "seg_oneformer_ade20k"
+    ]
+    editing_controlnet_caption_col: tgt_simple_caption
+    editing_index_strategy: probability
+    editing_index_probability: [0.1, 1.0, 1.0, 1.0, 0.1, 0.2, 1.0]
+
+  # editcot
+  editcot_batch_size: 2
+  editcot_task_kwargs:
+    editcot_training_image_size: 1024
+    editcot_image_token_length: 4096
+    editcot_text_token_length: 256
+    editcot_description_token_length: 256
+    editcot_uncond_p: 0.1
+    editcot_caption_processor: caption_process_v2
+    editcot_caption_processor_kwargs: '{"ocr_only_long_caption": true}'
+    editcot_image_caption_rate: 1.0
+    editcot_inpainting_lama_ratio: 0.5
+    editcot_caption_sample_ratio: '{"long_caption":0.4,"medium_caption":0.3,"short_caption":0.25,"background":0.08,"shot_type":0.08,"style":0.08,"light":0.08,"atmosphere":0.08,"composition":0.08,"IP":0.08}'
+    editcot_mask_generator_probs: [0.4, 0.4, 0.2]
+    editcot_grounding_with_caption: True
+    # editcot_grounding_n_select: 1
+    editcot_grounding_pred_mask_type: masked_image
+    editcot_grounding_coco_sample_mask_rate: 0.9
+    editcot_grounding_grit_box_score_threshold: 0.65
+    editcot_attn_type: flex
+    editcot_instruction_candidates_type: 'off'  # The quotation mark is required to avoid yaml parsing to False
+  editcot_index_kwargs:
+    editcot_index_file:
+      - /apdcephfs_nj8/share_301739632/1_public_models/hymm_ar_assets/dataset/generative_instruction_tuning/image_editing/SeedEdit/new_0429/seededit_filter_mb1024.json     # 1,167,903
+    editcot_multireso: True
+    editcot_ceph_base_inv: '{"nj8": "/apdcephfs_nj8/share_301739632"}'
+    editcot_src_image_col: src_img_bytes
+    editcot_tgt_image_col: tgt_img_bytes
+    editcot_extra_src_image_col: src_cache_image
+    editcot_extra_tgt_image_col: tgt_cache_image
+    editcot_image_caption_col: instruction
+    editcot_inpainting_image_col: image
+    editcot_inpainting_caption_col: tgt_caption_v2
+    editcot_controlnet_caption_v2_col: tgt_caption_v2
+    editcot_controlnet_pred_condition_ratio: 0.3
+    editcot_controlnet_src_cols: [
+      "pose_img_full", "pose_img_only_body", "depth_midas", "depth_zoe", "normal_bae", "lineart", "lineart_coarse",
+      "mlsd", "scribble_hed", "scribble_pidi", "edge_hed_results", "edge_hed_results_safe", "edge_pidi_results",
+      "edge_pidi_results_safe", "seg_uniformer", "seg_oneformer_coco", "seg_oneformer_ade20k"
+    ]
+    editcot_controlnet_caption_col: tgt_simple_caption
+    editcot_index_strategy: probability
+    editcot_index_probability: [1.0]
+
+  # Subject Driven 700w
+  subject_driven_batch_size: 1
+  subject_driven_task_kwargs:
+    subject_driven_training_image_size: 1024
+    subject_driven_image_token_length: 4096
+    subject_driven_text_token_length: 384
+    subject_driven_uncond_p: 0.1
+    subject_driven_max_num_refs: 3
+    subject_driven_attn_type: flex
+    subject_driven_instruction_candidates_type: 'off'
+  subject_driven_index_kwargs:
+    subject_driven_index_file:
+      - /apdcephfs_nj8/share_301739632/1_public_models/hymm_ar_assets/dataset/generative_instruction_tuning/subject_driven/flux_two_role_mb1024.json   # 3,977,540
+      - /apdcephfs_nj8/share_301739632/1_public_models/hymm_ar_assets/dataset/generative_instruction_tuning/subject_driven/xhs_single_role_mb1024.json  # 459,574
+      - /apdcephfs_nj8/share_301739632/1_public_models/hymm_ar_assets/dataset/generative_instruction_tuning/style_transfer/image_guided/new1024/mb1024.json   #   195,694
+    subject_driven_multireso: True
+    subject_driven_ceph_base_inv: '{"nj8": "/apdcephfs_nj8/share_301739632"}'
+    subject_driven_tgt_image_col: tgt_img_bytes
+    subject_driven_image_caption_col: simple_caption
+    subject_driven_image_caption_col_2: tgt_simple_caption
+    subject_driven_index_strategy: probability
+    subject_driven_index_probability: [0.5, 2.0, 1.0]
+
+  # Face ID 250w: face embedding + src_image as conditions
+  face_id_embedding_batch_size: 2
+  face_id_embedding_task_kwargs:
+    face_id_embedding_qformer_token_length: 16
+    face_id_embedding_training_image_size: 1024
+    face_id_embedding_image_token_length: 4096
+    face_id_embedding_text_token_length: 368  # +16=384, must be multiples of 128 required by flex attn
+    face_id_embedding_uncond_p: 0.2
+    face_id_embedding_face_uncond_p: 0.2
+    face_id_embedding_caption_sample_ratio: '{"long_caption":0.4,"medium_caption":0.3,"short_caption":0.25,"background":0.08,"shot_type":0.08,"style":0.08,"light":0.08,"atmosphere":0.08,"composition":0.08,"IP":0.08}'
+    face_id_embedding_caption_processor: caption_process_v2
+    face_id_embedding_caption_processor_kwargs: '{"ocr_only_long_caption": true}'
+    face_id_embedding_caption_sample_ratio_photomaker: '{"long caption":0.75,"short caption":0.25,"background":0.08,"shot type":0.08,"style":0.08,"light":0.08,"atmosphere":0.08}'
+    face_id_embedding_caption_processor_photomaker: caption_process
+    face_id_embedding_attn_type: flex
+    face_id_embedding_condition_type: face_embedding_src_image    # new
+    face_id_embedding_instruction_candidates_type: 'off'
+  face_id_embedding_index_kwargs:
+    face_id_embedding_index_file:
+      - /apdcephfs_nj8/share_301739632/1_public_models/hymm_ar_assets/dataset/generative_instruction_tuning/id_preserve/id_folder/mb1024.json             # 611,564
+      - /apdcephfs_nj8/share_301739632/1_public_models/hymm_ar_assets/dataset/generative_instruction_tuning/id_preserve/id_xhs_single_role/mb1024.json    # 461,330
+      - /apdcephfs_nj8/share_301739632/1_public_models/hymm_ar_assets/dataset/generative_instruction_tuning/id_preserve/id_preserve_video_keyframe/mb1024.json # 684,455
+      - /apdcephfs_nj8/share_301739632/1_public_models/hymm_ar_assets/dataset/generative_instruction_tuning/id_preserve/id_photomaker/mb1024.json       # 731,953
+    face_id_embedding_multireso: True
+    face_id_embedding_ceph_base_inv: '{"nj8": "/apdcephfs_nj8/share_301739632"}'
+    face_id_embedding_index_strategy: probability
+    face_id_embedding_index_probability: [1.0, 1.0, 1.0, 1.0]
+
+  # Language Model 5573w
+  lm_batch_size: 3
+  lm_index_file:
+    - /apdcephfs_nj8/share_301739632/1_public_models/hymm_ar_assets/dataset/t2t_index/instruct_text.json
+  lm_token_length: 8192
+  lm_attn_type: causal
+  lm_index_kwargs:
+    lm_ceph_base_inv: '{"nj8": "/apdcephfs_nj8/share_301739632", "gy2": "/apdcephfs_nj8/share_301739632"}'
+
+  # Dataloader
+  dataloader_params:
+    num_workers: 4
+    pin_memory: True
+    prefetch_factor: 4

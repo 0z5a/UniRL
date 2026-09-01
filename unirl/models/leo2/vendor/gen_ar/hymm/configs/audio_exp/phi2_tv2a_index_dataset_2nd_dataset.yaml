@@ -1,0 +1,103 @@
+training_config:
+  trainer_name: VisualText2Audio
+  micro_batch_size: 12
+  gradient_accumulation_steps: 1
+  global_seed: 1
+  reproduce: False
+  profile: False
+  output_dir: /apdcephfs_gy2/share_302507476/milesjyang/exp_dir/VisualText2Audio2ndExpInterleave
+  task_flag: tv2a_dac8192_genaucap
+  zero_stage: 2
+  max_epochs: 4
+  max_training_steps: 10_000_000
+  ckpt_every: 2500
+  autocast_dtype: bf16
+  resume: null
+
+dac_ckpt: /apdcephfs_cq8/share_1367250/milesjyang/github/dac_lite/models/50kh_2code_8192_800kiter.pth
+# t5 and clip
+t5_path: /apdcephfs_gy2/share_302507476/1_public_models/flan-ul2-text-encoder/
+clip_path: /apdcephfs_gy2/share_302507476/1_public_models/clip-vit-large-patch14/
+sampling_config:
+  parquet: /apdcephfs_gy2/share_302507476/0_public_datasets/video2audio/audioset/val_dataset/val_dataset_simplified_filter_video_genau_caps_smd_sc.parquet
+  eval_data_root: /apdcephfs_gy2/share_302507476/0_public_datasets/video2audio/audioset/val_dataset/
+  csv: null
+  # csv: ./data/test/tv2audio_aries.csv
+  # eval_data_root: /apdcephfs_cq8/share_1367250/jamesjzhou/Data/v2a_eval_gen_dataset/
+  evaluation_metrics: [imagebind_score@audioset, clap_score@audioset, fad@audioset, fad_vggish@audioset, imagebind_score@vggsound, clap_score@vggsound, fad@vggsound, fad_vggish@vggsound]
+  metric_save_path: /apdcephfs_gy2/share_302507476/milesjyang/exp_dir/audio_test/audioset.json
+  metric_batch_size: 1
+  repeat_to_full: False
+  evaluation_media_type: audio
+  interactive: False
+  slice_manualy: False
+  logits_processors_cfg:
+  - SliceDoubleVocabLogitsWarper:
+      num_vocab: 2
+      vocab_start: [51200, 59392]
+      vocab_end: [59392, 67584]
+  - CfgLogitsWarper:
+      guidance_scale: 8.0
+  - TopKLogitsWarper:
+      top_k: 1024
+  - TopPLogitsWarper:
+      top_p: 0.9
+
+model_config:
+  model_name: phi-2
+  pretrained_ckpt: null
+  load_llm_to_mllm: False
+  expand_keys: ["transformer.wte.weight", "lm_head.weight", "lm_head.bias"]
+  model_precision: bf16
+  model_type: ContinuousMultiModalGPT
+  clip_dim: 768
+  clip_start: 2
+  t5_dim: 4096
+  t5_start: 44
+  use_t5: True
+  media_vocab_size: 16384
+
+extra_model_config:
+  vae_type: dac-24khz-double
+  vae_precision: fp32
+  
+optimizer_config:
+  optimizer_name: AdamW
+  gradient_clipping: 1.0
+  optimizer_params:
+    lr: 0.00008118
+    betas: [0.9, 0.95]
+    eps: 0.000001
+    weight_decay: 0.01
+  
+lr_scheduler_config:
+  lr_scheduler_name: WarmupCosineLR
+  lr_scheduler_params:
+    warmup_num_steps: 0
+    total_num_steps: -1
+
+dataloader_config:
+  index_file: /apdcephfs_gy2/share_302507476/0_public_datasets/video2audio/v2a_20241106/v2a_100m.json
+  t5_pad_emb: /apdcephfs_gy2/share_302507476/0_public_datasets/video2audio/v2a_20241106/T5_pad_embedding.pt
+  clip_pad_emb: /apdcephfs_gy2/share_302507476/0_public_datasets/video2audio/v2a_20241106/black_video.pt
+  text_tokenizer: "phi-2"
+  audio_token_offset: 51200
+  drop_clip: 0.1
+  drop_text: 0.1
+  feat_in_shadow: True
+  double_codebook: True
+  codebook_arrangement: interleave
+  dac_voca_size: 8192
+  audio_token_max_length: 750
+  max_text_length: 181
+  max_frames: 40
+  max_sequence_len: 1729   # 1776 for input and target (111*16)
+  shadow_file:
+    clip_suffix: _clip
+    clip_col: clip_feat
+    dac_suffix: _dac
+    dac_col: dac_token
+    t5_suffix: _t5
+    t5_col: t5_feat
+  dataloader_params:
+    num_workers: 4

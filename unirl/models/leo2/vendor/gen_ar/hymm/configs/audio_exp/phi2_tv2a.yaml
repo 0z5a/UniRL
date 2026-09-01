@@ -1,0 +1,54 @@
+training_config:
+  trainer_name: VisualText2Audio
+  micro_batch_size: 8
+  gradient_accumulation_steps: 1
+  global_seed: 1
+  reproduce: False
+  profile: False
+  output_dir: /apdcephfs_qy2/share_302549489/milesjyang/exp_dir/VisualText2Audio
+  task_flag: audio_test
+  zero_stage: 2
+
+  max_epochs: 10
+  max_training_steps: 10_000_000
+  ckpt_every: 5000
+
+model_config:
+  model_name: phi-2
+  pretrained_ckpt: phi-2
+  load_llm_to_mllm: True
+  expand_keys: ["transformer.wte.weight", "lm_head.weight", "lm_head.bias"]
+  model_precision: bf16
+  model_type: ContinuousMultiModalGPT
+  clip_dim: 768
+  clip_start: 2
+  t5_dim: 4096
+  t5_start: 44
+  media_vocab_size: 4096
+
+optimizer_config:
+  optimizer_name: AdamW
+  gradient_clipping: 1.0
+  optimizer_params:
+    lr: 0.0001
+    betas: [0.9, 0.95]
+    eps: 0.000001
+    weight_decay: 0.01
+  
+lr_scheduler_config:
+  lr_scheduler_name: WarmupCosineLR
+  lr_scheduler_params:
+    warmup_num_steps: 5000
+    total_num_steps: 100000
+
+dataloader_config:
+  parquet_file: /apdcephfs_jn/share_302243067/0_public_datasets/V2A/audioset/train_with_qwen_caption_filtered.parquet
+  clip_root: /apdcephfs_jn/share_302243067/0_public_datasets/V2A/audioset/clip_feat_4fps/
+  t5_root: /apdcephfs_jn/share_302243067/0_public_datasets/V2A/audioset/Qwen2AudioCaption_T5_Emb/train_24k/
+  t5_pad_emb: /apdcephfs_jn/share_302243067/0_public_datasets/V2A/audioset/T5_pad_embedding.pt
+  token_root: /apdcephfs_jn/share_302243067/0_public_datasets/V2A/audioset/dac_1code_5kh_400iter_train/
+  clip_pad_emb: /apdcephfs_jn/share_302243067/0_public_datasets/V2A/audioset/black_video.pt
+  text_tokenizer: "phi-2"
+  audio_token_offset: 51200
+  dataloader_params:
+    num_workers: 4
