@@ -34,6 +34,7 @@ COUNTER_FIELDS = (
     "cfg_reuse_calls",
     "cache_bytes",
 )
+RANK_IDENTICAL_COUNTER_FIELDS = tuple(field for field in COUNTER_FIELDS if field != "cache_bytes")
 
 
 @dataclass(frozen=True)
@@ -228,6 +229,23 @@ def _distributed_extrema(values: list[float]) -> tuple[list[float], list[float]]
         [float(value) for value in minimum.cpu().tolist()],
         [float(value) for value in maximum.cpu().tolist()],
     )
+
+
+def _merge_rank_measurements(minima: list[float], maxima: list[float]) -> tuple[float, float, float, dict[str, int]]:
+    """Require identical decisions while reducing rank-local peak measurements."""
+    expected = 3 + len(RANK_IDENTICAL_COUNTER_FIELDS) + 1
+    if len(minima) != expected or len(maxima) != expected:
+        raise ValueError(f"Expected {expected} distributed measurements, got {len(minima)} and {len(maxima)}.")
+    counter_end = 3 + len(RANK_IDENTICAL_COUNTER_FIELDS)
+    if minima[3:counter_end] != maxima[3:counter_end]:
+        raise RuntimeError(
+            f"Leo2 cache counters diverged across ranks: min={minima[3:counter_end]}, max={maxima[3:counter_end]}"
+        )
+    stats = {
+        field: int(value) for field, value in zip(RANK_IDENTICAL_COUNTER_FIELDS, maxima[3:counter_end], strict=True)
+    }
+    stats["cache_bytes"] = int(maxima[counter_end])
+    return maxima[0], maxima[1], maxima[2], stats
 
 
 def _numeric_sequence(value: Any, *, field: str) -> list[float]:
@@ -702,14 +720,19 @@ def _install_instrumentation(options: BenchmarkOptions) -> None:
             fail(str(exc), type(exc).__name__)
             raise
         minima, maxima = _distributed_extrema(
-            [elapsed, allocated, reserved, *(float(stats[field]) for field in COUNTER_FIELDS)]
+            [
+                elapsed,
+                allocated,
+                reserved,
+                *(float(stats[field]) for field in RANK_IDENTICAL_COUNTER_FIELDS),
+                float(stats["cache_bytes"]),
+            ]
         )
-        if minima[3:] != maxima[3:]:
-            reason = f"Leo2 cache counters diverged across ranks: min={minima[3:]}, max={maxima[3:]}"
-            fail(reason)
-            raise RuntimeError(reason)
-        elapsed, allocated, reserved = maxima[:3]
-        stats = {field: int(value) for field, value in zip(COUNTER_FIELDS, maxima[3:])}
+        try:
+            elapsed, allocated, reserved, stats = _merge_rank_measurements(minima, maxima)
+        except (RuntimeError, ValueError) as exc:
+            fail(str(exc), type(exc).__name__)
+            raise
         try:
             _validate_cache_stats(stats, method=options.method, expected_steps=expected_steps)
         except RuntimeError as exc:

@@ -94,11 +94,13 @@ Git, diff, input and artifact fingerprints in `benchmark.env`, plus
 `summary.csv`, `paired_metrics.csv` and `summary.json`.
 
 Request latency is CUDA-synchronized and reduced with MAX across ranks. Cache
-counters must have identical MIN and MAX. Whole-tail methods validate exactly
-50 total tail compute/reuse steps. FasterCache DFR uses attention counters and
-is not forced into that invariant. Reports retain legacy full/skip counters and
-add tail compute/reuse, Taylor prediction/fallback, attention compute/reuse,
-CFG compute/reuse, cache bytes, and peak CUDA allocation/reservation.
+decision counters must have identical MIN and MAX. `cache_bytes` is rank-local
+under CP because padding can differ, so it follows peak CUDA memory and reports
+MAX. Whole-tail methods validate exactly 50 total tail compute/reuse steps.
+FasterCache DFR uses attention counters and is not forced into that invariant.
+Reports retain legacy full/skip counters and add tail compute/reuse, Taylor
+prediction/fallback, attention compute/reuse, CFG compute/reuse, cache bytes,
+and peak CUDA allocation/reservation.
 
 Taylor requests also record prediction warm-up count and the mean/maximum
 extrapolation coefficient. A `magcache_calibrate` request records its complete
