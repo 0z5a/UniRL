@@ -612,6 +612,11 @@ class LeoMagCacheController(LeoFirstBlockCacheController):
         timestep: torch.Tensor | None = None,
     ) -> bool:
         """Decide before block zero whether the cached full-stack residual may be reused."""
+        if len(block_inputs) == 3 and block_inputs[1] is not None:
+            raise RuntimeError(
+                "Leo MagCache currently supports video-only inference; "
+                "audio requires an independently calibrated decision stream."
+            )
         if self._pending_timestep is not None or self._pending_sync_plan is not None:
             raise RuntimeError("Leo MagCache received a second decision before completing the previous step.")
         sync_plan = self._synchronization_plan(leader_block)
