@@ -1,0 +1,448 @@
+{
+    "subject_consistency": [
+        0.8921873149384434,
+        [
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/0_0.mp4",
+                "video_results": 0.9410111722846826
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/1_0.mp4",
+                "video_results": 0.9082433352867763
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/2_0.mp4",
+                "video_results": 0.9105767024060091
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/3_0.mp4",
+                "video_results": 0.8857817932963371
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/4_0.mp4",
+                "video_results": 0.6688936334103346
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/5_0.mp4",
+                "video_results": 0.9102532756825288
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/6_0.mp4",
+                "video_results": 0.8999680931369464
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/7_0.mp4",
+                "video_results": 0.9336103722453117
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/8_0.mp4",
+                "video_results": 0.9060900082190831
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/9_0.mp4",
+                "video_results": 0.9151516983906428
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/10_0.mp4",
+                "video_results": 0.8430058298011621
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/11_0.mp4",
+                "video_results": 0.9510126315057278
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/12_0.mp4",
+                "video_results": 0.7911651434997717
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/13_0.mp4",
+                "video_results": 0.9071944477657478
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/14_0.mp4",
+                "video_results": 0.9352138946453731
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/15_0.mp4",
+                "video_results": 0.9678250074386596
+            }
+        ]
+    ],
+    "background_consistency": [
+        0.9272558848063152,
+        [
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/0_0.mp4",
+                "video_results": 0.9344197591145833,
+                "video_sim": 112.13037109375,
+                "cnt_per_video": 120
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/1_0.mp4",
+                "video_results": 0.9290995279947917,
+                "video_sim": 111.491943359375,
+                "cnt_per_video": 120
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/2_0.mp4",
+                "video_results": 0.95074462890625,
+                "video_sim": 114.08935546875,
+                "cnt_per_video": 120
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/3_0.mp4",
+                "video_results": 0.8991129557291667,
+                "video_sim": 107.8935546875,
+                "cnt_per_video": 120
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/4_0.mp4",
+                "video_results": 0.8693583170572917,
+                "video_sim": 104.322998046875,
+                "cnt_per_video": 120
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/5_0.mp4",
+                "video_results": 0.9593180338541667,
+                "video_sim": 115.1181640625,
+                "cnt_per_video": 120
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/6_0.mp4",
+                "video_results": 0.9419657389322916,
+                "video_sim": 113.035888671875,
+                "cnt_per_video": 120
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/7_0.mp4",
+                "video_results": 0.9458760579427083,
+                "video_sim": 113.505126953125,
+                "cnt_per_video": 120
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/8_0.mp4",
+                "video_results": 0.8906026204427083,
+                "video_sim": 106.872314453125,
+                "cnt_per_video": 120
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/9_0.mp4",
+                "video_results": 0.9403157552083333,
+                "video_sim": 112.837890625,
+                "cnt_per_video": 120
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/10_0.mp4",
+                "video_results": 0.8793986002604167,
+                "video_sim": 105.52783203125,
+                "cnt_per_video": 120
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/11_0.mp4",
+                "video_results": 0.957354736328125,
+                "video_sim": 114.882568359375,
+                "cnt_per_video": 120
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/12_0.mp4",
+                "video_results": 0.91158447265625,
+                "video_sim": 109.39013671875,
+                "cnt_per_video": 120
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/13_0.mp4",
+                "video_results": 0.9277018229166667,
+                "video_sim": 111.32421875,
+                "cnt_per_video": 120
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/14_0.mp4",
+                "video_results": 0.9289794921875,
+                "video_sim": 111.4775390625,
+                "cnt_per_video": 120
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/15_0.mp4",
+                "video_results": 0.9702616373697917,
+                "video_sim": 116.431396484375,
+                "cnt_per_video": 120
+            }
+        ]
+    ],
+    "motion_smoothness": [
+        0.9768555062492426,
+        [
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/0_0.mp4",
+                "video_results": 0.9659710816029585
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/1_0.mp4",
+                "video_results": 0.9705387418309512
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/2_0.mp4",
+                "video_results": 0.9863572954517508
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/3_0.mp4",
+                "video_results": 0.9858715054858693
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/4_0.mp4",
+                "video_results": 0.9765423061111147
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/5_0.mp4",
+                "video_results": 0.9872230933563424
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/6_0.mp4",
+                "video_results": 0.9827344252758394
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/7_0.mp4",
+                "video_results": 0.9770016564670941
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/8_0.mp4",
+                "video_results": 0.9604373323068203
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/9_0.mp4",
+                "video_results": 0.9866032993973632
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/10_0.mp4",
+                "video_results": 0.9638177326850008
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/11_0.mp4",
+                "video_results": 0.9769287356809093
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/12_0.mp4",
+                "video_results": 0.9720568937788012
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/13_0.mp4",
+                "video_results": 0.9808688874324399
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/14_0.mp4",
+                "video_results": 0.9626439936030527
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/15_0.mp4",
+                "video_results": 0.9940911195215725
+            }
+        ]
+    ],
+    "dynamic_degree": [
+        0.8125,
+        [
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/0_0.mp4",
+                "video_results": true
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/1_0.mp4",
+                "video_results": true
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/2_0.mp4",
+                "video_results": false
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/3_0.mp4",
+                "video_results": true
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/4_0.mp4",
+                "video_results": true
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/5_0.mp4",
+                "video_results": true
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/6_0.mp4",
+                "video_results": true
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/7_0.mp4",
+                "video_results": false
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/8_0.mp4",
+                "video_results": true
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/9_0.mp4",
+                "video_results": true
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/10_0.mp4",
+                "video_results": true
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/11_0.mp4",
+                "video_results": true
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/12_0.mp4",
+                "video_results": true
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/13_0.mp4",
+                "video_results": true
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/14_0.mp4",
+                "video_results": true
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/15_0.mp4",
+                "video_results": false
+            }
+        ]
+    ],
+    "aesthetic_quality": [
+        0.4853950683027506,
+        [
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/0_0.mp4",
+                "video_results": 0.5031539797782898
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/1_0.mp4",
+                "video_results": 0.6325834393501282
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/2_0.mp4",
+                "video_results": 0.38467758893966675
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/3_0.mp4",
+                "video_results": 0.440333753824234
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/4_0.mp4",
+                "video_results": 0.47330495715141296
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/5_0.mp4",
+                "video_results": 0.6095811724662781
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/6_0.mp4",
+                "video_results": 0.38439881801605225
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/7_0.mp4",
+                "video_results": 0.47333404421806335
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/8_0.mp4",
+                "video_results": 0.6394925713539124
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/9_0.mp4",
+                "video_results": 0.4835245609283447
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/10_0.mp4",
+                "video_results": 0.42020195722579956
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/11_0.mp4",
+                "video_results": 0.6037801504135132
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/12_0.mp4",
+                "video_results": 0.3678663671016693
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/13_0.mp4",
+                "video_results": 0.4006138741970062
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/14_0.mp4",
+                "video_results": 0.5103151202201843
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/15_0.mp4",
+                "video_results": 0.43915873765945435
+            }
+        ]
+    ],
+    "imaging_quality": [
+        0.5985381107684994,
+        [
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/0_0.mp4",
+                "video_results": 56.56393025926322
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/1_0.mp4",
+                "video_results": 63.82189692347503
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/2_0.mp4",
+                "video_results": 51.51321136852926
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/3_0.mp4",
+                "video_results": 60.201166216006946
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/4_0.mp4",
+                "video_results": 53.65937600254027
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/5_0.mp4",
+                "video_results": 62.352667942520014
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/6_0.mp4",
+                "video_results": 57.41377819471123
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/7_0.mp4",
+                "video_results": 74.94672652315502
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/8_0.mp4",
+                "video_results": 61.238833498363654
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/9_0.mp4",
+                "video_results": 65.31871694769741
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/10_0.mp4",
+                "video_results": 74.03258542778079
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/11_0.mp4",
+                "video_results": 75.91353966578964
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/12_0.mp4",
+                "video_results": 43.36253903917045
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/13_0.mp4",
+                "video_results": 55.26564454638268
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/14_0.mp4",
+                "video_results": 48.28146374915257
+            },
+            {
+                "video_path": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t005_shift3/samples/cache_benchmark_16__16/videos/15_0.mp4",
+                "video_results": 53.77490092506093
+            }
+        ]
+    ]
+}

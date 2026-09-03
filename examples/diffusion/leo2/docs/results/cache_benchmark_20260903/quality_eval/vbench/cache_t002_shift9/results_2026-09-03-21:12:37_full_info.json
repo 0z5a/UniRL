@@ -1,0 +1,226 @@
+[
+    {
+        "prompt_en": "A red panda runs along a rain-darkened bamboo path while the camera tracks low beside it, with droplets scattering from every step.",
+        "dimension": [
+            "subject_consistency",
+            "background_consistency",
+            "motion_smoothness",
+            "dynamic_degree",
+            "aesthetic_quality",
+            "imaging_quality"
+        ],
+        "video_list": [
+            "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t002_shift9/samples/cache_benchmark_16__16/videos/0_0.mp4"
+        ]
+    },
+    {
+        "prompt_en": "An astronaut walks through a field of sunflowers at sunrise as a slow crane shot reveals a distant silver lander.",
+        "dimension": [
+            "subject_consistency",
+            "background_consistency",
+            "motion_smoothness",
+            "dynamic_degree",
+            "aesthetic_quality",
+            "imaging_quality"
+        ],
+        "video_list": [
+            "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t002_shift9/samples/cache_benchmark_16__16/videos/1_0.mp4"
+        ]
+    },
+    {
+        "prompt_en": "A glassblowing artisan rotates molten orange glass in a dim workshop while sparks drift through shafts of warm light.",
+        "dimension": [
+            "subject_consistency",
+            "background_consistency",
+            "motion_smoothness",
+            "dynamic_degree",
+            "aesthetic_quality",
+            "imaging_quality"
+        ],
+        "video_list": [
+            "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t002_shift9/samples/cache_benchmark_16__16/videos/2_0.mp4"
+        ]
+    },
+    {
+        "prompt_en": "Two sailboats cross a turquoise bay under fast-moving clouds, filmed from a smooth aerial orbit around a rocky island.",
+        "dimension": [
+            "subject_consistency",
+            "background_consistency",
+            "motion_smoothness",
+            "dynamic_degree",
+            "aesthetic_quality",
+            "imaging_quality"
+        ],
+        "video_list": [
+            "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t002_shift9/samples/cache_benchmark_16__16/videos/3_0.mp4"
+        ]
+    },
+    {
+        "prompt_en": "A tiny robot carefully waters rooftop tomatoes during golden hour as city traffic glows far below.",
+        "dimension": [
+            "subject_consistency",
+            "background_consistency",
+            "motion_smoothness",
+            "dynamic_degree",
+            "aesthetic_quality",
+            "imaging_quality"
+        ],
+        "video_list": [
+            "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t002_shift9/samples/cache_benchmark_16__16/videos/4_0.mp4"
+        ]
+    },
+    {
+        "prompt_en": "A white horse gallops across a black-sand beach beside breaking waves while the camera follows in a wide side profile.",
+        "dimension": [
+            "subject_consistency",
+            "background_consistency",
+            "motion_smoothness",
+            "dynamic_degree",
+            "aesthetic_quality",
+            "imaging_quality"
+        ],
+        "video_list": [
+            "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t002_shift9/samples/cache_benchmark_16__16/videos/5_0.mp4"
+        ]
+    },
+    {
+        "prompt_en": "Steam curls from a bowl of ramen in a quiet night market while a chef adds scallions and lanterns sway in the background.",
+        "dimension": [
+            "subject_consistency",
+            "background_consistency",
+            "motion_smoothness",
+            "dynamic_degree",
+            "aesthetic_quality",
+            "imaging_quality"
+        ],
+        "video_list": [
+            "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t002_shift9/samples/cache_benchmark_16__16/videos/6_0.mp4"
+        ]
+    },
+    {
+        "prompt_en": "A kingfisher dives into a clear forest stream and emerges with a silver fish in crisp slow motion.",
+        "dimension": [
+            "subject_consistency",
+            "background_consistency",
+            "motion_smoothness",
+            "dynamic_degree",
+            "aesthetic_quality",
+            "imaging_quality"
+        ],
+        "video_list": [
+            "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t002_shift9/samples/cache_benchmark_16__16/videos/7_0.mp4"
+        ]
+    },
+    {
+        "prompt_en": "An old green tram rounds a snowy European street corner while pedestrians open colorful umbrellas.",
+        "dimension": [
+            "subject_consistency",
+            "background_consistency",
+            "motion_smoothness",
+            "dynamic_degree",
+            "aesthetic_quality",
+            "imaging_quality"
+        ],
+        "video_list": [
+            "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t002_shift9/samples/cache_benchmark_16__16/videos/8_0.mp4"
+        ]
+    },
+    {
+        "prompt_en": "Bioluminescent jellyfish pulse through deep blue water as the camera glides slowly between them.",
+        "dimension": [
+            "subject_consistency",
+            "background_consistency",
+            "motion_smoothness",
+            "dynamic_degree",
+            "aesthetic_quality",
+            "imaging_quality"
+        ],
+        "video_list": [
+            "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t002_shift9/samples/cache_benchmark_16__16/videos/9_0.mp4"
+        ]
+    },
+    {
+        "prompt_en": "A skateboarder performs a kickflip over a sunlit plaza staircase, captured by a fast handheld tracking shot.",
+        "dimension": [
+            "subject_consistency",
+            "background_consistency",
+            "motion_smoothness",
+            "dynamic_degree",
+            "aesthetic_quality",
+            "imaging_quality"
+        ],
+        "video_list": [
+            "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t002_shift9/samples/cache_benchmark_16__16/videos/10_0.mp4"
+        ]
+    },
+    {
+        "prompt_en": "Wind moves through a lavender field beneath a summer storm while lightning flickers behind distant mountains.",
+        "dimension": [
+            "subject_consistency",
+            "background_consistency",
+            "motion_smoothness",
+            "dynamic_degree",
+            "aesthetic_quality",
+            "imaging_quality"
+        ],
+        "video_list": [
+            "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t002_shift9/samples/cache_benchmark_16__16/videos/11_0.mp4"
+        ]
+    },
+    {
+        "prompt_en": "A tabby cat pushes a wooden toy train around a cozy living room as afternoon light moves across the floor.",
+        "dimension": [
+            "subject_consistency",
+            "background_consistency",
+            "motion_smoothness",
+            "dynamic_degree",
+            "aesthetic_quality",
+            "imaging_quality"
+        ],
+        "video_list": [
+            "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t002_shift9/samples/cache_benchmark_16__16/videos/12_0.mp4"
+        ]
+    },
+    {
+        "prompt_en": "A potter shapes a tall clay vase on a spinning wheel in close-up, with wet clay folding under both hands.",
+        "dimension": [
+            "subject_consistency",
+            "background_consistency",
+            "motion_smoothness",
+            "dynamic_degree",
+            "aesthetic_quality",
+            "imaging_quality"
+        ],
+        "video_list": [
+            "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t002_shift9/samples/cache_benchmark_16__16/videos/13_0.mp4"
+        ]
+    },
+    {
+        "prompt_en": "A red vintage convertible drives through a neon-lit tunnel at night while reflections race across its polished hood.",
+        "dimension": [
+            "subject_consistency",
+            "background_consistency",
+            "motion_smoothness",
+            "dynamic_degree",
+            "aesthetic_quality",
+            "imaging_quality"
+        ],
+        "video_list": [
+            "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t002_shift9/samples/cache_benchmark_16__16/videos/14_0.mp4"
+        ]
+    },
+    {
+        "prompt_en": "Three hot-air balloons rise above terraced green hills at dawn as mist flows through the valleys below.",
+        "dimension": [
+            "subject_consistency",
+            "background_consistency",
+            "motion_smoothness",
+            "dynamic_degree",
+            "aesthetic_quality",
+            "imaging_quality"
+        ],
+        "video_list": [
+            "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/cache_t002_shift9/samples/cache_benchmark_16__16/videos/15_0.mp4"
+        ]
+    }
+]

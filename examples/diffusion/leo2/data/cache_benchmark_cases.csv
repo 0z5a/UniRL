@@ -1,0 +1,9 @@
+name,cache_threshold,flow_shift_video
+cache_off_shift3,off,3.0
+cache_t005_shift3,0.05,3.0
+cache_off_shift7,off,7.0
+cache_t005_shift7,0.05,7.0
+cache_off_shift9,off,9.0
+cache_t002_shift9,0.02,9.0
+cache_t005_shift9,0.05,9.0
+cache_t010_shift9,0.10,9.0
