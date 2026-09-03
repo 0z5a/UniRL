@@ -128,6 +128,70 @@ selected cases CSV. The quality summarizer can merge an external baseline's
 existing `quality_eval/summary/quality_metrics_cases.json` while keeping new
 case results under the new root.
 
+## Consolidated acceleration report
+
+After quality evaluation, compare completed cases from independent roots with
+an explicit JSON manifest:
+
+```json
+{
+  "schema_version": 1,
+  "expected": {
+    "flow_shift_video": 9.0,
+    "guidance_scale": 1.0,
+    "sample_count": 16,
+    "baseline_label": "exact"
+  },
+  "cases": [
+    {
+      "label": "exact",
+      "case": "cache_off_shift9",
+      "artifact_root": "/path/to/exact-snapshot",
+      "source_root": "/path/to/exact-run"
+    },
+    {
+      "label": "static-0.10",
+      "case": "cache_t010_shift9",
+      "artifact_root": "/path/to/static-root"
+    }
+  ]
+}
+```
+
+Paths may be absolute or relative to the manifest. Each artifact root must
+contain `benchmark.env`, `summary.json`, `paired_metrics.csv`, and
+`quality_eval/summary/quality_metrics_cases.json`. Accelerated cases also need
+`pixel_metrics_pairs.csv`; the exact baseline has zero pixel drift by
+definition. A case entry may override any result path with `summary_json`,
+`paired_metrics_csv`, `pixel_metrics_pairs_csv`, or `quality_metrics_json`.
+`source_root` defaults to `artifact_root`; set it explicitly when compact
+metrics were copied away from the original run. Recorded baseline and artifact
+paths must agree with these declared source roots. Paired source videos must
+remain readable; schema-v2 video digests are rechecked while building the
+report.
+
+```bash
+python examples/diffusion/leo2/scripts/summarize_acceleration_results.py \
+  --spec /path/to/shift9-guidance1.json \
+  --output-dir /path/to/report
+```
+
+The command writes CSV, Markdown, and JSON matrices with settings as columns
+and metrics as rows. Use one manifest per flow shift so each shift produces a
+separate table. It rejects incomplete cases, mixed prompts, sampling
+settings, topology, checkpoint/config fingerprints, guidance, flow shift,
+sample count, or baseline identity. It also recomputes decoded-pixel global
+MSE from the per-video pair records before accepting a quality summary.
+
+## Gotchas
+
+- `pixel_metrics_cases.csv` reports the mean of per-video RMSE values. The
+  consolidated report instead uses global MSE over all decoded RGB samples and
+  its square root, so the two RMSE values need not be equal.
+- Schema-v1 benchmark artifacts did not serialize guidance. Their fixed
+  guidance-1.0 contract is accepted only when the report manifest also requires
+  guidance 1.0; schema-v2 artifacts must record guidance explicitly.
+
 ## MagCache calibration profile
 
 Run `magcache_calibrate` without a replay profile using the four disjoint
