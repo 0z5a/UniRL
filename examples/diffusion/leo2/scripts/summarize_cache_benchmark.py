@@ -176,7 +176,6 @@ def _normalize_request_counters(record: dict[str, Any], method: str) -> dict[str
     record.setdefault("tail_reuse_steps", skipped_steps if method in TAIL_METHODS else 0)
     for field in COUNTER_FIELDS[4:]:
         record.setdefault(field, 0)
-    record.setdefault("cache_bytes", 0)
     record.setdefault("cache_method", method)
     record.setdefault("guidance_scale", 1.0)
     return record
@@ -188,7 +187,12 @@ def _case_summary(case_dir: Path, expected_videos: int) -> dict[str, Any]:
     metadata = _case_metadata(case_dir)
     method = _method(config, metadata)
     guidance_scale = _guidance_scale(config, metadata)
-    successful = [_normalize_request_counters(record, method) for record in records if record.get("status") == "ok"]
+    raw_successful = [record for record in records if record.get("status") == "ok"]
+    cache_bytes_present = [record.get("cache_bytes") is not None for record in raw_successful]
+    if any(cache_bytes_present) and not all(cache_bytes_present):
+        raise ValueError(f"Case {case_dir.name} has inconsistent cache_bytes instrumentation.")
+    cache_bytes_available = bool(raw_successful) and all(cache_bytes_present)
+    successful = [_normalize_request_counters(record, method) for record in raw_successful]
     elapsed = [float(record["elapsed_seconds"]) for record in successful]
     steady = elapsed[1:]
     counters = {field: sum(int(record.get(field, 0)) for record in successful) for field in COUNTER_FIELDS}
@@ -224,7 +228,10 @@ def _case_summary(case_dir: Path, expected_videos: int) -> dict[str, Any]:
         "_case_dir": str(case_dir),
         "baseline_case": config.get("baseline_case") or metadata.get("baseline_case") or None,
         "benchmark_schema_version": int(config.get("benchmark_schema_version", 1)),
-        "cache_bytes": max((int(record.get("cache_bytes", 0)) for record in successful), default=0),
+        "cache_bytes": max((int(record["cache_bytes"]) for record in successful), default=0)
+        if cache_bytes_available
+        else None,
+        "cache_bytes_available": cache_bytes_available,
         "cache_enabled": method != "off",
         "cache_method": method,
         "cache_method_options": config.get("cache_method_options", {}),
@@ -501,6 +508,7 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "cfg_reuse_calls",
         "cfg_reuse_ratio",
         "cache_bytes",
+        "cache_bytes_available",
         "max_memory_allocated_bytes",
         "max_memory_reserved_bytes",
         "process_wall_seconds",

@@ -2559,10 +2559,9 @@ class LeoModelBase(HunyuanMultimodalState):
                 hidden_states, txt_hidden_states = cached_outputs
             cache_hit = True
         if fastercache_active:
-            leader_idx = fastercache_controller.selected_layers[0]
             fastercache_controller.begin_step(
                 block_head_inputs,
-                leader_block=self.layers[leader_idx],
+                leader_block=self.layers[0],
                 audio_present=audio_latents is not None,
             )
         for layer_idx, layer in enumerate(self.layers):

@@ -164,6 +164,7 @@ class LeoFirstBlockCacheController:
         self._pending_timestep: float | None = None
         self._pending_alpha: float | None = None
         self._cacheable_step = False
+        self._distributed_config_validated = False
         self.full_steps = 0
         self.skipped_steps = 0
         self.predicted_steps = 0
@@ -190,6 +191,7 @@ class LeoFirstBlockCacheController:
             self.alpha_sum = 0.0
             self.alpha_max = 0.0
             self._peak_cache_bytes = 0
+            self._distributed_config_validated = False
         self._context_depth += 1
         try:
             yield
@@ -225,6 +227,7 @@ class LeoFirstBlockCacheController:
             return False
         sum_groups, max_groups = sync_plan
         decision_groups = [*sum_groups, *max_groups]
+        self._validate_distributed_config(head_outputs[0], decision_groups)
         self._pending_alpha = None
         self._pending_timestep = None
 
@@ -376,6 +379,26 @@ class LeoFirstBlockCacheController:
             self._tail_residuals,
         )
         self._peak_cache_bytes = max(self._peak_cache_bytes, current)
+
+    def _validate_distributed_config(
+        self,
+        reference: torch.Tensor,
+        groups: list[dist.ProcessGroup],
+    ) -> None:
+        """Reject tail-cache control values that differ across model-sharding ranks."""
+        if self._distributed_config_validated:
+            return
+        values = reference.new_tensor(
+            [float(self.method == "taylor"), self.threshold, self.max_extrapolation],
+            dtype=torch.float64,
+        )
+        low = values.clone()
+        high = values.clone()
+        self._all_reduce(low, groups, dist.ReduceOp.MIN)
+        self._all_reduce(high, groups, dist.ReduceOp.MAX)
+        if not torch.equal(low, high):
+            raise RuntimeError("Leo tail-cache control configuration differs across model-sharding ranks.")
+        self._distributed_config_validated = True
 
     @classmethod
     def _uniform_timestep(
@@ -888,9 +911,11 @@ class LeoFasterCacheController:
         self.start_step = config.start_step
         self.end_step = config.end_step
         self.interval = config.interval
+        self.num_layers = num_layers
         self.selected_layers = tuple(selected_layers)
         self.weight_schedule = config.weight_schedule
         self._selected_layer_set = frozenset(self.selected_layers)
+        self._distributed_config_validated = False
         self._context_depth = 0
         self._cache_bytes_peak = 0
         self.attention_compute_calls = 0
@@ -915,6 +940,7 @@ class LeoFasterCacheController:
             self.attention_reuse_calls = 0
             self.full_steps = 0
             self.skipped_steps = 0
+            self._distributed_config_validated = False
         self._context_depth += 1
         try:
             yield
@@ -964,6 +990,7 @@ class LeoFasterCacheController:
             self._drop_histories()
             return False
         groups = [*sync_plan[0], *sync_plan[1]]
+        self._validate_distributed_config(reference, groups)
 
         candidate = (
             self.start_step <= step < self.end_step
@@ -1094,3 +1121,32 @@ class LeoFasterCacheController:
         """Release all cached tensors and their input signatures."""
         self._histories.clear()
         self._history_input_signatures.clear()
+
+    def _validate_distributed_config(
+        self,
+        reference: torch.Tensor,
+        groups: list[dist.ProcessGroup],
+    ) -> None:
+        """Reject DFR control values that differ across model-sharding ranks."""
+        if self._distributed_config_validated:
+            return
+        values = reference.new_tensor(
+            [self.start_step, self.end_step, self.interval, self.num_layers, len(self.selected_layers)],
+            dtype=torch.int64,
+        )
+        low = values.clone()
+        high = values.clone()
+        LeoFirstBlockCacheController._all_reduce(low, groups, dist.ReduceOp.MIN)
+        LeoFirstBlockCacheController._all_reduce(high, groups, dist.ReduceOp.MAX)
+        if not torch.equal(low, high):
+            raise RuntimeError("Leo FasterCache control configuration differs across model-sharding ranks.")
+
+        selected = reference.new_zeros(self.num_layers, dtype=torch.int32)
+        selected[list(self.selected_layers)] = 1
+        low = selected.clone()
+        high = selected.clone()
+        LeoFirstBlockCacheController._all_reduce(low, groups, dist.ReduceOp.MIN)
+        LeoFirstBlockCacheController._all_reduce(high, groups, dist.ReduceOp.MAX)
+        if not torch.equal(low, high):
+            raise RuntimeError("Leo FasterCache selected layers differ across model-sharding ranks.")
+        self._distributed_config_validated = True

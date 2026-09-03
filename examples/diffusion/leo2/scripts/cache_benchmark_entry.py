@@ -532,11 +532,25 @@ def _validate_cache_stats(
         accounted = stats["tail_compute_steps"] + stats["tail_reuse_steps"]
         if accounted != expected_steps:
             raise RuntimeError(f"Tail cache accounted for {accounted}/{expected_steps} denoising steps.")
-        if stats["predicted_steps"] + stats["static_fallback_steps"] > stats["tail_reuse_steps"]:
-            raise RuntimeError("Taylor prediction/fallback counters exceed tail reuse steps.")
+        if stats["full_steps"] != stats["tail_compute_steps"] or stats["skipped_steps"] != stats["tail_reuse_steps"]:
+            raise RuntimeError("Whole-tail cache aliases disagree with exact/reuse step counters.")
+        if method == "taylor":
+            if stats["predicted_steps"] != stats["tail_reuse_steps"]:
+                raise RuntimeError("Taylor predicted-step count must equal tail reuse steps.")
+            if stats["static_fallback_steps"]:
+                raise RuntimeError("Taylor unexpectedly reported static fallback steps.")
+        elif any(stats[field] for field in ("predicted_steps", "prediction_warmup_steps", "static_fallback_steps")):
+            raise RuntimeError(f"Cache method {method!r} unexpectedly reported Taylor-only counters.")
     elif method == "fastercache_dfr":
-        if stats["tail_compute_steps"] or stats["tail_reuse_steps"]:
-            raise RuntimeError("FasterCache DFR unexpectedly reported whole-tail cache steps.")
+        forbidden = (
+            "tail_compute_steps",
+            "tail_reuse_steps",
+            "predicted_steps",
+            "prediction_warmup_steps",
+            "static_fallback_steps",
+        )
+        if any(stats[field] for field in forbidden):
+            raise RuntimeError("FasterCache DFR unexpectedly reported whole-tail or Taylor counters.")
         if dfr_plan is None:
             raise RuntimeError("FasterCache DFR benchmark validation plan is missing.")
         start_step, end_step, interval, selected_layer_count = dfr_plan
