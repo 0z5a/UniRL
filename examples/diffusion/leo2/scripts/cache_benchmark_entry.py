@@ -424,6 +424,16 @@ def _counter(value: Any, *, field: str) -> int:
     return int(value)
 
 
+def _expected_dfr_reuse_steps(*, expected_steps: int, start_step: int, end_step: int, interval: int) -> int:
+    """Return deterministic DFR reuse steps after the two-snapshot warm-up."""
+    candidates = sum(
+        start_step <= step < end_step and (step - start_step) % interval != 0 for step in range(expected_steps)
+    )
+    if start_step == 0 and candidates:
+        candidates -= 1
+    return candidates
+
+
 def _normalize_cache_stats(stats: Any, method: str) -> dict[str, int]:
     """Normalize method-specific counters into stable benchmark fields."""
     if not isinstance(stats, dict):
@@ -505,7 +515,13 @@ def _method_diagnostics(stats: Any, *, method: str, expected_steps: int) -> dict
     return {}
 
 
-def _validate_cache_stats(stats: dict[str, int], *, method: str, expected_steps: int) -> None:
+def _validate_cache_stats(
+    stats: dict[str, int],
+    *,
+    method: str,
+    expected_steps: int,
+    dfr_plan: tuple[int, int, int, int] | None = None,
+) -> None:
     """Apply accounting invariants appropriate to each cache family."""
     if method == "off":
         active = {field: value for field, value in stats.items() if field != "cache_bytes" and value}
@@ -521,10 +537,35 @@ def _validate_cache_stats(stats: dict[str, int], *, method: str, expected_steps:
     elif method == "fastercache_dfr":
         if stats["tail_compute_steps"] or stats["tail_reuse_steps"]:
             raise RuntimeError("FasterCache DFR unexpectedly reported whole-tail cache steps.")
-        if stats["full_steps"] + stats["skipped_steps"] != expected_steps:
-            raise RuntimeError("FasterCache DFR did not account for every denoising step.")
-        if stats["attention_compute_calls"] + stats["attention_reuse_calls"] == 0:
-            raise RuntimeError("FasterCache DFR did not report any managed attention calls.")
+        if dfr_plan is None:
+            raise RuntimeError("FasterCache DFR benchmark validation plan is missing.")
+        start_step, end_step, interval, selected_layer_count = dfr_plan
+        if selected_layer_count < 1:
+            raise RuntimeError("FasterCache DFR benchmark selected no layers.")
+        expected_reuse_steps = _expected_dfr_reuse_steps(
+            expected_steps=expected_steps,
+            start_step=start_step,
+            end_step=end_step,
+            interval=interval,
+        )
+        expected_full_steps = expected_steps - expected_reuse_steps
+        if stats["full_steps"] != expected_full_steps or stats["skipped_steps"] != expected_reuse_steps:
+            raise RuntimeError(
+                "FasterCache DFR exact/reuse accounting mismatch: "
+                f"got {stats['full_steps']}/{stats['skipped_steps']}, "
+                f"expected {expected_full_steps}/{expected_reuse_steps}."
+            )
+        expected_compute_calls = expected_full_steps * selected_layer_count
+        expected_reuse_calls = expected_reuse_steps * selected_layer_count
+        if (
+            stats["attention_compute_calls"] != expected_compute_calls
+            or stats["attention_reuse_calls"] != expected_reuse_calls
+        ):
+            raise RuntimeError(
+                "FasterCache DFR managed-attention accounting mismatch: "
+                f"got {stats['attention_compute_calls']}/{stats['attention_reuse_calls']}, "
+                f"expected {expected_compute_calls}/{expected_reuse_calls}."
+            )
 
 
 def _save_latent(
@@ -574,15 +615,25 @@ def _install_instrumentation(options: BenchmarkOptions) -> None:
     from hymm.samplers.hunyuan_multimodal_sampler import HunyuanMultimodalSampler
 
     cache_config, method_options = _build_cache_config(options)
+    dfr_plan: tuple[int, int, int, int] | None = None
 
     original_init = HunyuanMultimodalSampler.__init__
 
     def instrumented_init(self: Any, *args: Any, **kwargs: Any) -> None:
+        nonlocal dfr_plan
         original_init(self, *args, **kwargs)
         if self.model.is_cache_enabled:
             self.model.disable_cache()
         if cache_config is not None:
             self.model.enable_cache(cache_config)
+        if options.method == "fastercache_dfr":
+            controller = self.model._leo_cache_controller
+            dfr_plan = (
+                controller.start_step,
+                controller.end_step,
+                controller.interval,
+                len(controller.selected_layers),
+            )
         sync_plan = None
         if options.method in TOPOLOGY_METHODS:
             leader_index = 0
@@ -742,7 +793,12 @@ def _install_instrumentation(options: BenchmarkOptions) -> None:
             fail(str(exc), type(exc).__name__)
             raise
         try:
-            _validate_cache_stats(stats, method=options.method, expected_steps=expected_steps)
+            _validate_cache_stats(
+                stats,
+                method=options.method,
+                expected_steps=expected_steps,
+                dfr_plan=dfr_plan,
+            )
         except RuntimeError as exc:
             fail(str(exc))
             raise

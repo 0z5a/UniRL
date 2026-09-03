@@ -1086,7 +1086,7 @@ class LeoFasterCacheController:
         for output, expected in zip(outputs, self._expected_signature):
             if (output is None) != (expected is None):
                 return False
-            if output is not None and (tuple(output.shape), output.dtype, output.device) != expected:
+            if output is not None and (tuple(output.shape), output.device) != (expected[0], expected[2]):
                 return False
         return True
 

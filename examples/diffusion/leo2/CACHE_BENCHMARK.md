@@ -97,9 +97,11 @@ Request latency is CUDA-synchronized and reduced with MAX across ranks. Cache
 decision counters must have identical MIN and MAX. `cache_bytes` is rank-local
 under CP because padding can differ, so it follows peak CUDA memory and reports
 MAX. Whole-tail methods validate exactly 50 total tail compute/reuse steps.
-FasterCache DFR validates 50 total exact/reuse controller steps plus non-zero
-managed-attention accounting. Reports retain legacy full/skip counters and add
-tail compute/reuse, Taylor prediction/fallback, attention compute/reuse, CFG
+FasterCache DFR validates 50 total exact/reuse steps against its window and
+interval, including the first-candidate warm-up fallback when `start_step=0`.
+Its managed-attention compute/reuse calls must equal those step counts times the
+selected-layer count. Reports retain legacy full/skip counters and add tail
+compute/reuse, Taylor prediction/fallback, attention compute/reuse, CFG
 compute/reuse, cache bytes, and peak CUDA allocation/reservation.
 
 Taylor requests also record prediction warm-up count and the mean/maximum
