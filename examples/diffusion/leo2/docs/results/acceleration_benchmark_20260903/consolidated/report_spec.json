@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "expected": {
+    "flow_shift_video": 9.0,
+    "guidance_scale": 1.0,
+    "sample_count": 16,
+    "baseline_label": "exact"
+  },
+  "cases": [
+    {
+      "label": "exact",
+      "case": "cache_off_shift9",
+      "artifact_root": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039"
+    },
+    {
+      "label": "static_0.10",
+      "case": "cache_t010_shift9",
+      "artifact_root": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039"
+    },
+    {
+      "label": "taylor_0.10_m0.50",
+      "case": "taylor_t010_m050_shift9",
+      "artifact_root": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316"
+    },
+    {
+      "label": "magcache_0.12_k4",
+      "case": "magcache_t012_k4_r020_shift9",
+      "artifact_root": "/root/leo2-output/accel-magcache-full-t012-k4-shift9-20260904-0038"
+    },
+    {
+      "label": "dfr_w10_49_i2",
+      "case": "dfr_w10_49_i2_shift9",
+      "artifact_root": "/root/leo2-output/accel-dfr-full-w10-49-shift9-20260904-0142"
+    }
+  ]
+}

@@ -1,0 +1,448 @@
+{
+    "subject_consistency": [
+        0.8943278512296577,
+        [
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/0_0.mp4",
+                "video_results": 0.9332863246401151
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/1_0.mp4",
+                "video_results": 0.937269298483928
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/2_0.mp4",
+                "video_results": 0.9213092684745788
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/3_0.mp4",
+                "video_results": 0.9263123686114947
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/4_0.mp4",
+                "video_results": 0.6237282690902551
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/5_0.mp4",
+                "video_results": 0.9093496846656005
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/6_0.mp4",
+                "video_results": 0.9297395539780458
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/7_0.mp4",
+                "video_results": 0.9432811049123605
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/8_0.mp4",
+                "video_results": 0.9242446521917979
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/9_0.mp4",
+                "video_results": 0.8465338575343291
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/10_0.mp4",
+                "video_results": 0.8388119985659918
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/11_0.mp4",
+                "video_results": 0.9696950284143289
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/12_0.mp4",
+                "video_results": 0.8056419079502424
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/13_0.mp4",
+                "video_results": 0.8867900607486566
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/14_0.mp4",
+                "video_results": 0.9323225639760494
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/15_0.mp4",
+                "video_results": 0.9809296774367492
+            }
+        ]
+    ],
+    "background_consistency": [
+        0.935405985514323,
+        [
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/0_0.mp4",
+                "video_results": 0.954364013671875,
+                "video_sim": 114.523681640625,
+                "cnt_per_video": 120
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/1_0.mp4",
+                "video_results": 0.9575398763020834,
+                "video_sim": 114.90478515625,
+                "cnt_per_video": 120
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/2_0.mp4",
+                "video_results": 0.961163330078125,
+                "video_sim": 115.339599609375,
+                "cnt_per_video": 120
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/3_0.mp4",
+                "video_results": 0.94722900390625,
+                "video_sim": 113.66748046875,
+                "cnt_per_video": 120
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/4_0.mp4",
+                "video_results": 0.8516866048177083,
+                "video_sim": 102.202392578125,
+                "cnt_per_video": 120
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/5_0.mp4",
+                "video_results": 0.94935302734375,
+                "video_sim": 113.92236328125,
+                "cnt_per_video": 120
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/6_0.mp4",
+                "video_results": 0.933758544921875,
+                "video_sim": 112.051025390625,
+                "cnt_per_video": 120
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/7_0.mp4",
+                "video_results": 0.96207275390625,
+                "video_sim": 115.44873046875,
+                "cnt_per_video": 120
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/8_0.mp4",
+                "video_results": 0.8915018717447917,
+                "video_sim": 106.980224609375,
+                "cnt_per_video": 120
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/9_0.mp4",
+                "video_results": 0.9469950358072917,
+                "video_sim": 113.639404296875,
+                "cnt_per_video": 120
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/10_0.mp4",
+                "video_results": 0.9234334309895833,
+                "video_sim": 110.81201171875,
+                "cnt_per_video": 120
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/11_0.mp4",
+                "video_results": 0.9789143880208333,
+                "video_sim": 117.4697265625,
+                "cnt_per_video": 120
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/12_0.mp4",
+                "video_results": 0.8866861979166667,
+                "video_sim": 106.40234375,
+                "cnt_per_video": 120
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/13_0.mp4",
+                "video_results": 0.933612060546875,
+                "video_sim": 112.033447265625,
+                "cnt_per_video": 120
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/14_0.mp4",
+                "video_results": 0.9423380533854167,
+                "video_sim": 113.08056640625,
+                "cnt_per_video": 120
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/15_0.mp4",
+                "video_results": 0.9458475748697917,
+                "video_sim": 113.501708984375,
+                "cnt_per_video": 120
+            }
+        ]
+    ],
+    "motion_smoothness": [
+        0.9804939225916134,
+        [
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/0_0.mp4",
+                "video_results": 0.9726567371440914
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/1_0.mp4",
+                "video_results": 0.9715419686317743
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/2_0.mp4",
+                "video_results": 0.9910685199448462
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/3_0.mp4",
+                "video_results": 0.9927512184582229
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/4_0.mp4",
+                "video_results": 0.9794687196462388
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/5_0.mp4",
+                "video_results": 0.9899510440121343
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/6_0.mp4",
+                "video_results": 0.9857844521501582
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/7_0.mp4",
+                "video_results": 0.9791052373427142
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/8_0.mp4",
+                "video_results": 0.9630987204643839
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/9_0.mp4",
+                "video_results": 0.9880263609071729
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/10_0.mp4",
+                "video_results": 0.9655557988507518
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/11_0.mp4",
+                "video_results": 0.9830062533399104
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/12_0.mp4",
+                "video_results": 0.9739207880230636
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/13_0.mp4",
+                "video_results": 0.9839333993962293
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/14_0.mp4",
+                "video_results": 0.971155222844668
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/15_0.mp4",
+                "video_results": 0.9968783203094547
+            }
+        ]
+    ],
+    "dynamic_degree": [
+        0.75,
+        [
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/0_0.mp4",
+                "video_results": true
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/1_0.mp4",
+                "video_results": true
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/2_0.mp4",
+                "video_results": false
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/3_0.mp4",
+                "video_results": true
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/4_0.mp4",
+                "video_results": false
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/5_0.mp4",
+                "video_results": true
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/6_0.mp4",
+                "video_results": true
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/7_0.mp4",
+                "video_results": false
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/8_0.mp4",
+                "video_results": true
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/9_0.mp4",
+                "video_results": true
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/10_0.mp4",
+                "video_results": true
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/11_0.mp4",
+                "video_results": true
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/12_0.mp4",
+                "video_results": true
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/13_0.mp4",
+                "video_results": true
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/14_0.mp4",
+                "video_results": true
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/15_0.mp4",
+                "video_results": false
+            }
+        ]
+    ],
+    "aesthetic_quality": [
+        0.5135702919214964,
+        [
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/0_0.mp4",
+                "video_results": 0.5166953802108765
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/1_0.mp4",
+                "video_results": 0.6084100008010864
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/2_0.mp4",
+                "video_results": 0.4074855446815491
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/3_0.mp4",
+                "video_results": 0.554680347442627
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/4_0.mp4",
+                "video_results": 0.5140403509140015
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/5_0.mp4",
+                "video_results": 0.6009554862976074
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/6_0.mp4",
+                "video_results": 0.5194042921066284
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/7_0.mp4",
+                "video_results": 0.4655972719192505
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/8_0.mp4",
+                "video_results": 0.708658754825592
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/9_0.mp4",
+                "video_results": 0.3759342133998871
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/10_0.mp4",
+                "video_results": 0.4130270481109619
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/11_0.mp4",
+                "video_results": 0.6491650342941284
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/12_0.mp4",
+                "video_results": 0.37521496415138245
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/13_0.mp4",
+                "video_results": 0.36968353390693665
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/14_0.mp4",
+                "video_results": 0.5276395678520203
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/15_0.mp4",
+                "video_results": 0.6105328798294067
+            }
+        ]
+    ],
+    "imaging_quality": [
+        0.5736181008569465,
+        [
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/0_0.mp4",
+                "video_results": 57.2013621054405
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/1_0.mp4",
+                "video_results": 53.12547964300991
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/2_0.mp4",
+                "video_results": 39.90063665721042
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/3_0.mp4",
+                "video_results": 69.08699372977264
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/4_0.mp4",
+                "video_results": 56.4757820239737
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/5_0.mp4",
+                "video_results": 57.70868020806431
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/6_0.mp4",
+                "video_results": 61.35120571546318
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/7_0.mp4",
+                "video_results": 73.66620188311111
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/8_0.mp4",
+                "video_results": 69.05561005773623
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/9_0.mp4",
+                "video_results": 41.7240839556229
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/10_0.mp4",
+                "video_results": 77.10818487750598
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/11_0.mp4",
+                "video_results": 75.52110952582241
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/12_0.mp4",
+                "video_results": 42.103220821412144
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/13_0.mp4",
+                "video_results": 45.21627099848976
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/14_0.mp4",
+                "video_results": 41.522337511551285
+            },
+            {
+                "video_path": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/taylor_t010_m050_shift9/samples/cache_benchmark_16__16/videos/15_0.mp4",
+                "video_results": 57.02180165692794
+            }
+        ]
+    ]
+}

@@ -1,0 +1,2 @@
+case,baseline_case,baseline_root,cache_method,cache_threshold,flow_shift_video,guidance_scale,pair_count,mae_mean,rmse_mean,relative_l1_mean,relative_l2_mean,max_abs_mean,mae_max,rmse_max,relative_l1_max,relative_l2_max,max_abs_max
+dfr_w10_49_i2_shift9,cache_off_shift9,/root/leo2-output/cache-full-final-848x464x121-20260903-1039,fastercache_dfr,,9.0,1.0,16,0.021000862766955317,0.03638731123469488,0.057434254624097646,0.08664695233640278,0.8291666666666667,0.03625227904020636,0.07217421391862801,0.14211555128222647,0.22366313149350547,1.0

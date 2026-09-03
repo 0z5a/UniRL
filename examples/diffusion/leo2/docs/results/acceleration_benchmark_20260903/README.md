@@ -47,9 +47,7 @@ the expensive block count.
 Taylor preserves the static cache's approximately 1.98x speedup while
 reducing mean latent and decoded-pixel drift by roughly 10%. It does not
 strictly dominate: the worst latent max-absolute error is larger, and the
-paired-speed confidence intervals overlap. VBench and VideoScore2 are run only
-for full-16 survivors and will be added to the consolidated report after the
-MagCache and FasterCache DFR funnels finish.
+paired-speed confidence intervals overlap.
 
 ## MagCache calibration and pilot
 
@@ -92,6 +90,96 @@ drift metric. Its paired-speedup 95% confidence interval was 2.3776x--2.4217x.
 The rank-max cache residency was 97,607,680 bytes and rank-max peak allocated
 GPU memory was 69,513,028,096 bytes.
 
+## FasterCache DFR smoke and pilot
+
+The one-prompt smoke test exercised all 48 Leo attention blocks over the
+half-open denoise window `[20, 45)` with interval 2. It reported the expected
+38 exact and 12 reuse decisions, or 1,824 exact and 576 reused attention calls,
+and passed exact latent pairing against the immutable reference root.
+
+The four-prompt pilot compared the smoke window with the wider `[10, 49)`
+window. Pixel RMSE below is the mean per-video RMSE against exact inference.
+The reuse percentage counts managed-attention calls, not skipped full
+transformer steps.
+
+| DFR window / interval | Paired speedup | Attention reuse | Latent rel L1 | Latent rel L2 | Pixel MAE | Pixel RMSE |
+|---:|---:|---:|---:|---:|---:|---:|
+| `[20, 45)` / 2 | 1.1467x | 24.0% | 0.04351 | 0.04731 | 0.01458 | 0.02365 |
+| `[10, 49)` / 2 | 1.2586x | 38.0% | 0.13212 | 0.14222 | 0.02812 | 0.05290 |
+
+The wider window was selected for the full-16 suite. It increased paired
+throughput by about 9.8% over the narrower window while remaining inside the
+static 0.10 cache's pilot latent and pixel drift envelope. Both pilot settings
+used 4,686,348,288 bytes of rank-max DFR cache residency; the selected case's
+rank-max peak allocated GPU memory was 74,107,523,072 bytes.
+
+## FasterCache DFR full-16 result
+
+| Metric | Exact off | Static 0.10 | DFR `[10, 49)` / 2 |
+|---|---:|---:|---:|
+| Generation mean (s) | 198.118 | 100.179 | 157.306 |
+| Paired speedup | 1.0000x | 1.9800x | 1.2595x |
+| Managed-attention reuse | 0.00% | 0.00% | 38.00% |
+| Latent relative L1 | 0 | 0.21221 | 0.11203 |
+| Latent relative L2 | 0 | 0.22196 | 0.12026 |
+| Latent cosine | 1 | 0.97293 | 0.99202 |
+| Latent max-abs worst case | 0 | 1.38048 | 0.88852 |
+| Pixel MAE | 0 | 0.03796 | 0.02100 |
+| Pixel mean RMSE | 0 | 0.06329 | 0.03639 |
+| Pixel relative L1 | 0 | 0.10185 | 0.05743 |
+| Pixel relative L2 | 0 | 0.14909 | 0.08665 |
+
+Every full-suite request made 1,488 exact and 912 reused managed-attention
+calls, matching the configured 31 exact and 19 reuse denoise decisions across
+48 blocks. DFR had the smallest latent and decoded-pixel drift of the tested
+accelerators, but only reached 1.2595x and retained 4,686,348,288 bytes
+(4,469.25 MiB) of rank-maximum activation cache. Its peak allocated memory was
+74,108,845,568 bytes (69.019 GiB), about 4.37 GiB above exact inference.
+
+## Consolidated quality and performance
+
+The complete settings-as-columns, metrics-as-rows result is available as
+[`consolidated/shift9_guidance1.md`](consolidated/shift9_guidance1.md), with
+CSV and JSON equivalents beside it. The compact view below uses global RMSE,
+defined as `sqrt(MSE)` over all equal-size samples; this is intentionally
+different from the mean per-video RMSE used in the method-specific tables.
+
+| Metric | Exact off | Static 0.10 | Taylor 0.10 / 0.50 | MagCache 0.12 / 4 | DFR `[10, 49)` / 2 |
+|---|---:|---:|---:|---:|---:|
+| Paired speedup | 1.0000x | 1.9800x | 1.9756x | **2.3996x** | 1.2595x |
+| Global latent RMSE | 0 | 0.03102 | 0.02928 | 0.02940 | **0.01753** |
+| Global pixel RMSE | 0 | 0.06663 | 0.06221 | 0.06185 | **0.03935** |
+| VBench subject consistency | 0.89380 | **0.89703** | 0.89433 | 0.89475 | 0.89688 |
+| VBench background consistency | 0.92790 | 0.93022 | **0.93541** | 0.93451 | 0.92873 |
+| VBench motion smoothness | 0.97972 | 0.98251 | 0.98049 | **0.98418** | 0.97956 |
+| VBench dynamic degree (descriptive) | 0.8125 | 0.6875 | 0.7500 | 0.7500 | 0.8125 |
+| VBench aesthetic quality | 0.51231 | 0.50729 | **0.51357** | 0.49626 | 0.50920 |
+| VBench imaging quality | 0.57294 | 0.54648 | **0.57362** | 0.52751 | 0.57086 |
+| VideoScore2 visual quality `[1,5]` | 3.1250 | 3.1875 | 3.0625 | **3.3750** | 3.0625 |
+| VideoScore2 text alignment `[1,5]` | 3.3125 | 3.1875 | 3.3750 | **3.5000** | 3.2500 |
+| VideoScore2 physical consistency `[1,5]` | 3.3750 | 3.3125 | 3.0625 | **3.4375** | 3.1250 |
+
+For throughput, MagCache is the strongest candidate: it is about 21% faster
+than static 0.10 and has slightly lower aggregate latent and pixel drift.
+However, its lower VBench aesthetic/imaging scores conflict with its leading
+VideoScore2 scores, so it requires human paired review before replacing the
+preferred static setting. Taylor keeps essentially the same throughput as
+static cache while reducing aggregate drift and retaining strong VBench
+aesthetic/imaging scores, but it has the largest worst-pair latent max-absolute
+error. DFR is the fidelity-oriented point on the frontier, with the smallest
+drift and exact-level dynamic-degree rate, at the cost of lower speed and
+roughly 4.37 GiB extra peak allocation.
+
+These quality results are VBench custom-input scores over 16 prompts, not
+leaderboard scores. Dynamic degree is the fraction of clips classified as
+sufficiently dynamic and is descriptive rather than a monotonic quality
+measure. VideoScore2 reports discrete hard scores, so differences of 0.0625
+represent one point over 16 videos. The sample is too small for fine-grained
+ranking; metric disagreement and worst-pair videos should be resolved by a
+blinded human A/B. CFG-cache at guidance 5.0 remains a separate deferred
+experiment and is not included here. Evaluator versions and script hashes are
+recorded in [`EVALUATION_PROVENANCE.md`](EVALUATION_PROVENANCE.md).
+
 ## Artifact roots
 
 - Taylor 0.5/1.0/2.0 pilot:
@@ -106,6 +194,17 @@ GPU memory was 69,513,028,096 bytes.
   `/root/leo2-output/accel-magcache-pilot-shift9-20260904-0018`
 - MagCache 0.12 / 4 full-16:
   `/root/leo2-output/accel-magcache-full-t012-k4-shift9-20260904-0038`
+- FasterCache DFR `[20, 45)` smoke:
+  `/root/leo2-output/accel-dfr-smoke-w20-45-shift9-20260904-0107`
+- FasterCache DFR pilot:
+  `/root/leo2-output/accel-dfr-pilot-shift9-20260904-0114`
+- FasterCache DFR `[10, 49)` / 2 full-16:
+  `/root/leo2-output/accel-dfr-full-w10-49-shift9-20260904-0142`
+- Consolidated report generated from the five full-16 cases:
+  `/root/leo2-output/accel-consolidated-shift9-g1-20260904`
 
 Each snapshot subdirectory retains the cases CSV, `benchmark.env`, case/root
-summary, paired latent metrics and paired/aggregate pixel metrics.
+summary, paired latent metrics and paired/aggregate pixel metrics. The three
+selected accelerator directories additionally retain VBench and VideoScore2
+results; exact and static quality artifacts remain in the sibling
+`cache_benchmark_20260903` snapshot and the immutable reference root.

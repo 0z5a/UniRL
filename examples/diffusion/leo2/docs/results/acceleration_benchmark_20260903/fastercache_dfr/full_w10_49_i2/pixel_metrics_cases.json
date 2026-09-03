@@ -1,0 +1,44 @@
+{
+  "cases": [
+    {
+      "baseline_case": "cache_off_shift9",
+      "baseline_root": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039",
+      "cache_method": "fastercache_dfr",
+      "cache_threshold": null,
+      "case": "dfr_w10_49_i2_shift9",
+      "flow_shift_video": 9.0,
+      "guidance_scale": 1.0,
+      "mae_max": 0.03625227904020636,
+      "mae_mean": 0.021000862766955317,
+      "max_abs_max": 1.0,
+      "max_abs_mean": 0.8291666666666667,
+      "pair_count": 16,
+      "relative_l1_max": 0.14211555128222647,
+      "relative_l1_mean": 0.057434254624097646,
+      "relative_l2_max": 0.22366313149350547,
+      "relative_l2_mean": 0.08664695233640278,
+      "rmse_max": 0.07217421391862801,
+      "rmse_mean": 0.03638731123469488
+    }
+  ],
+  "decoded_pixel_domain": "RGB24 normalized to [0, 1]",
+  "expected_video": {
+    "fps": 24.0,
+    "frames": 121,
+    "height": 464,
+    "width": 848
+  },
+  "inputs": {
+    "benchmark_root": "/root/leo2-output/accel-dfr-full-w10-49-shift9-20260904-0142",
+    "cases_csv": "/root/leo2-dfr-full-cases-20260904.csv",
+    "cases_sha256": "77a445b516a4307c3137a1a0fc802b00a8b10a77015eeb2177c6d809e091357a",
+    "prompts_csv": "/root/Unirl-leo2/examples/diffusion/leo2/data/cache_benchmark_16.csv",
+    "prompts_sha256": "9f7a596d1e7dd37a2f1a9ddffe566591e04f232be9fb4c4258d1231d5d18bfcc",
+    "summary_json": "/root/leo2-output/accel-dfr-full-w10-49-shift9-20260904-0142/summary.json"
+  },
+  "kind": "cases",
+  "reference": "explicit baseline_case/reference_root with identical settings, prompt_hash and seed",
+  "relative_l1": "L1(candidate-reference) / max(L1(reference), float64_epsilon)",
+  "relative_l2": "L2(candidate-reference) / max(L2(reference), float64_epsilon)",
+  "schema_version": 2
+}

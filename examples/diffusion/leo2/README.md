@@ -16,6 +16,7 @@ the LoRA update — no separate inference engine, no weight sync.
 | `examples/diffusion/leo2/docs/R15_perf_report.html` | timing / memory / deployment measurements (with erratum) |
 | `examples/diffusion/leo2/docs/CACHE_BENCHMARK_REPORT_20260903.md` | 8×H20、848×464×121 first-block cache 正式实验报告 |
 | `examples/diffusion/leo2/docs/QUALITY_EVALUATION_PLAN.md` | VBench 系列调研、已安装环境、评估协议与复现命令 |
+| `examples/diffusion/leo2/docs/results/acceleration_benchmark_20260903/README.md` | shift-9 Taylor、MagCache、FasterCache DFR 的速度、漂移和质量实测汇总 |
 | `examples/diffusion/leo2/data/` | the 32 training prompts + 8 held-out prompts |
 
 ## Portable setup

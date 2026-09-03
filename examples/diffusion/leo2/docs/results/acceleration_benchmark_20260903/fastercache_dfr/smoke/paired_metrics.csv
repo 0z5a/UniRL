@@ -1,0 +1,2 @@
+case,baseline_case,baseline_root,cache_method,cache_threshold,flow_shift_video,guidance_scale,prompt_index,prompt_hash,seed,candidate_seconds,baseline_seconds,speedup,rel_l1,rel_l2,cosine,max_abs
+dfr_w20_45_i2_shift9,cache_off_shift9,/root/leo2-output/cache-full-final-848x464x121-20260903-1039,fastercache_dfr,,9.0,1.0,0,6c422e5b9a6a5a230211e6672c16a4fd662e5cb94f26d0e5e25bf6cd0bf7e39e,42000,186.31357377709355,213.54388722695876,1.1461531379481973,0.04856246289195609,0.05313155007768465,0.9985909947578888,0.21652299165725708

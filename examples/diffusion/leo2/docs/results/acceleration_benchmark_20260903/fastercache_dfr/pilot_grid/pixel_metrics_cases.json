@@ -1,0 +1,64 @@
+{
+  "cases": [
+    {
+      "baseline_case": "cache_off_shift9",
+      "baseline_root": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039",
+      "cache_method": "fastercache_dfr",
+      "cache_threshold": null,
+      "case": "dfr_w20_45_i2_shift9",
+      "flow_shift_video": 9.0,
+      "guidance_scale": 1.0,
+      "mae_max": 0.018106228621117708,
+      "mae_mean": 0.014577715842947987,
+      "max_abs_max": 0.984313725490196,
+      "max_abs_mean": 0.8392156862745098,
+      "pair_count": 4,
+      "relative_l1_max": 0.05636875067226069,
+      "relative_l1_mean": 0.040664701794741465,
+      "relative_l2_max": 0.06896763716233928,
+      "relative_l2_mean": 0.055074887564096064,
+      "rmse_max": 0.03166977317170435,
+      "rmse_mean": 0.023646457415112305
+    },
+    {
+      "baseline_case": "cache_off_shift9",
+      "baseline_root": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039",
+      "cache_method": "fastercache_dfr",
+      "cache_threshold": null,
+      "case": "dfr_w10_49_i2_shift9",
+      "flow_shift_video": 9.0,
+      "guidance_scale": 1.0,
+      "mae_max": 0.03625227904020636,
+      "mae_mean": 0.028121729473547154,
+      "max_abs_max": 1.0,
+      "max_abs_mean": 0.9372549019607843,
+      "pair_count": 4,
+      "relative_l1_max": 0.14211555128222647,
+      "relative_l1_mean": 0.0829385824551713,
+      "relative_l2_max": 0.22366313149350547,
+      "relative_l2_mean": 0.13163646814913646,
+      "rmse_max": 0.07217421391862801,
+      "rmse_mean": 0.052895340300964995
+    }
+  ],
+  "decoded_pixel_domain": "RGB24 normalized to [0, 1]",
+  "expected_video": {
+    "fps": 24.0,
+    "frames": 121,
+    "height": 464,
+    "width": 848
+  },
+  "inputs": {
+    "benchmark_root": "/root/leo2-output/accel-dfr-pilot-shift9-20260904-0114",
+    "cases_csv": "/root/leo2-dfr-pilot-cases-20260904.csv",
+    "cases_sha256": "8a6f5a1079d07d84f5f5684996da3d717f6c7e0fbfa205afba4874a1417c38e9",
+    "prompts_csv": "/root/Unirl-leo2/examples/diffusion/leo2/data/cache_benchmark_pilot_4.csv",
+    "prompts_sha256": "e8bafabaf7ebb2532dca25957894ea19fd2b8c521ebc86794456d18267c94969",
+    "summary_json": "/root/leo2-output/accel-dfr-pilot-shift9-20260904-0114/summary.json"
+  },
+  "kind": "cases",
+  "reference": "explicit baseline_case/reference_root with identical settings, prompt_hash and seed",
+  "relative_l1": "L1(candidate-reference) / max(L1(reference), float64_epsilon)",
+  "relative_l2": "L2(candidate-reference) / max(L2(reference), float64_epsilon)",
+  "schema_version": 2
+}

@@ -1,0 +1,511 @@
+{
+  "baseline_case": "cache_off_shift9",
+  "baseline_label": "exact",
+  "flow_shift_video": 9.0,
+  "guidance_scale": 1.0,
+  "manifest": {
+    "path": "/root/leo2-accel-report-spec-shift9-g1-20260904.json",
+    "sha256": "a85210a4d839801fe428425ef7daefe4ac0312375b7e7e35fa3afc6354c74c23"
+  },
+  "metric_semantics": {
+    "latent_global_rmse": "sqrt(latent_mse)",
+    "latent_mse": "mean of per-video final-latent elementwise MSE; latents have identical shape",
+    "pixel_global_rmse": "sqrt(pixel_mse)",
+    "pixel_mse": "sum squared RGB24 error / decoded RGB sample count after normalization to [0,1]",
+    "relative_l1_l2": "arithmetic mean of per-video candidate-reference norm / reference norm"
+  },
+  "metrics": [
+    {
+      "description": "Artifact case name",
+      "key": "case",
+      "unit": "text",
+      "values": {
+        "dfr_w10_49_i2": "dfr_w10_49_i2_shift9",
+        "exact": "cache_off_shift9",
+        "magcache_0.12_k4": "magcache_t012_k4_r020_shift9",
+        "static_0.10": "cache_t010_shift9",
+        "taylor_0.10_m0.50": "taylor_t010_m050_shift9"
+      }
+    },
+    {
+      "description": "Acceleration method",
+      "key": "cache_method",
+      "unit": "text",
+      "values": {
+        "dfr_w10_49_i2": "fastercache_dfr",
+        "exact": "off",
+        "magcache_0.12_k4": "magcache",
+        "static_0.10": "first_block",
+        "taylor_0.10_m0.50": "taylor"
+      }
+    },
+    {
+      "description": "Acceleration method options",
+      "key": "method_options",
+      "unit": "JSON",
+      "values": {
+        "dfr_w10_49_i2": "{\"end_step\":49,\"interval\":2,\"layers\":null,\"start_step\":10}",
+        "exact": "{}",
+        "magcache_0.12_k4": "{\"calibrate\":false,\"max_skip_steps\":4,\"profile\":\"/root/leo2-output/accel-magcache-calibration-shift9-20260904-0001/magcache_shift9_profile.json\",\"profile_ratio_count\":50,\"profile_sha256\":\"1fab27b88c5fd74a96de85c4e9f4cd29809289c2cd7df2cb0e143b1b3bef64b7\",\"profile_timestep_count\":50,\"retention_ratio\":0.2,\"threshold\":0.12}",
+        "static_0.10": "{\"threshold\":0.1}",
+        "taylor_0.10_m0.50": "{\"max_extrapolation\":0.5,\"threshold\":0.1}"
+      }
+    },
+    {
+      "description": "Cache threshold",
+      "key": "cache_threshold",
+      "unit": "setting",
+      "values": {
+        "dfr_w10_49_i2": null,
+        "exact": null,
+        "magcache_0.12_k4": null,
+        "static_0.10": 0.1,
+        "taylor_0.10_m0.50": 0.1
+      }
+    },
+    {
+      "description": "Paired prompt/video count",
+      "key": "sample_count",
+      "unit": "count",
+      "values": {
+        "dfr_w10_49_i2": 16,
+        "exact": 16,
+        "magcache_0.12_k4": 16,
+        "static_0.10": 16,
+        "taylor_0.10_m0.50": 16
+      }
+    },
+    {
+      "description": "Mean end-to-end generation latency",
+      "key": "generation_mean_seconds",
+      "unit": "seconds",
+      "values": {
+        "dfr_w10_49_i2": 157.30550444082473,
+        "exact": 198.11829882324673,
+        "magcache_0.12_k4": 82.62343844131829,
+        "static_0.10": 100.17919397264632,
+        "taylor_0.10_m0.50": 100.34166704035306
+      }
+    },
+    {
+      "description": "Mean generation latency excluding first request",
+      "key": "generation_steady_mean_seconds",
+      "unit": "seconds",
+      "values": {
+        "dfr_w10_49_i2": 156.3954482448132,
+        "exact": 197.08992626299926,
+        "magcache_0.12_k4": 81.75081854200302,
+        "static_0.10": 99.00593957088422,
+        "taylor_0.10_m0.50": 99.53652212718346
+      }
+    },
+    {
+      "description": "Mean prompt-paired speedup versus exact baseline",
+      "key": "paired_speedup_mean",
+      "unit": "x",
+      "values": {
+        "dfr_w10_49_i2": 1.2595096987641534,
+        "exact": 1.0,
+        "magcache_0.12_k4": 2.3996264348344685,
+        "static_0.10": 1.980043362107036,
+        "taylor_0.10_m0.50": 1.9756049820329726
+      }
+    },
+    {
+      "description": "Paired speedup mean 95% CI lower bound",
+      "key": "paired_speedup_ci95_low",
+      "unit": "x",
+      "values": {
+        "dfr_w10_49_i2": 1.2580945233978011,
+        "exact": 1.0,
+        "magcache_0.12_k4": 2.3775981792285177,
+        "static_0.10": 1.953537627639446,
+        "taylor_0.10_m0.50": 1.956037054360116
+      }
+    },
+    {
+      "description": "Paired speedup mean 95% CI upper bound",
+      "key": "paired_speedup_ci95_high",
+      "unit": "x",
+      "values": {
+        "dfr_w10_49_i2": 1.2609248741305057,
+        "exact": 1.0,
+        "magcache_0.12_k4": 2.4216546904404193,
+        "static_0.10": 2.0065490965746258,
+        "taylor_0.10_m0.50": 1.9951729097058293
+      }
+    },
+    {
+      "description": "Whole-tail residual reuse ratio",
+      "key": "tail_reuse_ratio",
+      "unit": "ratio",
+      "values": {
+        "dfr_w10_49_i2": 0.0,
+        "exact": 0.0,
+        "magcache_0.12_k4": 0.64,
+        "static_0.10": 0.555,
+        "taylor_0.10_m0.50": 0.5525
+      }
+    },
+    {
+      "description": "Managed-attention reuse ratio",
+      "key": "attention_reuse_ratio",
+      "unit": "ratio",
+      "values": {
+        "dfr_w10_49_i2": 0.38,
+        "exact": 0.0,
+        "magcache_0.12_k4": 0.0,
+        "static_0.10": 0.0,
+        "taylor_0.10_m0.50": 0.0
+      }
+    },
+    {
+      "description": "Rank-maximum method cache residency",
+      "key": "cache_residency_mib",
+      "unit": "MiB",
+      "values": {
+        "dfr_w10_49_i2": 4469.25,
+        "exact": null,
+        "magcache_0.12_k4": 93.0859375,
+        "static_0.10": null,
+        "taylor_0.10_m0.50": 0.0
+      }
+    },
+    {
+      "description": "Rank-maximum peak CUDA allocation",
+      "key": "peak_allocated_gib",
+      "unit": "GiB",
+      "values": {
+        "dfr_w10_49_i2": 69.01924085617065,
+        "exact": 64.64757776260376,
+        "magcache_0.12_k4": 64.73905229568481,
+        "static_0.10": 64.91943788528442,
+        "taylor_0.10_m0.50": 65.01132726669312
+      }
+    },
+    {
+      "description": "Mean per-video relative latent L1",
+      "key": "latent_relative_l1",
+      "unit": "ratio",
+      "values": {
+        "dfr_w10_49_i2": 0.11202520552965478,
+        "exact": 0.0,
+        "magcache_0.12_k4": 0.20628978915409604,
+        "static_0.10": 0.2122081088494751,
+        "taylor_0.10_m0.50": 0.1901763765482193
+      }
+    },
+    {
+      "description": "Mean per-video relative latent L2",
+      "key": "latent_relative_l2",
+      "unit": "ratio",
+      "values": {
+        "dfr_w10_49_i2": 0.12026318404858435,
+        "exact": 0.0,
+        "magcache_0.12_k4": 0.2091096321420398,
+        "static_0.10": 0.22196082278516133,
+        "taylor_0.10_m0.50": 0.20029409211553229
+      }
+    },
+    {
+      "description": "Global final-latent mean squared error",
+      "key": "latent_mse",
+      "unit": "latent^2",
+      "values": {
+        "dfr_w10_49_i2": 0.000307317967118158,
+        "exact": 0.0,
+        "magcache_0.12_k4": 0.0008640987579099245,
+        "static_0.10": 0.0009620577307907124,
+        "taylor_0.10_m0.50": 0.0008571494349080883
+      }
+    },
+    {
+      "description": "Global final-latent root mean squared error",
+      "key": "latent_global_rmse",
+      "unit": "latent",
+      "values": {
+        "dfr_w10_49_i2": 0.01753048679067863,
+        "exact": 0.0,
+        "magcache_0.12_k4": 0.029395556771558598,
+        "static_0.10": 0.03101705548227801,
+        "taylor_0.10_m0.50": 0.02927711452496793
+      }
+    },
+    {
+      "description": "Mean per-video latent cosine similarity",
+      "key": "latent_cosine",
+      "unit": "score",
+      "values": {
+        "dfr_w10_49_i2": 0.9920184313918302,
+        "exact": 1.0,
+        "magcache_0.12_k4": 0.9764222658568388,
+        "static_0.10": 0.9729279959409741,
+        "taylor_0.10_m0.50": 0.9767644862325002
+      }
+    },
+    {
+      "description": "Worst-pair latent maximum absolute error",
+      "key": "latent_max_abs",
+      "unit": "latent",
+      "values": {
+        "dfr_w10_49_i2": 0.8885223269462585,
+        "exact": 0.0,
+        "magcache_0.12_k4": 1.0172707438468933,
+        "static_0.10": 1.380482017993927,
+        "taylor_0.10_m0.50": 1.5448730364441872
+      }
+    },
+    {
+      "description": "Global decoded RGB mean absolute error",
+      "key": "pixel_mae",
+      "unit": "RGB [0,1]",
+      "values": {
+        "dfr_w10_49_i2": 0.021000862766955317,
+        "exact": 0.0,
+        "magcache_0.12_k4": 0.03568610522798951,
+        "static_0.10": 0.03795545308324252,
+        "taylor_0.10_m0.50": 0.03363286076994011
+      }
+    },
+    {
+      "description": "Mean per-video relative decoded RGB L1",
+      "key": "pixel_relative_l1",
+      "unit": "ratio",
+      "values": {
+        "dfr_w10_49_i2": 0.057434254624097646,
+        "exact": 0.0,
+        "magcache_0.12_k4": 0.09655129978701432,
+        "static_0.10": 0.10185231194276614,
+        "taylor_0.10_m0.50": 0.09045973082177151
+      }
+    },
+    {
+      "description": "Mean per-video relative decoded RGB L2",
+      "key": "pixel_relative_l2",
+      "unit": "ratio",
+      "values": {
+        "dfr_w10_49_i2": 0.08664695233640278,
+        "exact": 0.0,
+        "magcache_0.12_k4": 0.14043425185185945,
+        "static_0.10": 0.14909101362271412,
+        "taylor_0.10_m0.50": 0.13462861635739176
+      }
+    },
+    {
+      "description": "Global decoded RGB mean squared error",
+      "key": "pixel_mse",
+      "unit": "RGB^2 [0,1]",
+      "values": {
+        "dfr_w10_49_i2": 0.0015481153181038422,
+        "exact": 0.0,
+        "magcache_0.12_k4": 0.0038256431898555736,
+        "static_0.10": 0.004439328433878777,
+        "taylor_0.10_m0.50": 0.0038704309223779702
+      }
+    },
+    {
+      "description": "Global decoded RGB root mean squared error",
+      "key": "pixel_global_rmse",
+      "unit": "RGB [0,1]",
+      "values": {
+        "dfr_w10_49_i2": 0.039346096605684305,
+        "exact": 0.0,
+        "magcache_0.12_k4": 0.06185178404747573,
+        "static_0.10": 0.066628285539092,
+        "taylor_0.10_m0.50": 0.062212787450635666
+      }
+    },
+    {
+      "description": "VBench subject consistency",
+      "key": "vbench_subject_consistency",
+      "unit": "score",
+      "values": {
+        "dfr_w10_49_i2": 0.8968815241008997,
+        "exact": 0.8938013673371946,
+        "magcache_0.12_k4": 0.894754227999753,
+        "static_0.10": 0.897028808388859,
+        "taylor_0.10_m0.50": 0.8943278512296577
+      }
+    },
+    {
+      "description": "VBench background consistency",
+      "key": "vbench_background_consistency",
+      "unit": "score",
+      "values": {
+        "dfr_w10_49_i2": 0.9287333170572917,
+        "exact": 0.9278971354166666,
+        "magcache_0.12_k4": 0.9345055898030599,
+        "static_0.10": 0.9302176157633464,
+        "taylor_0.10_m0.50": 0.935405985514323
+      }
+    },
+    {
+      "description": "VBench motion smoothness",
+      "key": "vbench_motion_smoothness",
+      "unit": "score",
+      "values": {
+        "dfr_w10_49_i2": 0.9795551161326763,
+        "exact": 0.9797238671952241,
+        "magcache_0.12_k4": 0.9841787725440907,
+        "static_0.10": 0.9825146797803055,
+        "taylor_0.10_m0.50": 0.9804939225916134
+      }
+    },
+    {
+      "description": "VBench dynamic degree (descriptive motion-present rate)",
+      "key": "vbench_dynamic_degree",
+      "unit": "score",
+      "values": {
+        "dfr_w10_49_i2": 0.8125,
+        "exact": 0.8125,
+        "magcache_0.12_k4": 0.75,
+        "static_0.10": 0.6875,
+        "taylor_0.10_m0.50": 0.75
+      }
+    },
+    {
+      "description": "VBench aesthetic quality",
+      "key": "vbench_aesthetic_quality",
+      "unit": "score",
+      "values": {
+        "dfr_w10_49_i2": 0.509199034422636,
+        "exact": 0.512308219447732,
+        "magcache_0.12_k4": 0.49625587090849876,
+        "static_0.10": 0.5072889719158411,
+        "taylor_0.10_m0.50": 0.5135702919214964
+      }
+    },
+    {
+      "description": "VBench imaging quality",
+      "key": "vbench_imaging_quality",
+      "unit": "score",
+      "values": {
+        "dfr_w10_49_i2": 0.5708618076330374,
+        "exact": 0.5729364936213849,
+        "magcache_0.12_k4": 0.5275063288113302,
+        "static_0.10": 0.5464765638063763,
+        "taylor_0.10_m0.50": 0.5736181008569465
+      }
+    },
+    {
+      "description": "VideoScore2 visual quality",
+      "key": "videoscore2_visual_quality",
+      "unit": "score",
+      "values": {
+        "dfr_w10_49_i2": 3.0625,
+        "exact": 3.125,
+        "magcache_0.12_k4": 3.375,
+        "static_0.10": 3.1875,
+        "taylor_0.10_m0.50": 3.0625
+      }
+    },
+    {
+      "description": "VideoScore2 text alignment",
+      "key": "videoscore2_text_alignment",
+      "unit": "score",
+      "values": {
+        "dfr_w10_49_i2": 3.25,
+        "exact": 3.3125,
+        "magcache_0.12_k4": 3.5,
+        "static_0.10": 3.1875,
+        "taylor_0.10_m0.50": 3.375
+      }
+    },
+    {
+      "description": "VideoScore2 physical consistency",
+      "key": "videoscore2_physical_consistency",
+      "unit": "score",
+      "values": {
+        "dfr_w10_49_i2": 3.125,
+        "exact": 3.375,
+        "magcache_0.12_k4": 3.4375,
+        "static_0.10": 3.3125,
+        "taylor_0.10_m0.50": 3.0625
+      }
+    }
+  ],
+  "sample_count": 16,
+  "schema_version": 1,
+  "sources": [
+    {
+      "artifact_root": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039",
+      "benchmark_env": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/benchmark.env",
+      "benchmark_env_sha256": "8d5139e6afcd688782a9a21c7611692c0fe804aa3fd061c5e8bd3fec016eaf40",
+      "case": "cache_off_shift9",
+      "label": "exact",
+      "paired_metrics_csv": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/paired_metrics.csv",
+      "paired_metrics_sha256": "541b83608029332a97d1fb10f8001853c84c86292c0f78ad93e80110a2608d05",
+      "pixel_metrics_pairs_csv": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/pixel_metrics_pairs.csv",
+      "pixel_metrics_pairs_sha256": "63fae60b7cd08f999087bb8ab47431614a0fe503fadaef5afd3628289603bd77",
+      "quality_metrics_json": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/quality_eval/summary/quality_metrics_cases.json",
+      "quality_metrics_sha256": "6609d995340831bd5b185f092e245b0d31c3aa92eb332466a5b7b599d2290d6e",
+      "source_root": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039",
+      "summary_json": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/summary.json",
+      "summary_sha256": "8d34165ff89f65fcc194531d04e90c1180e0530c2151c718a0ffc20ee328077f"
+    },
+    {
+      "artifact_root": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039",
+      "benchmark_env": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/benchmark.env",
+      "benchmark_env_sha256": "8d5139e6afcd688782a9a21c7611692c0fe804aa3fd061c5e8bd3fec016eaf40",
+      "case": "cache_t010_shift9",
+      "label": "static_0.10",
+      "paired_metrics_csv": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/paired_metrics.csv",
+      "paired_metrics_sha256": "541b83608029332a97d1fb10f8001853c84c86292c0f78ad93e80110a2608d05",
+      "pixel_metrics_pairs_csv": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/pixel_metrics_pairs.csv",
+      "pixel_metrics_pairs_sha256": "63fae60b7cd08f999087bb8ab47431614a0fe503fadaef5afd3628289603bd77",
+      "quality_metrics_json": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/quality_eval/summary/quality_metrics_cases.json",
+      "quality_metrics_sha256": "6609d995340831bd5b185f092e245b0d31c3aa92eb332466a5b7b599d2290d6e",
+      "source_root": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039",
+      "summary_json": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/summary.json",
+      "summary_sha256": "8d34165ff89f65fcc194531d04e90c1180e0530c2151c718a0ffc20ee328077f"
+    },
+    {
+      "artifact_root": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316",
+      "benchmark_env": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/benchmark.env",
+      "benchmark_env_sha256": "1d171e0c958e5ddc90b25240b9c04d3e70cef4175d1e9296b92d0a1b157ce552",
+      "case": "taylor_t010_m050_shift9",
+      "label": "taylor_0.10_m0.50",
+      "paired_metrics_csv": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/paired_metrics.csv",
+      "paired_metrics_sha256": "79ebe80f1bc48fbd661ba7f984d7eaff2e9b345ff020c8b91d0a70d7cdc4dbf6",
+      "pixel_metrics_pairs_csv": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/pixel_metrics_pairs.csv",
+      "pixel_metrics_pairs_sha256": "c97129dbc574acc6b2dfd029d89ac1c8468f00be58350fc7807091ae200d1488",
+      "quality_metrics_json": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/quality_eval/summary/quality_metrics_cases.json",
+      "quality_metrics_sha256": "8c4ef3e16d1fb10aba786fc116765505770497e00bc4e31f240ec9be86053729",
+      "source_root": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316",
+      "summary_json": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/summary.json",
+      "summary_sha256": "41ab2b800f095370fcd13c393396099b2a97864c25ad559a938dd380705f834b"
+    },
+    {
+      "artifact_root": "/root/leo2-output/accel-magcache-full-t012-k4-shift9-20260904-0038",
+      "benchmark_env": "/root/leo2-output/accel-magcache-full-t012-k4-shift9-20260904-0038/benchmark.env",
+      "benchmark_env_sha256": "e13a3b97c6606047b3352ee3072dea00e0dcd8ce5a6fdd99845fde14d6a29e67",
+      "case": "magcache_t012_k4_r020_shift9",
+      "label": "magcache_0.12_k4",
+      "paired_metrics_csv": "/root/leo2-output/accel-magcache-full-t012-k4-shift9-20260904-0038/paired_metrics.csv",
+      "paired_metrics_sha256": "de7193e762d7fc0b6efac9a8146218edc6fb300287eaedf892fc5c657452d015",
+      "pixel_metrics_pairs_csv": "/root/leo2-output/accel-magcache-full-t012-k4-shift9-20260904-0038/pixel_metrics_pairs.csv",
+      "pixel_metrics_pairs_sha256": "e2ce507f5cc8197d00d530dea443713f154212fdb99dfed8bc801f7cc1aa44f2",
+      "quality_metrics_json": "/root/leo2-output/accel-magcache-full-t012-k4-shift9-20260904-0038/quality_eval/summary/quality_metrics_cases.json",
+      "quality_metrics_sha256": "4db0bc0cdc1479957c1219444faf25cdf62fa3ad2444b88181a957fb1c1abc2b",
+      "source_root": "/root/leo2-output/accel-magcache-full-t012-k4-shift9-20260904-0038",
+      "summary_json": "/root/leo2-output/accel-magcache-full-t012-k4-shift9-20260904-0038/summary.json",
+      "summary_sha256": "d05569c4c469171bb64702f69abb612029ca740fc41336d1a78a11314e4ee95d"
+    },
+    {
+      "artifact_root": "/root/leo2-output/accel-dfr-full-w10-49-shift9-20260904-0142",
+      "benchmark_env": "/root/leo2-output/accel-dfr-full-w10-49-shift9-20260904-0142/benchmark.env",
+      "benchmark_env_sha256": "af3a56a26ea3b63ae2b67f68dfe4d0bcfe56ad0c0d50e66277cf083e0239a87a",
+      "case": "dfr_w10_49_i2_shift9",
+      "label": "dfr_w10_49_i2",
+      "paired_metrics_csv": "/root/leo2-output/accel-dfr-full-w10-49-shift9-20260904-0142/paired_metrics.csv",
+      "paired_metrics_sha256": "042f6f50aaafe3769b9b0d13e446151289bba6c3c1af3e06dd61cbf377fc113a",
+      "pixel_metrics_pairs_csv": "/root/leo2-output/accel-dfr-full-w10-49-shift9-20260904-0142/pixel_metrics_pairs.csv",
+      "pixel_metrics_pairs_sha256": "64e68cfcacb3c70e64eba4d0c80d9af81b849418089ebf9c553d07c7b173395e",
+      "quality_metrics_json": "/root/leo2-output/accel-dfr-full-w10-49-shift9-20260904-0142/quality_eval/summary/quality_metrics_cases.json",
+      "quality_metrics_sha256": "1ca6c4e3c087ea0f783d78a65f0f5b60809e2177cfa34d434833f914510b92fd",
+      "source_root": "/root/leo2-output/accel-dfr-full-w10-49-shift9-20260904-0142",
+      "summary_json": "/root/leo2-output/accel-dfr-full-w10-49-shift9-20260904-0142/summary.json",
+      "summary_sha256": "25c117cf25467c35c151c9d0b1b303efd8f00557e5ed1067b0b6201fbf188ced"
+    }
+  ]
+}

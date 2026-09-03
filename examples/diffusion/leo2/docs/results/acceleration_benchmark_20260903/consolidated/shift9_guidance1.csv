@@ -1,0 +1,35 @@
+metric,description,unit,exact,static_0.10,taylor_0.10_m0.50,magcache_0.12_k4,dfr_w10_49_i2
+case,Artifact case name,text,cache_off_shift9,cache_t010_shift9,taylor_t010_m050_shift9,magcache_t012_k4_r020_shift9,dfr_w10_49_i2_shift9
+cache_method,Acceleration method,text,off,first_block,taylor,magcache,fastercache_dfr
+method_options,Acceleration method options,JSON,{},"{""threshold"":0.1}","{""max_extrapolation"":0.5,""threshold"":0.1}","{""calibrate"":false,""max_skip_steps"":4,""profile"":""/root/leo2-output/accel-magcache-calibration-shift9-20260904-0001/magcache_shift9_profile.json"",""profile_ratio_count"":50,""profile_sha256"":""1fab27b88c5fd74a96de85c4e9f4cd29809289c2cd7df2cb0e143b1b3bef64b7"",""profile_timestep_count"":50,""retention_ratio"":0.2,""threshold"":0.12}","{""end_step"":49,""interval"":2,""layers"":null,""start_step"":10}"
+cache_threshold,Cache threshold,setting,,0.1,0.1,,
+sample_count,Paired prompt/video count,count,16,16,16,16,16
+generation_mean_seconds,Mean end-to-end generation latency,seconds,198.11829882324673,100.17919397264632,100.34166704035306,82.62343844131829,157.30550444082473
+generation_steady_mean_seconds,Mean generation latency excluding first request,seconds,197.08992626299926,99.00593957088422,99.53652212718346,81.75081854200302,156.3954482448132
+paired_speedup_mean,Mean prompt-paired speedup versus exact baseline,x,1.0,1.980043362107036,1.9756049820329726,2.3996264348344685,1.2595096987641534
+paired_speedup_ci95_low,Paired speedup mean 95% CI lower bound,x,1.0,1.953537627639446,1.956037054360116,2.3775981792285177,1.2580945233978011
+paired_speedup_ci95_high,Paired speedup mean 95% CI upper bound,x,1.0,2.0065490965746258,1.9951729097058293,2.4216546904404193,1.2609248741305057
+tail_reuse_ratio,Whole-tail residual reuse ratio,ratio,0.0,0.555,0.5525,0.64,0.0
+attention_reuse_ratio,Managed-attention reuse ratio,ratio,0.0,0.0,0.0,0.0,0.38
+cache_residency_mib,Rank-maximum method cache residency,MiB,,,0.0,93.0859375,4469.25
+peak_allocated_gib,Rank-maximum peak CUDA allocation,GiB,64.64757776260376,64.91943788528442,65.01132726669312,64.73905229568481,69.01924085617065
+latent_relative_l1,Mean per-video relative latent L1,ratio,0.0,0.2122081088494751,0.1901763765482193,0.20628978915409604,0.11202520552965478
+latent_relative_l2,Mean per-video relative latent L2,ratio,0.0,0.22196082278516133,0.20029409211553229,0.2091096321420398,0.12026318404858435
+latent_mse,Global final-latent mean squared error,latent^2,0.0,0.0009620577307907124,0.0008571494349080883,0.0008640987579099245,0.000307317967118158
+latent_global_rmse,Global final-latent root mean squared error,latent,0.0,0.03101705548227801,0.02927711452496793,0.029395556771558598,0.01753048679067863
+latent_cosine,Mean per-video latent cosine similarity,score,1.0,0.9729279959409741,0.9767644862325002,0.9764222658568388,0.9920184313918302
+latent_max_abs,Worst-pair latent maximum absolute error,latent,0.0,1.380482017993927,1.5448730364441872,1.0172707438468933,0.8885223269462585
+pixel_mae,Global decoded RGB mean absolute error,"RGB [0,1]",0.0,0.03795545308324252,0.03363286076994011,0.03568610522798951,0.021000862766955317
+pixel_relative_l1,Mean per-video relative decoded RGB L1,ratio,0.0,0.10185231194276614,0.09045973082177151,0.09655129978701432,0.057434254624097646
+pixel_relative_l2,Mean per-video relative decoded RGB L2,ratio,0.0,0.14909101362271412,0.13462861635739176,0.14043425185185945,0.08664695233640278
+pixel_mse,Global decoded RGB mean squared error,"RGB^2 [0,1]",0.0,0.004439328433878777,0.0038704309223779702,0.0038256431898555736,0.0015481153181038422
+pixel_global_rmse,Global decoded RGB root mean squared error,"RGB [0,1]",0.0,0.066628285539092,0.062212787450635666,0.06185178404747573,0.039346096605684305
+vbench_subject_consistency,VBench subject consistency,score,0.8938013673371946,0.897028808388859,0.8943278512296577,0.894754227999753,0.8968815241008997
+vbench_background_consistency,VBench background consistency,score,0.9278971354166666,0.9302176157633464,0.935405985514323,0.9345055898030599,0.9287333170572917
+vbench_motion_smoothness,VBench motion smoothness,score,0.9797238671952241,0.9825146797803055,0.9804939225916134,0.9841787725440907,0.9795551161326763
+vbench_dynamic_degree,VBench dynamic degree (descriptive motion-present rate),score,0.8125,0.6875,0.75,0.75,0.8125
+vbench_aesthetic_quality,VBench aesthetic quality,score,0.512308219447732,0.5072889719158411,0.5135702919214964,0.49625587090849876,0.509199034422636
+vbench_imaging_quality,VBench imaging quality,score,0.5729364936213849,0.5464765638063763,0.5736181008569465,0.5275063288113302,0.5708618076330374
+videoscore2_visual_quality,VideoScore2 visual quality,score,3.125,3.1875,3.0625,3.375,3.0625
+videoscore2_text_alignment,VideoScore2 text alignment,score,3.3125,3.1875,3.375,3.5,3.25
+videoscore2_physical_consistency,VideoScore2 physical consistency,score,3.375,3.3125,3.0625,3.4375,3.125
