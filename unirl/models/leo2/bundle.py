@@ -269,9 +269,9 @@ def _make_inference_cache_config(config: Leo2PipelineConfig) -> Any | None:
     method = config.inference_cache_method.strip().lower()
     if method == "none":
         return None
-    if method not in {"first_block", "taylor"}:
+    if method not in {"first_block", "taylor", "magcache"}:
         raise ValueError(
-            "Leo2 inference_cache_method must be 'none', 'first_block', or 'taylor', "
+            "Leo2 inference_cache_method must be 'none', 'first_block', 'taylor', or 'magcache', "
             f"got {config.inference_cache_method!r}."
         )
     if not isinstance(config.inference_cache_threshold, (int, float)):
@@ -290,6 +290,18 @@ def _make_inference_cache_config(config: Leo2PipelineConfig) -> Any | None:
         from hymm.models.diffusion.leo_cache import LeoTaylorCacheConfig
 
         return LeoTaylorCacheConfig(threshold=threshold, max_extrapolation=max_extrapolation)
+
+    if method == "magcache":
+        from hymm.models.diffusion.leo_cache import LeoMagCacheConfig
+
+        return LeoMagCacheConfig(
+            threshold=threshold,
+            max_skip_steps=config.inference_cache_magcache_max_skip_steps,
+            retention_ratio=config.inference_cache_magcache_retention_ratio,
+            ratios=config.inference_cache_magcache_ratios,
+            expected_timesteps=config.inference_cache_magcache_expected_timesteps,
+            calibrate=config.inference_cache_magcache_calibrate,
+        )
 
     from diffusers import FirstBlockCacheConfig
 

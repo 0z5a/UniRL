@@ -88,6 +88,11 @@ class Leo2PipelineConfig:
     inference_cache_method: str = "none"
     inference_cache_threshold: float = 0.05
     inference_cache_taylor_max_extrapolation: float = 1.0
+    inference_cache_magcache_max_skip_steps: int = 6
+    inference_cache_magcache_retention_ratio: float = 0.2
+    inference_cache_magcache_ratios: List[float] = field(default_factory=list)
+    inference_cache_magcache_expected_timesteps: List[float] = field(default_factory=list)
+    inference_cache_magcache_calibrate: bool = False
 
     # --- placement ---
     # Qwen3.5-9B (18 GB bf16) parked on CPU; moved to GPU transiently for the

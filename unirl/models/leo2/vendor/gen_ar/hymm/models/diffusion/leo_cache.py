@@ -28,6 +28,62 @@ class LeoTaylorCacheConfig(LeoFirstBlockCacheConfig):
     max_extrapolation: float = 1.0
 
 
+@dataclass(frozen=True)
+class LeoMagCacheConfig:
+    """Configure full-stack residual reuse from a calibrated magnitude profile."""
+
+    threshold: float = 0.24
+    max_skip_steps: int = 6
+    retention_ratio: float = 0.2
+    ratios: tuple[float, ...] = ()
+    expected_timesteps: tuple[float, ...] = ()
+    calibrate: bool = False
+
+    def __post_init__(self) -> None:
+        """Normalize and validate the immutable MagCache profile."""
+        if isinstance(self.threshold, bool) or not isinstance(self.threshold, (int, float)):
+            raise TypeError("MagCache threshold must be numeric.")
+        if not math.isfinite(self.threshold) or self.threshold < 0:
+            raise ValueError("MagCache threshold must be finite and non-negative.")
+        if isinstance(self.max_skip_steps, bool) or not isinstance(self.max_skip_steps, int):
+            raise TypeError("MagCache max_skip_steps must be an integer.")
+        if self.max_skip_steps < 0:
+            raise ValueError("MagCache max_skip_steps must be non-negative.")
+        if isinstance(self.retention_ratio, bool) or not isinstance(self.retention_ratio, (int, float)):
+            raise TypeError("MagCache retention_ratio must be numeric.")
+        if not math.isfinite(self.retention_ratio) or not 0 <= self.retention_ratio <= 1:
+            raise ValueError("MagCache retention_ratio must be finite and in [0, 1].")
+        if not isinstance(self.calibrate, bool):
+            raise TypeError("MagCache calibrate must be a bool.")
+
+        try:
+            ratios = tuple(self.ratios)
+            expected_timesteps = tuple(self.expected_timesteps)
+        except TypeError as exc:
+            raise TypeError("MagCache ratios and expected_timesteps must be sequences.") from exc
+        for index, ratio in enumerate(ratios):
+            if isinstance(ratio, bool) or not isinstance(ratio, (int, float)):
+                raise TypeError(f"MagCache ratio {index} must be numeric.")
+            if not math.isfinite(ratio) or ratio <= 0:
+                raise ValueError(f"MagCache ratio {index} must be finite and positive.")
+        for index, timestep in enumerate(expected_timesteps):
+            if isinstance(timestep, bool) or not isinstance(timestep, (int, float)):
+                raise TypeError(f"MagCache expected timestep {index} must be numeric.")
+            if not math.isfinite(timestep):
+                raise ValueError(f"MagCache expected timestep {index} must be finite.")
+        if self.calibrate:
+            if ratios or expected_timesteps:
+                raise ValueError("MagCache calibration requires empty ratios and expected_timesteps.")
+        elif not ratios or len(ratios) != len(expected_timesteps):
+            raise ValueError("MagCache ratios and expected_timesteps must have the same non-zero length.")
+        elif ratios[0] != 1.0:
+            raise ValueError("MagCache ratio 0 must be exactly 1.0.")
+        object.__setattr__(self, "threshold", float(self.threshold))
+        object.__setattr__(self, "retention_ratio", float(self.retention_ratio))
+        object.__setattr__(self, "ratios", tuple(float(value) for value in ratios))
+        object.__setattr__(self, "expected_timesteps", tuple(float(value) for value in expected_timesteps))
+
+
 class LeoFirstBlockCacheController:
     """Track request-local Leo block residuals without registering model state."""
 
@@ -446,3 +502,284 @@ class LeoFirstBlockCacheController:
             except (RuntimeError, TypeError, ValueError):
                 return None
         return sum_groups, max_groups
+
+
+class LeoMagCacheController(LeoFirstBlockCacheController):
+    """Reuse the full Leo block-stack residual from a calibrated magnitude profile."""
+
+    def __init__(self, config: LeoMagCacheConfig):
+        if not isinstance(config, LeoMagCacheConfig):
+            raise TypeError("LeoMagCacheController requires LeoMagCacheConfig.")
+        self.threshold = config.threshold
+        self.max_skip_steps = config.max_skip_steps
+        self.retention_ratio = config.retention_ratio
+        self.ratios = config.ratios
+        self.expected_timesteps = config.expected_timesteps
+        self.calibrate = config.calibrate
+        self.method = "magcache"
+        self._context_depth = 0
+        self._signature = None
+        self._full_residuals: TensorStreams | None = None
+        self._previous_full_residuals: TensorStreams | None = None
+        self._pending_timestep: float | None = None
+        self._pending_sync_plan: SyncPlan | None = None
+        self._distributed_config_validated = False
+        self._step_index = 0
+        self._accumulated_error = 0.0
+        self._accumulated_ratio = 1.0
+        self._accumulated_steps = 0
+        self.full_steps = 0
+        self.skipped_steps = 0
+        self.observed_ratios: list[float] = []
+        self.observed_timesteps: list[float] = []
+
+    @contextmanager
+    def context(self, name: str = "default") -> Iterator[None]:
+        """Scope MagCache state and profile validation to one denoising trajectory."""
+        _ = name
+        if self._context_depth == 0:
+            self.reset()
+            self._step_index = 0
+            self.full_steps = 0
+            self.skipped_steps = 0
+            self.observed_ratios = []
+            self.observed_timesteps = []
+            self._distributed_config_validated = False
+        self._context_depth += 1
+        completed = False
+        try:
+            yield
+            completed = True
+        finally:
+            self._context_depth -= 1
+            if self._context_depth == 0:
+                consumed_steps = self._step_index
+                self.reset()
+                if completed and not self.calibrate and consumed_steps != len(self.ratios):
+                    raise RuntimeError(
+                        "MagCache profile length does not match the denoising trajectory: "
+                        f"consumed {consumed_steps} steps, expected {len(self.ratios)}."
+                    )
+
+    def reset(self) -> None:
+        """Drop cached activations while retaining request counters and profile output."""
+        self._signature = None
+        self._full_residuals = None
+        self._previous_full_residuals = None
+        self._pending_timestep = None
+        self._pending_sync_plan = None
+        self._reset_window()
+
+    @torch.compiler.disable
+    def should_reuse(
+        self,
+        block_inputs: TensorStreams,
+        leader_block: object = None,
+        timestep: torch.Tensor | None = None,
+    ) -> bool:
+        """Decide before block zero whether the cached full-stack residual may be reused."""
+        if self._pending_timestep is not None or self._pending_sync_plan is not None:
+            raise RuntimeError("Leo MagCache received a second decision before completing the previous step.")
+        sync_plan = self._synchronization_plan(leader_block)
+        if sync_plan is None:
+            raise RuntimeError("MagCache cannot establish a CP/FSDP-consistent decision group.")
+        sum_groups, max_groups = sync_plan
+        decision_groups = [*sum_groups, *max_groups]
+        reference = block_inputs[0]
+        self._validate_distributed_config(reference, decision_groups)
+
+        current_timestep = self._uniform_timestep(timestep, decision_groups)
+        if current_timestep is None:
+            raise RuntimeError("MagCache requires one finite timestep shared by every model-sharding rank.")
+        step_index = self._step_index
+        profile_ratio = 1.0
+        if not self.calibrate:
+            profile_ratio = self._profile_value(self.ratios, step_index, reference, decision_groups, "ratio")
+            expected_timestep = self._profile_value(
+                self.expected_timesteps,
+                step_index,
+                reference,
+                decision_groups,
+                "expected timestep",
+            )
+            if current_timestep != expected_timestep:
+                raise RuntimeError(
+                    f"MagCache timestep mismatch at step {step_index}: "
+                    f"got {current_timestep}, expected {expected_timestep}."
+                )
+
+        self._pending_timestep = current_timestep
+        self._pending_sync_plan = sync_plan
+        self._step_index += 1
+
+        signature = self._stream_signature(block_inputs)
+        locally_valid = self._signature == signature and self._full_residuals is not None
+        valid = reference.new_tensor(int(locally_valid), dtype=torch.int32)
+        self._all_reduce(valid, decision_groups, dist.ReduceOp.MIN)
+        if not bool(valid.item()):
+            self._signature = signature
+            self._full_residuals = None
+            self._previous_full_residuals = None
+            self._reset_window()
+            return False
+        if self.calibrate:
+            return False
+
+        retention_steps = int(len(self.ratios) * self.retention_ratio)
+        if step_index < retention_steps:
+            self._reset_window()
+            return False
+
+        accumulated_ratio = self._accumulated_ratio * profile_ratio
+        accumulated_steps = self._accumulated_steps + 1
+        accumulated_error = self._accumulated_error + abs(1.0 - accumulated_ratio)
+        reuse = accumulated_error < self.threshold and accumulated_steps <= self.max_skip_steps
+        reuse = self._consistent_decision(reuse, reference, decision_groups)
+        if not reuse:
+            self._reset_window()
+            return False
+        self._accumulated_ratio = accumulated_ratio
+        self._accumulated_steps = accumulated_steps
+        self._accumulated_error = accumulated_error
+        self.skipped_steps += 1
+        return True
+
+    def apply_full(self, block_inputs: TensorStreams) -> TensorStreams:
+        """Apply the cached residual contributed by the entire transformer stack."""
+        if self._full_residuals is None:
+            raise RuntimeError("Leo MagCache has no full-stack residual to apply.")
+        self._validate_streams(block_inputs, self._full_residuals, "apply")
+        outputs = tuple(
+            None if block_input is None else block_input + residual
+            for block_input, residual in zip(block_inputs, self._full_residuals)
+        )
+        self._pending_timestep = None
+        self._pending_sync_plan = None
+        return outputs
+
+    def update_full(self, block_inputs: TensorStreams, final_outputs: TensorStreams) -> None:
+        """Store one exact full-stack residual and record its calibration ratio."""
+        if self._pending_timestep is None or self._pending_sync_plan is None:
+            raise RuntimeError("Leo MagCache full update has no matching pre-block decision.")
+        self._validate_streams(block_inputs, final_outputs, "update")
+        next_residuals = tuple(
+            None if block_input is None else (final_output - block_input).detach()
+            for block_input, final_output in zip(block_inputs, final_outputs)
+        )
+        self.full_steps += 1
+        if self.calibrate:
+            if self._previous_full_residuals is None:
+                ratio = 1.0
+            else:
+                sum_groups, max_groups = self._pending_sync_plan
+                ratio = self._magnitude_ratio(
+                    next_residuals[0],
+                    self._previous_full_residuals[0],
+                    sum_groups,
+                    max_groups,
+                )
+            self.observed_ratios.append(ratio)
+            self.observed_timesteps.append(self._pending_timestep)
+            self._previous_full_residuals = next_residuals
+        self._full_residuals = next_residuals
+        self._pending_timestep = None
+        self._pending_sync_plan = None
+
+    def stats(self) -> dict[str, object]:
+        """Return counters and the calibrated or configured magnitude profile."""
+        ratios = self.observed_ratios if self.calibrate else self.ratios
+        timesteps = self.observed_timesteps if self.calibrate else self.expected_timesteps
+        return {
+            "method": self.method,
+            "threshold": self.threshold,
+            "full_steps": self.full_steps,
+            "skipped_steps": self.skipped_steps,
+            "magcache_calibrate": self.calibrate,
+            "magcache_max_skip_steps": self.max_skip_steps,
+            "magcache_retention_ratio": self.retention_ratio,
+            "magcache_ratios": list(ratios),
+            "magcache_expected_timesteps": list(timesteps),
+        }
+
+    def _reset_window(self) -> None:
+        """Reset accumulated approximation error after an exact step."""
+        self._accumulated_error = 0.0
+        self._accumulated_ratio = 1.0
+        self._accumulated_steps = 0
+
+    @classmethod
+    def _profile_value(
+        cls,
+        values: tuple[float, ...],
+        index: int,
+        reference: torch.Tensor,
+        groups: list[dist.ProcessGroup],
+        label: str,
+    ) -> float:
+        """Read one profile value and reject exhaustion or cross-rank disagreement."""
+        local_value = values[index] if index < len(values) else float("nan")
+        value = cls._uniform_timestep(reference.new_tensor(local_value, dtype=torch.float32), groups)
+        if value is None:
+            raise RuntimeError(f"MagCache {label} is missing or differs across ranks at step {index}.")
+        return value
+
+    def _validate_distributed_config(
+        self,
+        reference: torch.Tensor,
+        groups: list[dist.ProcessGroup],
+    ) -> None:
+        """Reject MagCache control values that differ across model-sharding ranks."""
+        if self._distributed_config_validated:
+            return
+        values = (
+            self.threshold,
+            float(self.max_skip_steps),
+            self.retention_ratio,
+            float(len(self.ratios)),
+            float(self.calibrate),
+        )
+        for value in values:
+            shared = self._uniform_timestep(reference.new_tensor(value, dtype=torch.float32), groups)
+            if shared is None:
+                raise RuntimeError("MagCache control configuration differs across model-sharding ranks.")
+        self._distributed_config_validated = True
+
+    @classmethod
+    def _consistent_decision(
+        cls,
+        decision: bool,
+        reference: torch.Tensor,
+        groups: list[dist.ProcessGroup],
+    ) -> bool:
+        """Reject a skip decision that differs across model-sharding ranks."""
+        bounds = reference.new_tensor([int(decision), int(decision)], dtype=torch.int32)
+        low = bounds[0].clone()
+        high = bounds[1].clone()
+        cls._all_reduce(low, groups, dist.ReduceOp.MIN)
+        cls._all_reduce(high, groups, dist.ReduceOp.MAX)
+        if int(low.item()) != int(high.item()):
+            raise RuntimeError("MagCache skip decision differs across model-sharding ranks.")
+        return bool(low.item())
+
+    @classmethod
+    def _magnitude_ratio(
+        cls,
+        current: torch.Tensor | None,
+        previous: torch.Tensor | None,
+        sum_groups: list[dist.ProcessGroup],
+        max_groups: list[dist.ProcessGroup],
+    ) -> float:
+        """Compute the global visual full-stack residual magnitude ratio."""
+        if current is None or previous is None:
+            raise RuntimeError("MagCache calibration requires a visual residual on every step.")
+        current_norm = current.float().norm(dim=-1)
+        previous_norm = previous.float().norm(dim=-1).clamp_min(torch.finfo(torch.float32).eps)
+        local_ratios = current_norm / previous_norm
+        values = torch.stack((local_ratios.sum(), local_ratios.new_tensor(local_ratios.numel())))
+        cls._all_reduce(values, sum_groups, dist.ReduceOp.SUM)
+        ratio = values[0] / values[1].clamp_min(1)
+        cls._all_reduce(ratio, max_groups, dist.ReduceOp.MAX)
+        ratio_value = float(ratio.item())
+        if not math.isfinite(ratio_value) or ratio_value <= 0:
+            raise RuntimeError(f"MagCache calibration produced an invalid ratio: {ratio_value}.")
+        return ratio_value

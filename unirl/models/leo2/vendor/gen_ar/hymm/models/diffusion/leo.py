@@ -26,7 +26,12 @@ from hy_parallelism.context_parallel.core import (
     register_cp_info,
 )
 
-from .leo_cache import LeoFirstBlockCacheConfig, LeoFirstBlockCacheController
+from .leo_cache import (
+    LeoFirstBlockCacheConfig,
+    LeoFirstBlockCacheController,
+    LeoMagCacheConfig,
+    LeoMagCacheController,
+)
 from .leo_config import LeoConfig
 from ..basic.attention import SelfAttention
 from ..basic.embed_layers import TimestepEmbedder, TextProjection, AudioProjection
@@ -1695,7 +1700,10 @@ class LeoModelBase(HunyuanMultimodalState):
             raise ValueError("Cache is already enabled; call `disable_cache()` before enabling it again.")
         if config is None:
             config = LeoFirstBlockCacheConfig()
-        controller = LeoFirstBlockCacheController(config)
+        if isinstance(config, LeoMagCacheConfig):
+            controller = LeoMagCacheController(config)
+        else:
+            controller = LeoFirstBlockCacheController(config)
         self._cache_config = config
         self._leo_cache_controller = controller
 
@@ -1705,7 +1713,7 @@ class LeoModelBase(HunyuanMultimodalState):
         return self._leo_cache_controller is not None
 
     def disable_cache(self) -> None:
-        """Disable Leo first-block caching and release cached activations."""
+        """Disable Leo inference caching and release cached activations."""
         self._reset_stateful_cache()
         self._leo_cache_controller = None
         self._cache_config = None
@@ -2484,7 +2492,21 @@ class LeoModelBase(HunyuanMultimodalState):
             block_head_inputs = (hidden_states, txt_hidden_states)
         block_head_outputs = None
         cache_hit = False
+        magcache_active = cache_active and isinstance(cache_controller, LeoMagCacheController)
+        if magcache_active and cache_controller.should_reuse(
+            block_head_inputs,
+            leader_block=self.layers[0],
+            timestep=timesteps,
+        ):
+            cached_outputs = cache_controller.apply_full(block_head_inputs)
+            if self._audio_config is not None:
+                hidden_states, audio_hidden_states, txt_hidden_states = cached_outputs
+            else:
+                hidden_states, txt_hidden_states = cached_outputs
+            cache_hit = True
         for layer_idx, layer in enumerate(self.layers):
+            if cache_hit:
+                break
             if self._audio_config is not None:
                 layer_inputs = [
                     (hidden_states, audio_hidden_states, txt_hidden_states),
@@ -2514,7 +2536,7 @@ class LeoModelBase(HunyuanMultimodalState):
                     zero_timestep_states=zero_timestep_states,
                 )
 
-            if cache_active and layer_idx == 0:
+            if cache_active and not magcache_active and layer_idx == 0:
                 if self._audio_config is not None:
                     block_head_outputs = (hidden_states, audio_hidden_states, txt_hidden_states)
                 else:
@@ -2548,7 +2570,10 @@ class LeoModelBase(HunyuanMultimodalState):
                 block_outputs = (hidden_states, audio_hidden_states, txt_hidden_states)
             else:
                 block_outputs = (hidden_states, txt_hidden_states)
-            cache_controller.update_tail(block_head_outputs, block_outputs, timestep=timesteps)
+            if magcache_active:
+                cache_controller.update_full(block_head_inputs, block_outputs)
+            else:
+                cache_controller.update_tail(block_head_outputs, block_outputs, timestep=timesteps)
 
         if get_parallel_state().cp_size > 1:
             hidden_states = maybe_gather_seq(hidden_states, cp_info=get_cp_info(LEO_MEDIA_CP_INFO))
