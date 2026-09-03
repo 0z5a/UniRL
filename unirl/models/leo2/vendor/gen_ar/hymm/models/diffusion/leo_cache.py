@@ -117,6 +117,14 @@ class LeoFirstBlockCacheController:
         self._pending_alpha = None
         self._pending_timestep = None
 
+        if self.method == "taylor":
+            if len(head_inputs) == 3 and head_inputs[1] is not None:
+                raise RuntimeError(
+                    "Leo Taylor cache currently supports video-only inference; "
+                    "audio requires an independent scheduler timestep."
+                )
+            self._pending_timestep = self._uniform_timestep(timestep, decision_groups)
+
         signature = self._stream_signature(head_inputs)
         current_residuals = self._decision_residuals(head_inputs, head_outputs)
         locally_valid = (
@@ -139,7 +147,7 @@ class LeoFirstBlockCacheController:
             return False
 
         if self.method == "taylor":
-            current_timestep = self._uniform_timestep(timestep, decision_groups)
+            current_timestep = self._pending_timestep
             predictor_ready = (
                 current_timestep is not None
                 and self._previous_tail_residuals is not None
@@ -218,8 +226,6 @@ class LeoFirstBlockCacheController:
         )
         if self.method == "taylor":
             current_timestep = self._pending_timestep
-            if current_timestep is None:
-                current_timestep = self._uniform_timestep(timestep, [])
             if current_timestep is None:
                 self._previous_tail_residuals = None
                 self._tail_residuals = None
