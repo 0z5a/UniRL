@@ -1,4 +1,4 @@
-"""Inference-only first-block cache for Leo diffusion blocks."""
+"""Inference-only feature caches for Leo diffusion blocks."""
 
 from __future__ import annotations
 
@@ -21,6 +21,13 @@ class LeoFirstBlockCacheConfig:
     threshold: float = 0.05
 
 
+@dataclass(frozen=True)
+class LeoTaylorCacheConfig(LeoFirstBlockCacheConfig):
+    """Configure first-block caching with first-order tail prediction."""
+
+    max_extrapolation: float = 1.0
+
+
 class LeoFirstBlockCacheController:
     """Track request-local Leo block residuals without registering model state."""
 
@@ -31,13 +38,29 @@ class LeoFirstBlockCacheController:
         if not math.isfinite(threshold) or threshold < 0:
             raise ValueError("First-block cache threshold must be finite and non-negative.")
         self.threshold = float(threshold)
+        self.method = "taylor" if isinstance(config, LeoTaylorCacheConfig) else "first_block"
+        max_extrapolation = getattr(config, "max_extrapolation", 0.0)
+        if not isinstance(max_extrapolation, (int, float)):
+            raise TypeError("Taylor cache config must define a numeric `max_extrapolation`.")
+        if not math.isfinite(max_extrapolation) or max_extrapolation < 0:
+            raise ValueError("Taylor cache max_extrapolation must be finite and non-negative.")
+        self.max_extrapolation = float(max_extrapolation)
         self._context_depth = 0
         self._signature = None
         self._previous_head_residuals: TensorStreams | None = None
+        self._previous_tail_residuals: TensorStreams | None = None
         self._tail_residuals: TensorStreams | None = None
+        self._previous_tail_timestep: float | None = None
+        self._tail_timestep: float | None = None
+        self._pending_timestep: float | None = None
+        self._pending_alpha: float | None = None
         self._cacheable_step = False
         self.full_steps = 0
         self.skipped_steps = 0
+        self.predicted_steps = 0
+        self.prediction_warmup_steps = 0
+        self.alpha_sum = 0.0
+        self.alpha_max = 0.0
 
     @property
     def active(self) -> bool:
@@ -52,6 +75,10 @@ class LeoFirstBlockCacheController:
             self.reset()
             self.full_steps = 0
             self.skipped_steps = 0
+            self.predicted_steps = 0
+            self.prediction_warmup_steps = 0
+            self.alpha_sum = 0.0
+            self.alpha_max = 0.0
         self._context_depth += 1
         try:
             yield
@@ -64,7 +91,12 @@ class LeoFirstBlockCacheController:
         """Drop cached activations while retaining the latest counters."""
         self._signature = None
         self._previous_head_residuals = None
+        self._previous_tail_residuals = None
         self._tail_residuals = None
+        self._previous_tail_timestep = None
+        self._tail_timestep = None
+        self._pending_timestep = None
+        self._pending_alpha = None
         self._cacheable_step = False
 
     @torch.compiler.disable
@@ -73,6 +105,7 @@ class LeoFirstBlockCacheController:
         head_inputs: TensorStreams,
         head_outputs: TensorStreams,
         leader_block: object = None,
+        timestep: torch.Tensor | None = None,
     ) -> bool:
         """Decide whether the cached tail may replace all blocks after block zero."""
         sync_plan = self._synchronization_plan(leader_block)
@@ -81,6 +114,8 @@ class LeoFirstBlockCacheController:
             return False
         sum_groups, max_groups = sync_plan
         decision_groups = [*sum_groups, *max_groups]
+        self._pending_alpha = None
+        self._pending_timestep = None
 
         signature = self._stream_signature(head_inputs)
         current_residuals = self._decision_residuals(head_inputs, head_outputs)
@@ -97,8 +132,31 @@ class LeoFirstBlockCacheController:
         if not bool(valid.item()):
             self._signature = signature
             self._previous_head_residuals = self._detach_streams(current_residuals)
+            self._previous_tail_residuals = None
             self._tail_residuals = None
+            self._previous_tail_timestep = None
+            self._tail_timestep = None
             return False
+
+        if self.method == "taylor":
+            current_timestep = self._uniform_timestep(timestep, decision_groups)
+            predictor_ready = (
+                current_timestep is not None
+                and self._previous_tail_residuals is not None
+                and self._previous_tail_timestep is not None
+                and self._tail_timestep is not None
+                and self._tail_timestep != self._previous_tail_timestep
+            )
+            predictor_valid = torch.tensor(
+                int(predictor_ready), device=current_residuals[0].device, dtype=torch.int32
+            )
+            self._all_reduce(predictor_valid, decision_groups, dist.ReduceOp.MIN)
+            if not bool(predictor_valid.item()):
+                self._previous_head_residuals = self._detach_streams(current_residuals)
+                self._pending_timestep = current_timestep
+                self.prediction_warmup_steps += 1
+                return False
+            self._pending_timestep = current_timestep
 
         score = self._normalized_change(
             current_residuals,
@@ -108,6 +166,17 @@ class LeoFirstBlockCacheController:
         )
         reuse = score <= self.threshold
         if reuse:
+            if self.method == "taylor":
+                alpha = (self._pending_timestep - self._tail_timestep) / (
+                    self._tail_timestep - self._previous_tail_timestep
+                )
+                if not math.isfinite(alpha) or alpha < 0:
+                    self._previous_head_residuals = self._detach_streams(current_residuals)
+                    return False
+                self._pending_alpha = min(alpha, self.max_extrapolation)
+                self.predicted_steps += 1
+                self.alpha_sum += self._pending_alpha
+                self.alpha_max = max(self.alpha_max, self._pending_alpha)
             self.skipped_steps += 1
             return True
         self._previous_head_residuals = self._detach_streams(current_residuals)
@@ -117,30 +186,85 @@ class LeoFirstBlockCacheController:
         """Reconstruct the block-stack output from cached tail residuals."""
         if self._tail_residuals is None:
             raise RuntimeError("Leo first-block cache has no tail residuals to apply.")
-        self._validate_streams(head_outputs, self._tail_residuals, "apply")
+        tail_residuals = self._tail_residuals
+        if self.method == "taylor":
+            if self._previous_tail_residuals is None or self._pending_alpha is None:
+                raise RuntimeError("Leo Taylor cache has no valid residual history to apply.")
+            self._validate_streams(tail_residuals, self._previous_tail_residuals, "predict")
+            tail_residuals = tuple(
+                None if current is None else current + (current - previous) * self._pending_alpha
+                for current, previous in zip(tail_residuals, self._previous_tail_residuals)
+            )
+        self._validate_streams(head_outputs, tail_residuals, "apply")
         return tuple(
             None if output is None else output + residual
-            for output, residual in zip(head_outputs, self._tail_residuals)
+            for output, residual in zip(head_outputs, tail_residuals)
         )
 
-    def update_tail(self, head_outputs: TensorStreams, final_outputs: TensorStreams) -> None:
+    def update_tail(
+        self,
+        head_outputs: TensorStreams,
+        final_outputs: TensorStreams,
+        timestep: torch.Tensor | None = None,
+    ) -> None:
         """Store the residual contributed by all blocks after block zero."""
         self._validate_streams(head_outputs, final_outputs, "update")
         self.full_steps += 1
         if not self._cacheable_step:
             return
-        self._tail_residuals = tuple(
+        next_tail = tuple(
             None if output is None else (final - output).detach()
             for output, final in zip(head_outputs, final_outputs)
         )
+        if self.method == "taylor":
+            current_timestep = self._pending_timestep
+            if current_timestep is None:
+                current_timestep = self._uniform_timestep(timestep, [])
+            if current_timestep is None:
+                self._previous_tail_residuals = None
+                self._tail_residuals = None
+                self._previous_tail_timestep = None
+                self._tail_timestep = None
+                return
+            self._previous_tail_residuals = self._tail_residuals
+            self._previous_tail_timestep = self._tail_timestep
+            self._tail_timestep = current_timestep
+        self._tail_residuals = next_tail
 
-    def stats(self) -> dict[str, int | float]:
+    def stats(self) -> dict[str, object]:
         """Return counters for the most recently entered cache context."""
         return {
+            "method": self.method,
             "threshold": self.threshold,
             "full_steps": self.full_steps,
             "skipped_steps": self.skipped_steps,
+            "predicted_steps": self.predicted_steps,
+            "prediction_warmup_steps": self.prediction_warmup_steps,
+            "taylor_max_extrapolation": self.max_extrapolation,
+            "taylor_alpha_mean": self.alpha_sum / max(self.predicted_steps, 1),
+            "taylor_alpha_max": self.alpha_max,
         }
+
+    @classmethod
+    def _uniform_timestep(
+        cls,
+        timestep: torch.Tensor | None,
+        groups: list[dist.ProcessGroup],
+    ) -> float | None:
+        """Return one globally uniform finite timestep or fail closed."""
+        if not isinstance(timestep, torch.Tensor) or timestep.numel() == 0:
+            return None
+        values = timestep.detach().float()
+        bounds = torch.stack((values.amin(), values.amax()))
+        low = bounds[0].clone()
+        high = bounds[1].clone()
+        cls._all_reduce(low, groups, dist.ReduceOp.MIN)
+        cls._all_reduce(high, groups, dist.ReduceOp.MAX)
+        low_value = float(low.item())
+        high_value = float(high.item())
+        if not math.isfinite(low_value) or not math.isfinite(high_value) or low_value != high_value:
+            return None
+        return low_value
 
     @staticmethod
     def _decision_residuals(head_inputs: TensorStreams, head_outputs: TensorStreams) -> TensorStreams:

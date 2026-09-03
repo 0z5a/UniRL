@@ -269,15 +269,27 @@ def _make_inference_cache_config(config: Leo2PipelineConfig) -> Any | None:
     method = config.inference_cache_method.strip().lower()
     if method == "none":
         return None
-    if method != "first_block":
+    if method not in {"first_block", "taylor"}:
         raise ValueError(
-            f"Leo2 inference_cache_method must be 'none' or 'first_block', got {config.inference_cache_method!r}."
+            "Leo2 inference_cache_method must be 'none', 'first_block', or 'taylor', "
+            f"got {config.inference_cache_method!r}."
         )
     if not isinstance(config.inference_cache_threshold, (int, float)):
         raise TypeError("Leo2 inference_cache_threshold must be numeric.")
     threshold = float(config.inference_cache_threshold)
     if not math.isfinite(threshold) or threshold < 0:
         raise ValueError("Leo2 inference_cache_threshold must be finite and non-negative.")
+
+    if method == "taylor":
+        max_extrapolation = config.inference_cache_taylor_max_extrapolation
+        if not isinstance(max_extrapolation, (int, float)):
+            raise TypeError("Leo2 inference_cache_taylor_max_extrapolation must be numeric.")
+        max_extrapolation = float(max_extrapolation)
+        if not math.isfinite(max_extrapolation) or max_extrapolation < 0:
+            raise ValueError("Leo2 inference_cache_taylor_max_extrapolation must be finite and non-negative.")
+        from hymm.models.diffusion.leo_cache import LeoTaylorCacheConfig
+
+        return LeoTaylorCacheConfig(threshold=threshold, max_extrapolation=max_extrapolation)
 
     from diffusers import FirstBlockCacheConfig
 
@@ -316,8 +328,8 @@ class Leo2Bundle(Bundle):
                 "so skipping the native DCP load would leave uninitialized parameters."
             )
         install_transformers_flash_attention_compat()
-        inference_cache_config = _make_inference_cache_config(config)
         args = _bootstrap_hymm(config)
+        inference_cache_config = _make_inference_cache_config(config)
 
         local_rank = int(os.environ.get("LOCAL_RANK", os.environ.get("RAY_LOCAL_RANK", 0)))
         if torch.cuda.is_available():

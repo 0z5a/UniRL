@@ -1690,7 +1690,7 @@ class LeoModelBase(HunyuanMultimodalState):
         return self._txt_config
 
     def enable_cache(self, config: object = None) -> None:
-        """Enable Leo first-block caching with a Diffusers-compatible config."""
+        """Enable a request-scoped Leo inference cache."""
         if self.is_cache_enabled:
             raise ValueError("Cache is already enabled; call `disable_cache()` before enabling it again.")
         if config is None:
@@ -1722,10 +1722,10 @@ class LeoModelBase(HunyuanMultimodalState):
         if self._leo_cache_controller is not None:
             self._leo_cache_controller.reset()
 
-    def cache_stats(self) -> dict[str, int | float]:
-        """Return first-block cache counters from the latest inference request."""
+    def cache_stats(self) -> dict[str, object]:
+        """Return cache counters from the latest inference request."""
         if self._leo_cache_controller is None:
-            return {"threshold": 0.0, "full_steps": 0, "skipped_steps": 0}
+            return {"method": "none", "threshold": 0.0, "full_steps": 0, "skipped_steps": 0}
         return self._leo_cache_controller.stats()
 
     def get_printable_layers(self):
@@ -2519,7 +2519,12 @@ class LeoModelBase(HunyuanMultimodalState):
                     block_head_outputs = (hidden_states, audio_hidden_states, txt_hidden_states)
                 else:
                     block_head_outputs = (hidden_states, txt_hidden_states)
-                if cache_controller.should_reuse(block_head_inputs, block_head_outputs, leader_block=layer):
+                if cache_controller.should_reuse(
+                    block_head_inputs,
+                    block_head_outputs,
+                    leader_block=layer,
+                    timestep=timesteps,
+                ):
                     cached_outputs = cache_controller.apply_tail(block_head_outputs)
                     if self._audio_config is not None:
                         hidden_states, audio_hidden_states, txt_hidden_states = cached_outputs
@@ -2543,7 +2548,7 @@ class LeoModelBase(HunyuanMultimodalState):
                 block_outputs = (hidden_states, audio_hidden_states, txt_hidden_states)
             else:
                 block_outputs = (hidden_states, txt_hidden_states)
-            cache_controller.update_tail(block_head_outputs, block_outputs)
+            cache_controller.update_tail(block_head_outputs, block_outputs, timestep=timesteps)
 
         if get_parallel_state().cp_size > 1:
             hidden_states = maybe_gather_seq(hidden_states, cp_info=get_cp_info(LEO_MEDIA_CP_INFO))

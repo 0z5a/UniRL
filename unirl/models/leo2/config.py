@@ -87,6 +87,7 @@ class Leo2PipelineConfig:
     # request-scoped diffusion pipeline enters the model cache context.
     inference_cache_method: str = "none"
     inference_cache_threshold: float = 0.05
+    inference_cache_taylor_max_extrapolation: float = 1.0
 
     # --- placement ---
     # Qwen3.5-9B (18 GB bf16) parked on CPU; moved to GPU transiently for the
