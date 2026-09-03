@@ -4,14 +4,15 @@
 # latent) at eta 0.6 on steps [0,2,4,6] -- the candidate fix for the garbage
 # rollouts produced by FlowSDE eta 0.7 on [0,3,6,9]. Dumps frames of both the
 # UniRL rollout and hymm's own pipeline (A/B) to docs/frames_probe_cps.
-H=/apdcephfs_zwfy8/share_305110755/hunyuan/zuhaoding/HYV2.0
-X=$H/experiments/2026-08-27_leo2-unirl-flowgrpo
-export LEO2_DUMP_VIDEOS=$X/docs/frames_probe_cps
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
+RUN_ROOT="${LEO2_RUN_ROOT:-${REPO_ROOT}/outputs/leo2}"
+export LEO2_DUMP_VIDEOS="${RUN_ROOT}/frames_probe_cps"
 # hymm A/B disabled: generate_video's CPU-side allocations OOM'd the host
 # (8 ranks x model staging) and took the whole probe down on the first try.
 unset LEO2_DEBUG_HYMM_SAMPLE
 mkdir -p "$LEO2_DUMP_VIDEOS"
-bash $H/jobs/remote/unirl_smoke.sh \
+bash "${SCRIPT_DIR}/unirl_smoke.sh" \
   num_rollouts=1 \
   pipeline.strategy._target_=unirl.sde.kernels.CPSSDEStrategy \
   sampling.eta=0.6 \
@@ -19,4 +20,3 @@ bash $H/jobs/remote/unirl_smoke.sh \
   logging.report_to_wandb=false \
   "$@"
 ls -la "$LEO2_DUMP_VIDEOS"
-bash $H/jobs/remote/restart_keepalive.sh

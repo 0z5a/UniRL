@@ -996,6 +996,8 @@ def get_stack():
     return s
 
 def is_recomputing():  # Only supports reentrant=False
+    if not torch.is_grad_enabled():
+        return False
     stack = get_stack()
     return 'recompute_fn' in stack and 'unpack_hook' in stack
 
@@ -1107,136 +1109,223 @@ def format_keys(keys, lines=500, prefix=None):
             return ret
     return _format_keys(keys, depth=5, prefix=prefix)
 
-def get_module_dtype(module):
-    """
-    Get dtype information from a module wrapped by fully_shard.
-    
-    Returns:
-        dict: A dictionary with:
-            - 'is_consistent': bool - True if all parameters have consistent 
-              master_dtype and param_dtype across all FSDP modules
-            - 'master_dtype': torch.dtype | None - The original dtype before 
-              fully_shard wrapping (from _orig_dtype)
-            - 'param_dtype': torch.dtype | None - The param_dtype from mp_policy
-    """
+_CHECKPOINT_WRAPPED_PREFIX = "_checkpoint_wrapped_module."
+
+def module_has_fsdp(module):
     from torch.distributed.fsdp._fully_shard._fsdp_state import _get_module_fsdp_state
-    from torch.distributed.fsdp._fully_shard._fully_shard import FSDPModule
-    if not isinstance(module, FSDPModule):
-        try:
-            first_master_dtype = next(module.parameters()).dtype
-        except StopIteration:
-            return {
-                'is_consistent': True,
-                'master_dtype': None,
-                'param_dtype': None,
-                'is_fsdp': False,
-            }
-        for param in module.parameters():
-            if param.dtype != first_master_dtype:
-                return {
-                    'is_consistent': False,
-                    'master_dtype': first_master_dtype,
-                    'param_dtype': param.dtype,
-                    'is_fsdp': False,
-                }
-        return {
-            'is_consistent': True,
-            'master_dtype': first_master_dtype,
-            'param_dtype': first_master_dtype,
-            'is_fsdp': False,
-        }
-    
-    # Track the first encountered dtype values
-    first_master_dtype = None
-    first_param_dtype = None
-    found_any = False
-    
-    def collect_fsdp_dtypes(module):
-        """Recursively collect dtype information from all FSDP modules."""
-        nonlocal first_master_dtype, first_param_dtype, found_any
-        
-        # Check if this module has FSDP state
-        fsdp_state = _get_module_fsdp_state(module)
-        if fsdp_state is not None and fsdp_state._fsdp_param_group is not None:
-            param_group = fsdp_state._fsdp_param_group
-            try:
-                param_group._init_mp_dtypes()
-            except Exception as e:
-                raise ValueError(f'Error initializing mp_dtypes for {module.__class__.__name__}: {e}')
-            master_dtype = param_group._orig_dtype
-            if master_dtype is None: # no trainable params
-                return None
-            # Get param_dtype from mp_policy
-            param_dtype = param_group.mp_policy.param_dtype
-            
-            if not found_any:
-                # First FSDP module encountered
-                first_master_dtype = master_dtype
-                first_param_dtype = param_dtype
-                found_any = True
-            else:
-                # Check consistency with previous modules
-                if master_dtype != first_master_dtype or param_dtype != first_param_dtype:
-                    # Found inconsistency, return immediately
-                    return {
-                        'is_consistent': False,
-                        'master_dtype': first_master_dtype,
-                        'param_dtype': first_param_dtype,
-                        'is_fsdp': True,
-                    }
-                # Also check that master_dtype matches param_dtype
-                if first_master_dtype != first_param_dtype:
-                    return {
-                        'is_consistent': False,
-                        'master_dtype': first_master_dtype,
-                        'param_dtype': first_param_dtype,
-                        'is_fsdp': True,
-                    }
-        
-        # Recursively check submodules
-        for submodule in module.modules():
-            if submodule is not module:  # Avoid double-checking the current module
-                result = collect_fsdp_dtypes(submodule)
-                if result is not None:  # Early stop signal
-                    return result
-        
-        return None  # Continue traversal
-    
-    # Start traversal
-    early_stop_result = collect_fsdp_dtypes(module)
-    if early_stop_result is not None:
-        return early_stop_result
-    
-    # All modules checked and consistent (or no FSDP modules found)
-    if not found_any:
-        return {
-            'is_consistent': False,
-            'master_dtype': None,
-            'param_dtype': None,
-            'is_fsdp': False,
-        }
-    
-    # All consistent
+    state = _get_module_fsdp_state(module)
+    return state is not None and state._fsdp_param_group is not None
+
+def describe_fsdp_module(module, param_group):
+    module_fqn = param_group._module_fqn
+    if module_fqn is not None:
+        return f"module_fqn={module_fqn!r}"
+    cls = module.__class__
+    mro = cls.__mro__
+    if len(mro) > 2 and mro[1].__name__ == "FSDPModule":
+        inner_name = mro[2].__name__
+        wrapped = getattr(module, "_checkpoint_wrapped_module", None)
+        if wrapped is not None:
+            return f"{inner_name} -> {wrapped.__class__.__name__}"
+        return inner_name
+    return cls.__name__
+
+def describe_fsdp_param(fsdp_param, root_module):
+    if fsdp_param._param_fqn is not None:
+        return fsdp_param._param_fqn
+    target_module = fsdp_param._module_info.module
+    param_name = fsdp_param._module_info.param_name
+    for mod_path, mod in root_module.named_modules():
+        if mod is target_module:
+            path = mod_path
+            if path.startswith(_CHECKPOINT_WRAPPED_PREFIX):
+                path = path[len(_CHECKPOINT_WRAPPED_PREFIX):]
+            if path:
+                return f"{path}.{param_name}"
+            return f"{target_module.__class__.__name__}.{param_name}"
+    return f"{target_module.__class__.__name__}.{param_name}"
+
+def init_fsdp_param_group_dtypes(module, param_group):
+    try:
+        param_group._init_mp_dtypes()
+    except AssertionError as e:
+        if "dtype" not in str(e):
+            raise
+        module_desc = describe_fsdp_module(module, param_group)
+        root_module = param_group.modules[0]
+        orig_by_dtype = {}
+        reduce_by_dtype = {}
+        for fsdp_param in param_group.fsdp_params:
+            name = describe_fsdp_param(fsdp_param, root_module)
+            orig_by_dtype.setdefault(fsdp_param.orig_dtype, []).append(name)
+            reduce_by_dtype.setdefault(fsdp_param.reduce_dtype, []).append(name)
+        details = []
+        if len(orig_by_dtype) != 1:
+            details.append(
+                "orig_dtype: "
+                + ", ".join(f"{dtype}={names}" for dtype, names in orig_by_dtype.items())
+            )
+        if len(reduce_by_dtype) != 1:
+            details.append(
+                "reduce_dtype: "
+                + ", ".join(f"{dtype}={names}" for dtype, names in reduce_by_dtype.items())
+            )
+        raise AssertionError(
+            f"{e} at FSDP ({module_desc}). Per-parameter dtypes: {'; '.join(details)}"
+        ) from e
+
+def fsdp_unit_fqn(module, fqn, param_group):
+    module_fqn = param_group._module_fqn
+    if module_fqn is not None:
+        if module_fqn.startswith("root"):
+            return module_fqn
+        return f"root.{module_fqn}" if module_fqn else fqn
+    return fqn
+
+def get_fsdp_group_param_ids(param_group):
+    return {id(fsdp_param.sharded_param) for fsdp_param in param_group.fsdp_params}
+
+def is_managed_by_fsdp_group(module, model):
+    if module_has_fsdp(module):
+        return False
+    module_param_ids = {id(p) for p in module.parameters()}
+    if not module_param_ids:
+        return False
+    from torch.distributed.fsdp._fully_shard._fsdp_state import _get_module_fsdp_state
+    for _, mod in model.named_modules():
+        state = _get_module_fsdp_state(mod)
+        if state is None or state._fsdp_param_group is None:
+            continue
+        if module_param_ids.issubset(get_fsdp_group_param_ids(state._fsdp_param_group)):
+            return True
+    return False
+
+def collect_fsdp_units(model, master_dtype_map, param_dtype_map):
+    from torch.distributed.fsdp._fully_shard._fsdp_state import _get_module_fsdp_state
+    seen_param_groups = set()
+    for name, mod in model.named_modules():
+        fqn = "root" + ("." + name if name else "")
+        state = _get_module_fsdp_state(mod)
+        if state is None or state._fsdp_param_group is None:
+            continue
+        param_group = state._fsdp_param_group
+        if id(param_group) in seen_param_groups:
+            continue
+        seen_param_groups.add(id(param_group))
+        init_fsdp_param_group_dtypes(mod, param_group)
+        if param_group._orig_dtype is None:
+            continue
+        display_fqn = fsdp_unit_fqn(mod, fqn, param_group)
+        master_dtype_map[param_group._orig_dtype].append(display_fqn)
+        param_dtype_map[param_group.mp_policy.param_dtype].append(display_fqn)
+
+def collect_non_fsdp_master_dtypes(module, fqn, model, master_dtype_map):
+    if module_has_fsdp(module):
+        return
+    # if is_managed_by_fsdp_group(module, model):
+    #     return
+
+    children = list(module.named_children())
+    if not children:
+        dtypes = {p.dtype for p in module.parameters()}
+        if len(dtypes) == 1:
+            master_dtype_map[next(iter(dtypes))].append(fqn)
+        return
+
+    for child_name, child in children:
+        collect_non_fsdp_master_dtypes(
+            child, f"{fqn}.{child_name}", model, master_dtype_map
+        )
+
+def build_module_fqn_map(model):
     return {
-        'is_consistent': True,
-        'master_dtype': first_master_dtype,
-        'param_dtype': first_param_dtype,
-        'is_fsdp': True,
+        "root" + ("." + name if name else ""): mod
+        for name, mod in model.named_modules()
     }
 
+def module_has_reportable_content(module):
+    if module_has_fsdp(module):
+        return True
+    return any(True for _ in module.parameters())
+
+def is_covered_by_ancestor_fqn(fqn, ancestor_fqn):
+    return fqn == ancestor_fqn or fqn.startswith(ancestor_fqn + ".")
+
+def child_is_represented(child_fqn, fqns):
+    return any(
+        is_covered_by_ancestor_fqn(fqn, child_fqn) for fqn in fqns
+    )
+
+def collect_minimal_covering_fqns(fqns):
+    unique_fqns = list(dict.fromkeys(fqns))
+    unique_fqns.sort(key=lambda fqn: fqn.count("."))
+    minimal_fqns = []
+    for fqn in unique_fqns:
+        if any(is_covered_by_ancestor_fqn(fqn, kept) for kept in minimal_fqns):
+            continue
+        minimal_fqns.append(fqn)
+    return minimal_fqns
+
+def can_merge_to_parent(parent_fqn, fqns, module_by_fqn):
+    if parent_fqn not in module_by_fqn:
+        return False
+    parent_mod = module_by_fqn[parent_fqn]
+    if module_has_fsdp(parent_mod):
+        return False
+    children = list(module_by_fqn[parent_fqn].named_children())
+    if not children:
+        return False
+
+    has_represented_child = False
+    for child_name, child_mod in children:
+        child_fqn = f"{parent_fqn}.{child_name}"
+        if child_is_represented(child_fqn, fqns):
+            has_represented_child = True
+        elif module_has_reportable_content(child_mod):
+            return False
+    return has_represented_child
+
+def merge_fqns_to_parent(parent_fqn, fqns):
+    merged_fqns = [
+        fqn for fqn in fqns if not is_covered_by_ancestor_fqn(fqn, parent_fqn)
+    ]
+    if parent_fqn not in merged_fqns:
+        merged_fqns.append(parent_fqn)
+    return merged_fqns
+
+def consolidate_to_maximal_roots(model, dtype_map):
+    module_by_fqn = build_module_fqn_map(model)
+    for dtype, fqns in dtype_map.items():
+        minimal_fqns = collect_minimal_covering_fqns(fqns)
+        changed = True
+        while changed:
+            changed = False
+            parent_fqns = set()
+            for fqn in minimal_fqns:
+                parts = fqn.split(".")
+                for i in range(len(parts) - 1, 0, -1):
+                    parent_fqns.add(".".join(parts[:i]))
+            for parent_fqn in sorted(parent_fqns, key=lambda fqn: fqn.count(".")):
+                if can_merge_to_parent(parent_fqn, minimal_fqns, module_by_fqn):
+                    merged_fqns = merge_fqns_to_parent(parent_fqn, minimal_fqns)
+                    if merged_fqns != minimal_fqns:
+                        minimal_fqns = merged_fqns
+                        changed = True
+        dtype_map[dtype] = sorted(minimal_fqns, key=lambda fqn: (fqn.count("."), fqn))
+
+def dedupe_dtype_map(dtype_map):
+    for dtype, fqns in dtype_map.items():
+        dtype_map[dtype] = list(dict.fromkeys(fqns))
+
 def collect_model_dtype(model, master_dtype_map, param_dtype_map, fqn='root'):
-    res = get_module_dtype(model)
-    if res['is_consistent']:
-        master_dtype_map[res['master_dtype']].append(fqn)
-        if res['is_fsdp']:
-            param_dtype_map[res['param_dtype']].append(fqn)
-        return
-    else:
-        # master_dtype_map[res['master_dtype']].append(fqn)
-        if res['is_fsdp']:
-            param_dtype_map[res['param_dtype']].append(fqn)
-        for name, child in model.named_children():
-            collect_model_dtype(child, master_dtype_map, param_dtype_map, fqn=fqn + '.' + name)
+    del fqn  # always collect from model root; keep arg for call-site compatibility
+    collect_fsdp_units(model, master_dtype_map, param_dtype_map)
+    collect_non_fsdp_master_dtypes(model, "root", model, master_dtype_map)
+    consolidate_to_maximal_roots(model, master_dtype_map)
+    # FSDP units are already leaves; merging would incorrectly hoist child
+    # units (e.g. fp32 router) to the parent layer FSDP unit.
+    dedupe_dtype_map(master_dtype_map)
+    dedupe_dtype_map(param_dtype_map)
 
 
 def _format_param_count(numel):
@@ -1293,13 +1382,14 @@ def print_model_info(model, tag=""):
                 dtype_info_str += f"Param dtype: {dtype} is used in {fqns} \n"
     except Exception as e:
         dtype_info_str = f'Error collecting model dtype: {e}\n'
+        raise
 
 
     model_info_str = (
         f"\n============================={tag}========================================="[:-len(tag)] + "\n"
-        f"Total number of parameters: {_format_param_count(total_numel)} (Incorrect if using old MOE implementation with EP enabled) \n"
-        f"Dense number of parameters: {_format_param_count(dense_numel)} \n"
-        f"MoE number of parameters: {_format_param_count(moe_numel)} (counted by 'expert' in param_name)\n"
+        f"Total number of parameters (global): {_format_param_count(total_numel)} (Incorrect if using old MOE implementation with EP enabled) \n"
+        f"Dense number of parameters (global): {_format_param_count(dense_numel)} \n"
+        f"MoE number of parameters (local if old EP): {_format_param_count(moe_numel)} (counted by 'expert' in param_name)\n"
         f"Buffer numel: {_format_param_count(buffer_numel)}\n"
         f"Trainable number of parameters: {_format_param_count(trainable_numel)} \n"
         f"-------------------------------------------------------------------\n"
@@ -1317,6 +1407,16 @@ def print_model_info(model, tag=""):
     )
 
 def early_binding_closure(closure, locals, late_binding_keys=None, on_snapshot=None, on_restore=None, return_infos=False):
+    """
+    原本for 循环内创建 closure，最后执行时，里面记录的变量是最后一个循环的
+    使用这个函数，可以把这个 closure 绑定创建时的变量
+
+    on_snapshot 和 on_restore 可以用来处理 offload
+
+    另外，一个小工具(获取 closure 依赖哪些外部变量）：
+        >>> non_locals = {k:type(v) for k, v in closure_vars.nonlocals.items()}
+        >>> loguru.logger.debug(f"closure_vars.nonlocals: {non_locals}")
+    """
     if closure.__closure__ is None: # may only use global vars
         raise ValueError("Only supports closure input.")
     import inspect
@@ -1440,6 +1540,22 @@ def replace_module(model, is_target_module:Callable, get_alternative:Callable):
                 setattr(model, name, new_module)
             __replace_module(child, full_name + '.' + name)
     __replace_module(model, '')
+
+def iter_dataloader(dataloader, enumerate=False):
+    it = iter(dataloader)
+    i = 0
+    while True:
+        try:
+            from hy_parallelism.tools.profiling import profile_range
+            with profile_range("iter_dataloader"):
+                batch = next(it)
+            if enumerate:
+                yield i, batch
+            else:
+                yield batch
+            i += 1
+        except StopIteration:
+            break
 
 class GeneralObject(int):
     def __init__(self):

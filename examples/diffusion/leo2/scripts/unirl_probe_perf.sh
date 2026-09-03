@@ -4,11 +4,12 @@
 #   * old_logp_source=rollout  (skip the no_grad replay: 5 x 8 forwards/rank)
 #   * text encoder resident on GPU (no CPU<->GPU shuttle per rollout)
 # Compare lifecycle rollout.generate / train_track against v3's log.
-H=/apdcephfs_zwfy8/share_305110755/hunyuan/zuhaoding/HYV2.0
-X=$H/experiments/2026-08-27_leo2-unirl-flowgrpo
-export LEO2_DUMP_VIDEOS=$X/docs/frames_probe_perf
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
+RUN_ROOT="${LEO2_RUN_ROOT:-${REPO_ROOT}/outputs/leo2}"
+export LEO2_DUMP_VIDEOS="${RUN_ROOT}/frames_probe_perf"
 mkdir -p "$LEO2_DUMP_VIDEOS"
-bash $H/jobs/remote/unirl_smoke.sh \
+bash "${SCRIPT_DIR}/unirl_smoke.sh" \
   num_rollouts=2 \
   sampling.num_inference_steps=30 \
   sampling.eta=0.5 \
@@ -24,4 +25,3 @@ bash $H/jobs/remote/unirl_smoke.sh \
   bundle.config.text_encoder_gpu_transient=false \
   logging.report_to_wandb=false \
   "$@"
-bash $H/jobs/remote/restart_keepalive.sh

@@ -2,6 +2,7 @@ import loguru
 import torch
 import torch.distributed as dist
 from hy_parallelism.parallel_states import get_parallel_state
+from hy_parallelism.tools.profiling import profile_range_func_wrapper
 
 def gather_obj(obj, group=None):
     if group is None:
@@ -55,6 +56,7 @@ def tree_map(fn, obj, _visited=None):
     return obj
 
 
+@profile_range_func_wrapper(msg='sync_object_for_parallel_training')
 def sync_object_for_parallel_training(object, inplace=False, force_object=False, debug_with_check=False, skip_nonbasic_types=False, trace='arg0', parallel_dims=None):
     """
     这个和 auto_broadcast 类似，但区别在于：

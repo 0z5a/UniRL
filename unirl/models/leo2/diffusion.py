@@ -1,13 +1,4 @@
-"""Leo2 diffusion stage -- t2v only, unpacked latents, single-branch (cfg=1).
-
-The per-step forward mirrors ``pipeline_leo.__call__``'s loop body
-(lines ~824-860) verbatim: optional zero channel-cond concat, sigma*1000
-timesteps, ``prepare_inputs_for_generation`` + model call, fp32 cast of the
-velocity. Sign convention: Leo2's FlowMatchDiscreteScheduler Euler step is
-``x_next = x + v * (sigma_next - sigma)`` which is exactly FlowSDEStrategy's
-eta=0 mean -- the prediction feeds ``strategy.denoise`` UN-negated (do NOT
-copy H3's minus sign).
-"""
+"""Run the unpacked, single-branch Leo2 T2V diffusion stage."""
 
 from __future__ import annotations
 
@@ -26,8 +17,8 @@ from unirl.types.sampling import DiffusionSamplingParams, compute_trajectory_pos
 from unirl.types.segments.latent import LatentSegment, make_video_segment
 from unirl.utils.dtypes import parse_torch_dtype
 
-from .config import LEO2_TIMESTEP_SCALE
 from .conditions import Leo2Conditions
+from .config import LEO2_TIMESTEP_SCALE
 
 
 class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
@@ -60,11 +51,7 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
 
     # ------------------------------------------------------------------ step
     def _prep_channel_cond(self, blob, latents: torch.Tensor):
-        """Zero cond latents + mask once per trajectory (t2v: no cond image).
-
-        Mirrors pipeline_leo: with ``extend_latent_channels`` the patch_embed
-        consumes 48+48+1 channels even for plain t2v, the extra ones all-zero.
-        """
+        """Build zero conditioning latents and mask once per T2V trajectory."""
         pipeline = self.bundle.model.diffusion_pipeline
         args = self.bundle.hymm_args
         if not getattr(args, "extend_latent_channels", False):
@@ -84,8 +71,9 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
         from .bundle import ensure_hy_parallel_state
 
         # Cheap dict check after the first call; see ensure_hy_parallel_state.
-        require(ensure_hy_parallel_state(),
-                "Leo2DiffusionStage: torch.distributed not initialised before the first forward")
+        require(
+            ensure_hy_parallel_state(), "Leo2DiffusionStage: torch.distributed not initialised before the first forward"
+        )
         model = self.bundle.model
         # LeoModel.forward is a predictor only when `not self.training`; in train
         # mode it runs the SFT loss path (`diffusion_loss_fn(...)` -> None) and
@@ -101,8 +89,7 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
         if blob.get("_device") != str(device):
             blob["input_ids"] = blob["input_ids"].to(device)
             blob["model_kwargs"] = {
-                k: (v.to(device) if isinstance(v, torch.Tensor) else v)
-                for k, v in blob["model_kwargs"].items()
+                k: (v.to(device) if isinstance(v, torch.Tensor) else v) for k, v in blob["model_kwargs"].items()
             }
             blob["_device"] = str(device)
         cond_latents, cond_mask = channel_cond
@@ -134,11 +121,14 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
         model_output = model(**model_inputs)
         if _prof:
             torch.cuda.synchronize()
-            print(f"[leo2 perf] fwd#{_dbg} grad={torch.is_grad_enabled()} tokens={blob['input_ids'].shape[-1]} "
-                  f"dt={time.perf_counter() - _t0:.2f}s before={_before:.1f}GB "
-                  f"after={torch.cuda.memory_allocated()/2**30:.1f}GB "
-                  f"peak={torch.cuda.max_memory_allocated()/2**30:.1f}GB "
-                  f"gap_peak={_gap_peak:.1f}GB", flush=True)
+            print(
+                f"[leo2 perf] fwd#{_dbg} grad={torch.is_grad_enabled()} tokens={blob['input_ids'].shape[-1]} "
+                f"dt={time.perf_counter() - _t0:.2f}s before={_before:.1f}GB "
+                f"after={torch.cuda.memory_allocated() / 2**30:.1f}GB "
+                f"peak={torch.cuda.max_memory_allocated() / 2**30:.1f}GB "
+                f"gap_peak={_gap_peak:.1f}GB",
+                flush=True,
+            )
         pred = model_output.get("diffusion_prediction", None)
         require(pred is not None, "Leo2DiffusionStage: model returned no diffusion_prediction")
         pred = pred.to(dtype=torch.float32)
@@ -177,12 +167,14 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
             self._mem_reported = True
             m = self.bundle.model
             from torch.distributed.tensor import DTensor
+
             n_dt = sum(p.numel() for p in m.parameters() if isinstance(p, DTensor))
             n_plain_gpu = sum(p.numel() for p in m.parameters() if not isinstance(p, DTensor) and p.is_cuda)
             n_plain_cpu = sum(p.numel() for p in m.parameters() if not isinstance(p, DTensor) and not p.is_cuda)
             local_bytes = sum(
                 (p.to_local().numel() if isinstance(p, DTensor) else p.numel()) * p.element_size()
-                for p in m.parameters() if isinstance(p, DTensor) or p.is_cuda
+                for p in m.parameters()
+                if isinstance(p, DTensor) or p.is_cuda
             )
             for key in ("text_encoder", "vae"):
                 aux = m.model_dict.get(key) if hasattr(m, "model_dict") else None
@@ -192,10 +184,12 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
                     devs = sorted({str(q.device) for q in ps})[:3]
                     dts = sorted({str(q.dtype) for q in ps})
                     print(f"[leo2 mem] aux {key}: devices={devs} dtypes={dts} gpu_bytes={gb:.1f}GB", flush=True)
-            print(f"[leo2 mem] pre-rollout alloc={torch.cuda.memory_allocated()/2**30:.1f}GB "
-                  f"reserved={torch.cuda.memory_reserved()/2**30:.1f}GB | params: dtensor={n_dt/1e9:.2f}B "
-                  f"plain_gpu={n_plain_gpu/1e9:.2f}B plain_cpu={n_plain_cpu/1e9:.2f}B | local GPU param bytes={local_bytes/2**30:.1f}GB",
-                  flush=True)
+            print(
+                f"[leo2 mem] pre-rollout alloc={torch.cuda.memory_allocated() / 2**30:.1f}GB "
+                f"reserved={torch.cuda.memory_reserved() / 2**30:.1f}GB | params: dtensor={n_dt / 1e9:.2f}B "
+                f"plain_gpu={n_plain_gpu / 1e9:.2f}B plain_cpu={n_plain_cpu / 1e9:.2f}B | local GPU param bytes={local_bytes / 2**30:.1f}GB",
+                flush=True,
+            )
         x = initial_latents.to(device=device, dtype=self.trajectory_dtype)
         channel_cond = self._prep_channel_cond(blob, x)
 

@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any, Tuple
+
+import torch
 
 from unirl.config.require import require
 from unirl.models.types.pipeline import Pipeline
 from unirl.sde.kernels import StepStrategy
 from unirl.sde.runtime import FlowMatchSchedulePolicy
 from unirl.types.noise_recipe import NoiseRecipe
-import os
-
-import torch
-
 from unirl.types.primitives import Texts
 from unirl.types.sample import Sample
 
@@ -23,7 +22,6 @@ from .config import (
     LEO2_VAE_TEMPORAL,
     Leo2PipelineConfig,
 )
-from .conditions import Leo2Conditions
 from .diffusion import Leo2DiffusionStage
 from .text_embed import Leo2CondStage
 from .vae import Leo2VideoDecodeStage
@@ -90,11 +88,7 @@ class Leo2Pipeline(Pipeline):
         )
 
     def _debug_hymm_sample(self, prompt: str, params, seed: int) -> None:
-        """A/B aid (``LEO2_DEBUG_HYMM_SAMPLE=1``): sample the same prompt through
-        hymm's OWN pipeline -- same FSDP-wrapped weights, same VAE decode -- and
-        dump its frames next to the UniRL rollout's (``LEO2_DUMP_VIDEOS``). If
-        this one is clean and the rollout is not, the bug is in the UniRL
-        stepping/conditioning path; if both are bad, in weights/wrapping."""
+        """Dump a native hymm sample when ``LEO2_DEBUG_HYMM_SAMPLE=1``."""
         from .vae import _maybe_dump_frames
 
         model = self.bundle.model
@@ -117,8 +111,10 @@ class Leo2Pipeline(Pipeline):
             if isinstance(latents, (list, tuple)):
                 latents = latents[0]
             require(isinstance(latents, torch.Tensor), f"hymm A/B: unexpected output type {type(latents)}")
-            print(f"[leo2 hymm-ab] latents {tuple(latents.shape)} dtype={latents.dtype} "
-                  f"std={latents.float().std():.3f}", flush=True)
+            print(
+                f"[leo2 hymm-ab] latents {tuple(latents.shape)} dtype={latents.dtype} std={latents.float().std():.3f}",
+                flush=True,
+            )
             visuals = self.video_decode.decode_to_tensor(latents)
             _maybe_dump_frames(visuals, tag="hymm")
         except Exception as exc:

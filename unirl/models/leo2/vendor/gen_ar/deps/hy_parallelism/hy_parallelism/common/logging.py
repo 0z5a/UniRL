@@ -505,13 +505,13 @@ def get_logger(
                         if _PARALLEL_STATE_KEY != _DEFAULT_PARALLEL_STATE_KEY:
                             extra_ranks += f"-tag:{_PARALLEL_STATE_KEY}"
                     
-                    rank_str = f"[R{record['extra']['global_rank']}[{record['extra']['world_size']}]-n{record['extra']['node_id']}-l{record['extra']['local_rank']}{extra_ranks}]"
+                    rank_str = f"[R{record['extra']['global_rank']}[{record['extra']['world_size']}]-n{record['extra']['node_id']}g{record['extra']['local_rank']}{extra_ranks}]"
                 level_str = f"[{record['level'].name:.5s}]"
                 message_str = record['message']
                 
                 # Build left part (timestamp + rank + level + message)
                 left_part = f"{time_str} {rank_str}{level_str} {message_str}"
-                left_part_format = f"<green>{time_str}</green> <level>{rank_str}{level_str} <bold>{{message}}</bold></level>"
+                left_part_format = f"<green>{time_str}</green> {rank_str}{level_str} <level><bold>{{message}}</bold></level>"
                 
                 # Build right part (file:line info)
                 # right_part = f"({record['name']}:<cyan>{record['file']}:{record['line']}</cyan>)"
@@ -626,6 +626,27 @@ def debug_log(msg):
 def rank0_log(msg, level='INFO', *args, **kwargs):
     if get_global_rank() == 0:
         loguru_logger.opt(depth=1).log(level, msg, *args, **kwargs)
+
+
+_trace_log_path: str | None = None
+
+
+def set_trace_log_path(path: str | None) -> None:
+    global _trace_log_path
+    _trace_log_path = path
+
+
+def trace_log(msg: str) -> None:
+    if _trace_log_path is None:
+        loguru_logger.info(msg)
+        return
+    try:
+        from pathlib import Path
+        Path(_trace_log_path).parent.mkdir(parents=True, exist_ok=True)
+        with open(_trace_log_path, "a", encoding="utf-8") as f:
+            f.write(f"{datetime.datetime.now().isoformat()} {msg}\n")
+    except Exception:
+        pass
 
 
 if os.environ.get('ENABLE_HY_PARALLELISM_LOGGING', '0') == '1':

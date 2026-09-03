@@ -152,15 +152,93 @@ def patch_dcp_error_pickle_code_object_for_python313():
         def _wrap_exception_py313(
             exc: BaseException
         ) -> tuple[BaseException, traceback.StackSummary]:
-            
+
             frames = traceback.extract_tb(exc.__traceback__)
             safe_summary = traceback.StackSummary.from_list([
                 (f.filename, f.lineno, f.name, f.line or '') for f in frames  # type: ignore
             ])
-            
+
             return (exc.with_traceback(None), safe_summary)
 
         dcp_utils._wrap_exception = _wrap_exception_py313  # type: ignore
+
+
+def patch_dcp_dist_wrapper():
+    """
+    網卡容納嘅 RDMA 連接數系有限嘅，需要避免大規模 P2P 連接。
+
+    Upstream ``reduce_scatter`` is implemented as ``gather_object`` + ``scatter_object``
+    (P2P). At large scale the coordinator must open connections to every rank, which
+    can trigger NCCL errors or OOM.
+
+    NCCL_PXN_DISABLE=0
+    NCCL_IB_QPS_PER_CONNECTION=1
+
+    !532 !1104
+    """
+    import os
+    from typing import Callable, Optional, TypeVar, Union, cast
+
+    if os.environ.get("HY_PARALLELISM_NO_PATCH_DCP_DIST_WRAPPER", "0") == "1":
+        return
+
+    import torch.distributed.checkpoint.utils as dcp_utils
+    from torch.distributed.checkpoint.api import CheckpointException, WRAPPED_EXCEPTION
+
+    _DistWrapper = dcp_utils._DistWrapper
+    _get_failure_dict = dcp_utils._get_failure_dict
+    T = TypeVar("T")
+    R = TypeVar("R")
+
+    def reduce_scatter(
+        self,
+        step: str,
+        map_fun: Callable[[], T],
+        reduce_fun: Callable[[list[T]], list[R]],
+    ) -> R:
+        # Look up at call time so patch_dcp_error_pickle_code_object_for_python313
+        # (and any later wrap patches) remain effective.
+        wrap_exception = dcp_utils._wrap_exception
+
+        local_data: Union[WRAPPED_EXCEPTION, T]
+        try:
+            local_data = map_fun()
+        except BaseException as e:  # noqa: B036
+            local_data = wrap_exception(e)
+
+        all_data = self.all_gather_object(local_data)
+
+        all_results: Optional[list[Union[R, CheckpointException]]] = None
+        if self.is_coordinator:
+            node_failures = _get_failure_dict(all_data)
+
+            if len(node_failures) == 0:
+                try:
+                    all_results = cast(
+                        list[Union[R, CheckpointException]],
+                        reduce_fun(cast(list[T], all_data)),
+                    )
+                except BaseException as e:  # noqa: B036
+                    node_failures[self.rank] = wrap_exception(e)
+
+            if len(node_failures) > 0:
+                all_results = [CheckpointException(step, node_failures)] * self.get_world_size()
+
+        broadcast_results = self.broadcast_object(all_results)
+        assert broadcast_results is not None
+        result = broadcast_results[self.rank]
+
+        if isinstance(result, CheckpointException):
+            raise result
+        return result
+
+    def gather_object(self, object):
+        # Avoid P2P gather used by all_reduce / older reduce_scatter paths.
+        return self.all_gather_object(object)
+
+    _DistWrapper.reduce_scatter = reduce_scatter  # type: ignore[method-assign]
+    _DistWrapper.gather_object = gather_object  # type: ignore[method-assign]
+
 
 def patch_checkpoint_wrapper():
     """ 让推理时 不要执行任何 checkpointing 相关的操作 """
@@ -170,9 +248,33 @@ def patch_checkpoint_wrapper():
 
     class CheckpointWrapper(checkpoint_wrapper.CheckpointWrapper):
         def forward(self, *args, **kwargs):
-            if not self.training:
+            # is_grad_enabled = False
+            # if not torch.is_grad_enabled():
+            #     is_grad_enabled = False
+            # else:
+            #     if self.training:
+            #         is_grad_enabled = True
+            #     else:
+            #         is_grad_enabled = next(self.parameters()).requires_grad
+
+            #     # FIXME: 目前先只检查一层，handle不了把tensor藏得很深传入forward的场景
+            #     if not is_grad_enabled:
+            #         try:
+            #             for k in args:
+            #                 if isinstance(k, torch.Tensor) and k.requires_grad:
+            #                     is_grad_enabled = True
+            #                     break
+            #             for k, v in kwargs.items():
+            #                 if isinstance(v, torch.Tensor) and v.requires_grad:
+            #                     is_grad_enabled = True
+            #                     break
+            #         except:
+            #             pass
+
+            import os
+            if os.getenv('SKIP_CHECKPOINTING', '0') == '1' or not torch.is_grad_enabled():
                 return self._checkpoint_wrapped_module(*args, **kwargs)
             else:
                 return super().forward(*args, **kwargs)
-    
+
     checkpoint_wrapper.CheckpointWrapper = CheckpointWrapper

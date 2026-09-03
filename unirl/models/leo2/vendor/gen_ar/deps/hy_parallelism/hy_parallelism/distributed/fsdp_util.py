@@ -3,17 +3,21 @@
 # Email: kevinkhwu@tencent.com
 # ================================================
 
+import os
 from functools import partial
 from collections import defaultdict
+from ntpath import realpath
 from typing import Callable
 from packaging import version
 
 import torch
 import torch.nn as nn
 import torch.distributed as dist
+from torch.distributed.tensor import Shard
 
 import loguru
 
+from torch.distributed.fsdp._fully_shard._fully_shard import FSDPModule
 from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
     checkpoint_wrapper,
     CheckpointImpl,
@@ -42,11 +46,11 @@ from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import Checkpoi
 
 def get_default_op_sac_context_fn(op_sac_save_list=None):
     """Get default context function for operator selective activation checkpointing.
-    
+
     Args:
         op_sac_save_list (set[torch._ops.OpOverload], optional): The list of ops to save instead
             of recomputing. If None, uses default list.
-    
+
     Returns:
         callable: A context function that creates selective checkpoint contexts with metadata tracking.
     """
@@ -75,10 +79,10 @@ def get_default_op_sac_context_fn(op_sac_save_list=None):
 
     def _get_custom_policy(meta):
         """Create a custom policy function with metadata tracking.
-        
+
         Args:
             meta (defaultdict): Dictionary to track metadata across forward/recompute passes.
-        
+
         Returns:
             callable: Policy function that receives (ctx, func, *args, **kwargs).
         """
@@ -97,11 +101,11 @@ def get_default_op_sac_context_fn(op_sac_save_list=None):
             # Track mm operations separately for forward vs recompute passes
             mode = "recompute" if ctx.is_recompute else "forward"
             mm_count_key = f"{mode}_mm_count"
-            
+
             # Track mm count for alternating pattern
             if func == torch.ops.aten.mm.default:
                 meta[mm_count_key] += 1
-            
+
             # Saves output of all compute ops, except every second mm
             # This balances memory savings with recomputation overhead
             to_save = func in op_sac_save_list and not (
@@ -117,7 +121,7 @@ def get_default_op_sac_context_fn(op_sac_save_list=None):
 
     def selective_checkpointing_context_fn():
         """Create selective checkpointing contexts with fresh metadata for each checkpoint region.
-        
+
         Returns:
             Context manager: Selective checkpointing contexts.
         """
@@ -126,9 +130,47 @@ def get_default_op_sac_context_fn(op_sac_save_list=None):
 
     return selective_checkpointing_context_fn
 
+def get_sub_fsdp_modules(block):
+    ret = []
+    for name, module in block.named_modules():
+        if isinstance(module, FSDPModule) and module is not block:
+            ret.append(module)
+    return ret
+
+
+def set_forward_prefetch(
+    model,
+    blocks,
+    prefetch_factor=1,
+    should_forward_prefetch: Callable[[str, nn.Module], bool] | None = None,
+):
+    if should_forward_prefetch is None:
+        should_forward_prefetch = lambda fqn, module: True
+
+    module_to_fqn = {module: fqn for fqn, module in model.named_modules()}
+    transformer_blocks = list(blocks)
+
+    for idx, block in enumerate(transformer_blocks):
+        if block is None:
+            continue
+
+        real_prefetch_blocks = []
+        for module in get_sub_fsdp_modules(block):
+            if should_forward_prefetch(module_to_fqn[module], module):
+                real_prefetch_blocks.append(module)
+
+        for b in transformer_blocks[idx + 1 : idx + prefetch_factor + 1]:
+            if b is None:
+                continue
+            if should_forward_prefetch(module_to_fqn[b], b):
+                real_prefetch_blocks.append(b)
+
+        block.set_modules_to_forward_prefetch(real_prefetch_blocks)
+
 def apply_fsdp_checkpointing(
-    model, no_split_modules, p=1, use_reentrant=False, enable_op_sac=False, op_sac_policy_fn=None, 
-    activation_offloading=False, activation_offload_list=None, activation_offload_pin_memory=False,
+    model, no_split_modules, p=1, use_reentrant=False, enable_op_sac=False, op_sac_policy_fn=None,
+    activation_offloading=False, activation_offload_list=None, activation_offload_pin_memory=True,
+    defer_offload=False,
 ):
     # https://github.com/foundation-model-stack/fms-fsdp/blob/408c7516d69ea9b6bcd4c0f5efab26c0f64b3c2d/fms_fsdp/policies/ac_handler.py#L16
     """
@@ -189,12 +231,18 @@ def apply_fsdp_checkpointing(
         wrapper_kwargs["checkpoint_impl"] = CheckpointImpl.NO_REENTRANT
 
     if activation_offloading:
-        from hy_parallelism.training.checkpointing import offload_checkpoint_fn, set_offload_list
-        set_offload_list(activation_offload_list)
+        from hy_parallelism.training.checkpointing import (
+            offload_checkpoint_fn,
+            set_defer_offload,
+        )
+        set_defer_offload(defer_offload)
         assert not use_reentrant
         wrapper_kwargs["checkpoint_fn"] = partial(
             offload_checkpoint_fn,
-            generator_kwargs={"pin_memory": activation_offload_pin_memory},
+            generator_kwargs={
+                "pin_memory": activation_offload_pin_memory,
+                "offload_list": activation_offload_list,
+            },
             use_reentrant=use_reentrant,
         )
 
@@ -211,11 +259,11 @@ def apply_fsdp_checkpointing(
                 def _custom_policy(ctx, func, *args, **kwargs):
                     return op_sac_policy_fn(ctx, func, *args, **kwargs)
                 return _custom_policy
-            
+
             def selective_checkpointing_context_fn():
                 meta = defaultdict(int)
                 return create_selective_checkpoint_contexts(_get_custom_policy_with_meta(meta))
-            
+
             context_fn = selective_checkpointing_context_fn
         checkpoint_wrapper_fn = partial(checkpoint_wrapper_fn, context_fn=context_fn)
 
@@ -257,7 +305,7 @@ def check_uniform_dtype(model):
         loguru.logger.critical(msg)
         raise RuntimeError(msg)
 
-def custom_fully_shard(module, fqn=None, materialize_fn: Callable | None = None, **kwargs):
+def custom_fully_shard(module, fqn=None, materialize_fn: Callable | None = None, enable_symm_mem_for_comm: bool = False, ring_n: int = 2, **kwargs):
     mesh = kwargs.get('mesh', None)
     if mesh is not None:
         mesh_str = f'mesh={mesh}'
@@ -267,7 +315,59 @@ def custom_fully_shard(module, fqn=None, materialize_fn: Callable | None = None,
     if materialize_fn is not None:
         module = materialize_fn(module)
     module = fully_shard(module, **kwargs)
+    if enable_symm_mem_for_comm:
+        if version.parse(torch.__version__) < version.parse("2.10.0rc6"):
+            # Skip enabling symmetric memory if torch < 2.10
+            return module
+
+        if os.getenv('NCCL_CTA_POLICY') != '2':
+            raise RuntimeError('NCCL_CTA_POLICY must be set to 2.')
+        mesh = kwargs['mesh']
+        group = mesh.get_group(mesh_dim=-1)
+        group_ranks = dist.get_process_group_ranks(group)
+        if all((rank // 8 == dist.get_rank() // 8) for rank in group_ranks):
+            from hy_parallelism.distributed.communications.symm_mem import set_symm_mem_for_comm
+            loguru.logger.info(f'Enabling symmetric memory for {fqn} {type(module)}. {group_ranks=}')
+            set_symm_mem_for_comm(module, recursive=False, ring_n=ring_n)
+        else:
+            pass
+            # loguru.logger.warning(f'{fqn} is sharded on {mesh}. Symmetric memory is not enabled for this mesh with ranks {group_ranks}.')
     return module
+
+
+def eager_fsdp_lazy_init(model: nn.Module) -> None:
+    """
+    fsdp 嘅 lazy init 會創建 _orig_dtype, 但係繫裹所有參數都唔 requires_grad
+    則會跳過。導致系 grad reduce 時期，無法正確將 grad cast 到正確嘅 orig_dtype。
+    導致 grad_dtype error (因為 PyTorch 2.10 新增對 grad_dtype 嘅檢查)
+    See #32
+
+    Snapshots _orig_dtype / _reduce_dtype on all param groups.
+    Safe to call multiple times (root lazy init is idempotent).
+    """
+    from torch.distributed.fsdp._fully_shard._fsdp_state import _get_module_fsdp_state
+
+    state = _get_module_fsdp_state(model)
+    if state is None:
+        raise RuntimeError(
+            "eager_fsdp_lazy_init expects an FSDP root module; call fully_shard(model) first."
+        )
+    state._lazy_init()
+
+
+def ensure_requires_grad_and_eager_fsdp_lazy_init(models) -> None:
+    if isinstance(models, nn.Module):
+        models = [models]
+    for model in models:
+        frozen = [param for param in model.parameters() if not param.requires_grad]
+        for param in frozen:
+            param.requires_grad_(True)
+        try:
+            eager_fsdp_lazy_init(model)
+        finally:
+            for param in frozen:
+                param.requires_grad_(False)
+
 
 class ShardPlacementFnCollection:
 
@@ -276,7 +376,7 @@ class ShardPlacementFnCollection:
             self.placement_fns = placement_fns
         else:
             self.placement_fns = []
-    
+
     @classmethod
     def from_single_placement_fn(cls, placement_fn):
         return cls([placement_fn])
@@ -290,13 +390,15 @@ class ShardPlacementFnCollection:
             if ret is not None:
                 return ret
         return None
-            
+
 
 
 def apply_fsdp2(
     model: nn.Module,
     blocks,
     default_fsdp_mesh: DeviceMesh=None,
+    root_param_dtype: torch.dtype | None = None,
+    root_reduce_dtype: torch.dtype | None = None,
     param_dtype: torch.dtype=torch.float32,
     reduce_dtype: torch.dtype=torch.float32,
     cpu_offload: bool = False,
@@ -304,13 +406,17 @@ def apply_fsdp2(
     reshard_after_forward_policy: str = "default",
     expert_on_32: bool = False, # ptm moe implement requires expert on fp32
     router_on_32: bool = True, # make gate on fp32 to avoid precision issue
+    wrap_expert_with_fsdp: bool | None = None, # 当不开 Ep 时，设置 true 也给 expert 套上 fsdp
     prefetch_factor: int = 1,
     backward_prefetch_factor: int | None = None,
+    disable_naive_backward_prefetch: bool = False, # pytorch naive backward prefetch is buggy.
+    should_forward_prefetch: Callable[[str, nn.Module], bool] | None = None,
     materialize_fn: Callable | None = None,
     cast_forward_inputs: bool = True,
     # allow_ununiform_dtype: bool = False,
     cast_master_weight_to_param_dtype: bool = False, # Enabling this is error-prone, since casting parent module could affect the child module's dtype
     shard_placement_fn_collection: Callable | ShardPlacementFnCollection | None = None,
+    enable_symm_mem_for_comm: bool = False,
 ):
     """
     Apply data parallelism (via FSDP2) to the model.
@@ -324,11 +430,19 @@ def apply_fsdp2(
         cast_forward_inputs (bool, optional): If True, cast floating-point forward inputs to
             ``param_dtype`` per ``MixedPrecisionPolicy``. Defaults to True.
     """
+    ring_n = prefetch_factor + 1
+    # 對於 leo 模型，暫時只需要關閉 default reshard_after_forward 行為
+    # 避免最後一層連續 all_gather 即可
+    # 同一個 shape 嘅 tensor 唔會存在兩份
+    ring_n = 0
+    if enable_symm_mem_for_comm and ring_n < prefetch_factor + 1:
+        assert reshard_after_forward_policy in ['always', 'never']
+
     # if allow_ununiform_dtype:
     #     model = model.to(torch.float32)
 
     if backward_prefetch_factor is None:
-        backward_prefetch_factor = prefetch_factor
+        backward_prefetch_factor = 0
 
     pp_enabled = get_parallel_state().pp_enabled
     ep_enabled = get_parallel_state().ep_enabled
@@ -347,11 +461,10 @@ def apply_fsdp2(
     if cpu_offload:
         fsdp_config["offload_policy"] = CPUOffloadPolicy()
 
+    resolved_root_param_dtype = param_dtype if root_param_dtype is None else root_param_dtype
+    resolved_root_reduce_dtype = reduce_dtype if root_reduce_dtype is None else root_reduce_dtype
 
-    if 'mp_policy' in fsdp_config:
-        root_module_dtype = fsdp_config['mp_policy'].param_dtype
-    else:
-        root_module_dtype = torch.float32
+    layer_param_dtype = fsdp_config["mp_policy"].param_dtype
 
     if reshard_after_forward_policy == "always":
         reshard_after_forward = True
@@ -370,9 +483,9 @@ def apply_fsdp2(
         raise ValueError(
             f"Invalid reshard_after_forward_policy: {reshard_after_forward_policy}."
         )
-    
 
-    if router_on_32 and root_module_dtype != torch.float32:
+
+    if router_on_32 and layer_param_dtype != torch.float32:
         for fqn, module in model.named_modules():
             if not hasattr(model, 'is_moe_router'):
                 raise ValueError(f'{type(model)} must implement `is_moe_router` method. You can implement it in the ParallelEngine or the model itself.')
@@ -383,9 +496,10 @@ def apply_fsdp2(
                         param_dtype=torch.float32, reduce_dtype=torch.float32,
                         output_dtype=torch.float32
                     )
+                # router_fsdp_config["mesh"] = get_parallel_state().router_fsdp_mesh
                 if cast_master_weight_to_param_dtype:
                     module = module.to(router_fsdp_config["mp_policy"].param_dtype)
-                
+
                 # loguru.logger.debug(f'Router on 32, apply fsdp to {fqn}')
                 custom_fully_shard(
                     module,
@@ -393,9 +507,11 @@ def apply_fsdp2(
                     **router_fsdp_config,
                     reshard_after_forward=reshard_after_forward,
                     materialize_fn=materialize_fn,
+                    enable_symm_mem_for_comm=enable_symm_mem_for_comm,
+                    ring_n=ring_n,
                 )
     expert_fsdp = (
-        ep_enabled or (expert_on_32 and root_module_dtype != torch.float32)
+        ep_enabled or (expert_on_32 and layer_param_dtype != torch.float32) or (wrap_expert_with_fsdp is True)
     )
     if expert_fsdp:
         for fqn, module in model.named_modules():
@@ -410,22 +526,7 @@ def apply_fsdp2(
                     expert_fsdp_config["mp_policy"] = ep_mp_policy
 
                 if get_parallel_state().enable_expert_fsdp_sharding:
-                    if hasattr(module, 'local_num_experts'):
-                        local_num_experts = module.local_num_experts
-                    elif hasattr(module, 'num_local_experts'):
-                        local_num_experts = module.num_local_experts
-                    elif hasattr(module, 'num_experts'):
-                        local_num_experts = module.num_experts // get_parallel_state().ep
-                        assert module.num_experts % get_parallel_state().ep == 0
-                    else:
-                        raise ValueError('MOE Experts must have `local_num_experts`, `num_local_experts`, or `num_experts` attribute.')
-                    # HACK: dirtu hack
-                    expert_shard_mesh = get_parallel_state().expert_shard_mesh
-                    if expert_shard_mesh.size() > local_num_experts:
-                        raise NotImplementedError(f'Consider disabling expert fsdp sharding by setting `enable_expert_fsdp_sharding=False`')
-                        from torch.distributed.tensor import Shard
-                        assert shard_placement_fn_collection is None
-                        expert_fsdp_config['shard_placement_fn'] = lambda param: Shard(1)
+                    expert_fsdp_config['shard_placement_fn'] = lambda param: Shard(1)
                 if ep_enabled:
                     assert expert_fsdp_mesh is not None, 'Expert FSDP mesh is not set'
                     expert_fsdp_config.update({"mesh": expert_fsdp_mesh})
@@ -438,6 +539,8 @@ def apply_fsdp2(
                     **expert_fsdp_config,
                     reshard_after_forward=reshard_after_forward,
                     materialize_fn=materialize_fn,
+                    enable_symm_mem_for_comm=enable_symm_mem_for_comm,
+                    ring_n=ring_n,
                 )
 
                 # NOTE: # Although the FSDP sharding of experts is done on a mesh of
@@ -474,7 +577,7 @@ def apply_fsdp2(
             raise ValueError(
                 f"Invalid reshard_after_forward_policy: {reshard_after_forward_policy}."
             )
-        
+
         if cast_master_weight_to_param_dtype:
             transformer_block = transformer_block.to(fsdp_config["mp_policy"].param_dtype)
         custom_fully_shard(
@@ -483,45 +586,51 @@ def apply_fsdp2(
             **fsdp_config,
             reshard_after_forward=reshard_after_forward,
             materialize_fn=materialize_fn,
+            enable_symm_mem_for_comm=enable_symm_mem_for_comm,
+            ring_n=ring_n,
         )
 
-    
+
     if prefetch_factor > 0:
-        from torch.distributed.fsdp._fully_shard._fully_shard import FSDPModule
-        transformer_blocks = list(blocks)
+        set_forward_prefetch(model, blocks, prefetch_factor, should_forward_prefetch)
 
-        for idx, block in enumerate(transformer_blocks):
-            real_prefetch_blocks = []
-            for module in block.modules():
-                if isinstance(module, FSDPModule):
-                    real_prefetch_blocks.append(module)
-
-            prefetch_blocks = transformer_blocks[idx+1:idx+prefetch_factor+1]
-            for b in prefetch_blocks:
-                real_prefetch_blocks.append(b)
-
-            block.set_modules_to_forward_prefetch(
-                real_prefetch_blocks
-            )
+    # if disable_naive_backward_prefetch and backward_prefetch_factor in [None, 0]:
+    if disable_naive_backward_prefetch:
+        for module in model.modules():
+            if isinstance(module, FSDPModule):
+                module.set_modules_to_backward_prefetch([module])
 
     if backward_prefetch_factor is not None and backward_prefetch_factor > 0:
-        reversed_transformer_blocks = list(reversed(transformer_blocks))
+        reversed_transformer_blocks = list(reversed(blocks))
 
         for idx, block in enumerate(reversed_transformer_blocks):
+            # real_prefetch_blocks = get_sub_fsdp_modules(block)
             real_prefetch_blocks = []
-            for module in block.modules():
-                if isinstance(module, FSDPModule):
-                    real_prefetch_blocks.append(module)
 
             prefetch_blocks = reversed_transformer_blocks[idx+1:idx+backward_prefetch_factor+1]
             for b in prefetch_blocks:
                 real_prefetch_blocks.append(b)
+                # real_prefetch_blocks.extend(get_sub_fsdp_modules(b))
             block.set_modules_to_backward_prefetch(
                 real_prefetch_blocks
             )
 
 
-    model = custom_fully_shard(model, fqn='root module', **fsdp_config, reshard_after_forward=(reshard_after_forward_policy == 'always'), materialize_fn=materialize_fn)
+    root_fsdp_config = fsdp_config.copy()
+    root_fsdp_config["mp_policy"] = MixedPrecisionPolicy(
+        param_dtype=resolved_root_param_dtype,
+        reduce_dtype=resolved_root_reduce_dtype,
+        cast_forward_inputs=cast_forward_inputs,
+    )
+    model = custom_fully_shard(
+        model,
+        fqn='root module',
+        **root_fsdp_config,
+        reshard_after_forward=(reshard_after_forward_policy == 'always'),
+        materialize_fn=materialize_fn,
+        enable_symm_mem_for_comm=enable_symm_mem_for_comm,
+        ring_n=ring_n,
+    )
 
     return model
 
@@ -640,3 +749,39 @@ def get_fsdp_named_buffers(model: nn.Module):
         if fqns is not None:
             assert len(fqns) == 1, (name, fqns)
             yield next(iter(fqns)), buffer
+
+
+def iter_sharded_param_tensors(root):
+    # 配合 move_sharded_pair 使用
+    from torch.distributed.fsdp._fully_shard._fsdp_param import ShardedState
+    for module in root.modules():
+        if not isinstance(module, FSDPModule):
+            continue
+        group = module._get_fsdp_state()._fsdp_param_group
+        if group is None:
+            continue
+        for p in group.fsdp_params:
+            # if p.sharded_state != ShardedState.UNSHARDED:
+            #     loguru.logger.debug(
+            #         f"{p._param_fqn}: expected UNSHARDED, got {p.sharded_state}. Skip iterating it."
+            #     )
+            #     continue
+            yield p
+
+
+@torch.no_grad()
+def move_sharded_param(fsdp_param, device, *, pin_memory=False):
+    # 應用場景系當 model 已經保持 unshard 嘅時候，希望保持 unshard 推理，但係唔想保留 fsdp 於半嘅 hsarded 顯存
+    device = torch.device(device)
+    data = fsdp_param._sharded_param_data
+    if data.device == device:
+        return
+    local = fsdp_param.sharded_param._local_tensor
+    size, stride, offset = local.size(), local.stride(), local.storage_offset()
+    flat = data.to(device, non_blocking=True)
+    if pin_memory and device.type == "cpu" and not flat.is_pinned():
+        flat = flat.pin_memory()
+    # local_tensor.set_(flat.as_strided(size, stride, offset))
+    # 不要 set_，直接换引用，避免 cross-device
+    fsdp_param._sharded_param_data = flat
+    fsdp_param.sharded_param._local_tensor = flat.as_strided(size, stride, offset)

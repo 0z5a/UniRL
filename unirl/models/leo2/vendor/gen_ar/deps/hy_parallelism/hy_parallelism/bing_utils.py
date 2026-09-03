@@ -110,7 +110,7 @@ def get_nonlocal_file(path, delete=False):
     #     return get_nonlocal_file_new(path)
 
     if tmp_mapped_path := get_tmp_mapped_path(path):
-        loguru.logger.info(f'从mapping file {_file_mapping_path},  {path} 映射到 {tmp_mapped_path}')
+        loguru.logger.debug(f'从mapping file {_file_mapping_path},  {path} 映射到 {tmp_mapped_path}')
         return tmp_mapped_path
     # else:
     #     possible = []
@@ -3560,7 +3560,7 @@ class Timer:
             torch.distributed.barrier()
         if self.synchronized_time:
             torch.cuda.synchronize()
-        self.start = time.time()
+        self.start = time.perf_counter()
         if not self.entered:
             _timer_depth += 1
         self.entered = True
@@ -3569,7 +3569,7 @@ class Timer:
         global _timer_depth
         if self.synchronized_time:
             torch.cuda.synchronize()
-        self.end = time.time()
+        self.end = time.perf_counter()
         elapsed = self.end - self.start
         self.tot += elapsed
         self.times.append(elapsed)

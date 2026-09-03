@@ -542,10 +542,69 @@ class PrecisionReportThresholds:
         return failed
 
 
+# Peak working set for one pair: float32 a/b/diff + gathered rel ≈ 4 * numel * 4 bytes.
+_COMPARE_BYTES_PER_ELEM = 16
+_COMPARE_MEM_FRACTION = 0.7
+_QUANTILE_LEVELS = (0.95, 0.90, 0.80)
+# torch.quantile (esp. CUDA) rejects inputs larger than ~2^24 elements.
+_TORCH_QUANTILE_MAX_ELEMS = 1 << 24
+
+
+def _rel_error_quantiles(rel: torch.Tensor) -> Tuple[float, float, float]:
+    """p95/p90/p80 of relative errors; falls back when torch.quantile size-limits."""
+    n = rel.numel()
+    if n == 0:
+        return 0.0, 0.0, 0.0
+    if n <= _TORCH_QUANTILE_MAX_ELEMS:
+        try:
+            qs = torch.tensor(_QUANTILE_LEVELS, device=rel.device, dtype=rel.dtype)
+            return tuple(float(x) for x in torch.quantile(rel, qs).tolist())
+        except RuntimeError:
+            pass
+    rel_np = rel.detach().float().cpu().numpy()
+    return tuple(float(np.quantile(rel_np, q)) for q in _QUANTILE_LEVELS)
+
+
+def _pick_compare_device(
+    t_a: torch.Tensor,
+    t_b: torch.Tensor,
+    device: Union[str, torch.device] = "auto",
+) -> torch.device:
+    """Prefer CUDA when the pair fits; otherwise fall back to CPU to avoid OOM."""
+    if isinstance(device, torch.device):
+        if device.type == "cuda" and not torch.cuda.is_available():
+            return torch.device("cpu")
+        return device
+    if device == "cpu":
+        return torch.device("cpu")
+    if device == "cuda":
+        return torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    if device != "auto":
+        raise ValueError(f"device must be 'auto', 'cpu', 'cuda', or torch.device; got {device!r}")
+    if not torch.cuda.is_available():
+        return torch.device("cpu")
+    if t_a.is_cuda:
+        cuda_dev = t_a.device
+    elif t_b.is_cuda:
+        cuda_dev = t_b.device
+    else:
+        cuda_dev = torch.device("cuda", torch.cuda.current_device())
+    need = t_a.numel() * _COMPARE_BYTES_PER_ELEM
+    try:
+        free, _total = torch.cuda.mem_get_info(cuda_dev.index)
+    except RuntimeError:
+        return torch.device("cpu")
+    if need > int(free * _COMPARE_MEM_FRACTION):
+        return torch.device("cpu")
+    return cuda_dev
+
+
 def _compute_row_metrics(
     t_a: torch.Tensor,
     t_b: torch.Tensor,
     param_name: str,
+    *,
+    device: Union[str, torch.device] = "auto",
 ) -> Dict[str, Any]:
     t_a = t_a.detach()
     t_b = t_b.detach()
@@ -568,8 +627,6 @@ def _compute_row_metrics(
             "p80": float("nan"),
         }
     shape_str = str(tuple(t_a.shape))
-    t_a = t_a.float().cpu()
-    t_b = t_b.float().cpu()
     # Empty tensors: .max() without dim and cosine_similarity on 0-d vectors are ill-defined
     n = t_a.numel()
     if n == 0:
@@ -589,29 +646,49 @@ def _compute_row_metrics(
             "p90": 0.0,
             "p80": 0.0,
         }
+
+    # Per-tensor device: keep peak memory to one pair, not the whole state_dict.
+    compare_device = _pick_compare_device(t_a, t_b, device)
+    t_a = t_a.to(device=compare_device, dtype=torch.float32)
+    t_b = t_b.to(device=compare_device, dtype=torch.float32)
+
     diff = (t_a - t_b).abs()
     max_diff = float(diff.max().item())
-    sum_a = t_a.abs().sum().item()
-    sum_b = t_b.abs().sum().item()
+    sum_a = float(t_a.abs().sum().item())
+    sum_b = float(t_b.abs().sum().item())
     denom = max(sum_a, sum_b) + 1e-20
     sum_rel_diff = abs(sum_a - sum_b) / denom
+
+    # Identical tensors (incl. all-zero): skip quantile/cosine; cosine of zeros is ill-defined.
+    if max_diff == 0.0:
+        return {
+            "param_name": param_name,
+            "ok_compare": True,
+            "shape_mismatch": False,
+            "is_empty": False,
+            "shape": shape_str,
+            "message": "",
+            "max_diff": 0.0,
+            "sum_abs_a": sum_a,
+            "sum_abs_b": sum_b,
+            "sum_rel_diff": sum_rel_diff,
+            "cosine_sim": 1.0,
+            "p95": 0.0,
+            "p90": 0.0,
+            "p80": 0.0,
+        }
+
     m = diff != 0
     if m.any():
         rel = diff[m] / (t_a[m].abs() + 1e-20)
-        rel_np = rel.detach().numpy()
-        p95 = float(np.quantile(rel_np, 0.95))
-        p90 = float(np.quantile(rel_np, 0.90))
-        p80 = float(np.quantile(rel_np, 0.80))
+        p95, p90, p80 = _rel_error_quantiles(rel)
     else:
         p95 = p90 = p80 = 0.0
-    # F.cosine_similarity returns 0 (not 1) for two all-zero vectors; for identical
-    # tensors the cosine of flattened vectors is 1, so we avoid the ill-defined case.
-    if not (diff > 0).any():
-        cos = 1.0
-    else:
-        cos = F.cosine_similarity(
+    cos = float(
+        F.cosine_similarity(
             t_a.reshape(1, -1), t_b.reshape(1, -1), dim=1, eps=1e-20
         ).item()
+    )
     return {
         "param_name": param_name,
         "ok_compare": True,
@@ -636,17 +713,22 @@ def tensor_precision_report_rows(
     *,
     name: str = "tensor",
     thresholds: Optional[PrecisionReportThresholds] = None,
+    device: Union[str, torch.device] = "auto",
 ) -> List[Dict[str, Any]]:
     """
     Build per-parameter metric dicts (same comparison logic as :func:`tensor_precision_report`).
     Use this when you need structured results; use :func:`tensor_precision_report` for the
     rendered table string.
+
+    Args:
+        device: Where to run comparisons. ``"auto"`` uses CUDA when the pair fits in free
+            memory, otherwise CPU. ``"cpu"`` / ``"cuda"`` force a device.
     """
     th = thresholds if thresholds is not None else PrecisionReportThresholds()
     rows: List[Dict[str, Any]] = []
 
     if isinstance(a, torch.Tensor) and isinstance(b, torch.Tensor):
-        m = _compute_row_metrics(a, b, name)
+        m = _compute_row_metrics(a, b, name, device=device)
         m["aligned"] = th.is_aligned(m)
         rows.append(m)
     elif isinstance(a, Mapping) and isinstance(b, Mapping):
@@ -699,7 +781,7 @@ def tensor_precision_report_rows(
                 }
             )
         for k in sorted(keys_a & keys_b):
-            m = _compute_row_metrics(a[k], b[k], k)
+            m = _compute_row_metrics(a[k], b[k], k, device=device)
             m["aligned"] = th.is_aligned(m)
             rows.append(m)
     else:
@@ -718,6 +800,7 @@ def tensor_precision_report(
     thresholds: Optional[PrecisionReportThresholds] = None,
     print_out: bool = True,
     sort_by: Optional[str] = 'max_diff',
+    device: Union[str, torch.device] = "auto",
 ) -> str:
     """
     Compare two tensors or two state_dicts and return the same text as the table report
@@ -738,13 +821,17 @@ def tensor_precision_report(
         name: Parameter name when ``a`` and ``b`` are plain tensors.
         thresholds: Criterion for green vs red. Defaults to :class:`PrecisionReportThresholds`.
         print_out: If True, print the report to stdout.
+        device: Where to run comparisons. ``"auto"`` uses CUDA when the pair fits in free
+            memory, otherwise CPU. ``"cpu"`` / ``"cuda"`` force a device.
 
     Returns:
         The full report string (table + summary), with selective red on failing cells as
         above. For structured per-parameter dicts, use :func:`tensor_precision_report_rows`.
     """
     th = thresholds if thresholds is not None else PrecisionReportThresholds()
-    rows = tensor_precision_report_rows(a, b, name=name, thresholds=th)
+    rows = tensor_precision_report_rows(
+        a, b, name=name, thresholds=th, device=device
+    )
     report = _format_precision_report_table(rows, th, sort_by=sort_by)
     if print_out:
         print(report, end="")

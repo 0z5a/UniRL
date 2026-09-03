@@ -1,1 +1,3 @@
-recursive-include unirl/models/leo2/vendor/gen_ar *.json *.md *.txt *.yaml *.yml
+recursive-include unirl/models/leo2/resources *.json *.yaml
+recursive-include unirl/models/leo2/vendor/gen_ar *.cpp *.cu *.h *.json *.md *.sh *.tpl *.txt *.yaml *.yml
+recursive-include examples/diffusion/leo2 *.csv *.html *.md *.py *.sh *.txt *.yaml *.yml

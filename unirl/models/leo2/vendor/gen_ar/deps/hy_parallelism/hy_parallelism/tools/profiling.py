@@ -16,9 +16,9 @@ from pathlib import Path
 import torch
 from torch.cuda import nvtx
 from torch.profiler import record_function
-from torch.autograd.profiler import emit_nvtx
-from torch.autograd.profiler import profile as profile_autograd
-from torch.cuda.profiler import profile as profile_cuda
+# from torch.autograd.profiler import emit_nvtx
+# from torch.autograd.profiler import profile as profile_autograd
+# from torch.cuda.profiler import profile as profile_cuda
 
 # from torchtitan.config import Profiling as ProfilingConfig
 from dataclasses import dataclass
@@ -64,6 +64,18 @@ WARMUP = 3
 MEMORY_SNAPSHOT_MAX_ENTRIES = 10000000
 MEMORY_SNAPSHOT_MAX_ENTRIES = 100000
 
+def start_memory_snapshot():
+    if torch.cuda.is_available():
+        from hy_parallelism.tools.profiling import MEMORY_SNAPSHOT_MAX_ENTRIES
+        torch.cuda.memory._record_memory_history(
+            max_entries=MEMORY_SNAPSHOT_MAX_ENTRIES,
+            stacks='python',
+        )
+
+def pause_memory_snapshot():
+    # torch.cuda.memory._record_memory_history(context=None)
+    torch.cuda.memory._record_memory_history(enabled=None)
+
 def trace_handler(prof: torch.profiler.profile):
     from datetime import datetime
     timestamp = datetime.now().strftime('%Y_%m_%d_%H_%M_%S')
@@ -95,13 +107,19 @@ def stop_profiling():
     _global_prof = None
     _global_context = None
 
-def profiler_step():
+def is_profiler_enabled() -> bool:
+    return _global_prof is not None
+
+
+def profiler_step(skip_barrier: bool = False):
     if _global_prof is not None:
+        torch.cuda.synchronize()
         _global_prof.step()
-        with profile_range("profiler_step_barrier"):
-            torch.cuda.synchronize()
-            torch.distributed.barrier()
-        print('Profiler step!!!!!!')
+        if not skip_barrier:
+            with profile_range("profiler_step_barrier"):
+                torch.cuda.synchronize()
+                if torch.distributed.is_initialized():
+                    torch.distributed.barrier()
 
 @contextlib.contextmanager
 def maybe_enable_profiling(
@@ -137,9 +155,12 @@ def maybe_enable_profiling(
             profiling_config.profiler_active,
         )
 
-        rank = torch.distributed.get_rank()
+        rank = int(os.environ.get('RANK', '0'))
 
         def trace_handler(prof):
+            if prof.step_num == 1:
+                loguru.logger.info(f"Profiling step 1, skip dumping traces")
+                return
             curr_trace_dir_name = "iteration_" + str(prof.step_num)
             curr_trace_dir = os.path.join(trace_dir, curr_trace_dir_name, leaf_folder)
             if not os.path.exists(curr_trace_dir):
@@ -148,7 +169,7 @@ def maybe_enable_profiling(
             logger.info(f"Dumping profiler traces at step {prof.step_num}")
             begin = time.monotonic()
 
-            output_file = os.path.join(curr_trace_dir, f"rank{rank}_trace.json")
+            output_file = os.path.join(curr_trace_dir, f"rank{rank}_trace.json.gz")
             # print(prof.key_averages().table(row_limit=100))
             prof.export_chrome_trace(output_file)
             logger.info(
@@ -176,8 +197,11 @@ def maybe_enable_profiling(
                 gpu_device_profiled,
             ],
             schedule=torch.profiler.schedule(wait=wait, warmup=warmup, active=active),
+            profile_memory=False,
             on_trace_ready=trace_handler,
-            record_shapes=True,
+            record_shapes=False,
+            with_stack=True,
+            # with_modules=True,
         ) as torch_profiler:
             torch_profiler.step_num = global_step
             # with emit_nvtx():
@@ -327,6 +351,17 @@ def maybe_enable_memory_snapshot(
         yield None
 
 
+@contextlib.contextmanager
+def maybe_record_profile_range(name: str):
+    # 这个目的是避免 profiler 开始之前，record_function
+    if is_profiler_enabled():
+        assert isinstance(name, str), f"name must be a string, but got {type(name)}. {name}"
+        with record_function(name), nvtx.range(name):
+            yield
+    else:
+        yield
+
+
 @contextmanager
 def profile_range(
     msg: str,
@@ -338,8 +373,12 @@ def profile_range(
     enable_sync=True 确保 同步 cuda streams, 以及同步cuda和cpu
     barrier 同步不同的进程，避免进程快慢干扰正确执行时间
     """
+    if not is_profiler_enabled() and not enable_time:
+        barrier = False
+        enable_sync = False
+
     if barrier is not None and barrier is not False:
-        with record_function(f'pre_barrier_of_{msg}'), nvtx.range(f'pre_barrier_of_{msg}'):
+        with maybe_record_profile_range(f'pre_barrier_of_{msg}'):
             if isinstance(barrier, torch.distributed.ProcessGroup):
                 torch.distributed.barrier(barrier)
             else:
@@ -352,42 +391,139 @@ def profile_range(
         timer_context = contextlib.nullcontext()
 
     if enable_sync:
-        with record_function(f'pre_sync_of_{msg}'), nvtx.range(f'pre_sync_of_{msg}'):
+        with maybe_record_profile_range(f'pre_sync_of_{msg}'):
             torch.cuda.synchronize()
-    with record_function(msg), nvtx.range(msg), timer_context:
+    with maybe_record_profile_range(msg), timer_context:
 
         yield
 
         if enable_sync:
-            with record_function(f'post_sync_of_{msg}'), nvtx.range(f'post_sync_of_{msg}'):
+            with maybe_record_profile_range(f'post_sync_of_{msg}'):
                 torch.cuda.synchronize()
 
     if barrier is not None and barrier is not False:
-        with record_function(f'post_barrier_of_{msg}'), nvtx.range(f'post_barrier_of_{msg}'):
+        with maybe_record_profile_range(f'post_barrier_of_{msg}'):
             if isinstance(barrier, torch.distributed.ProcessGroup):
                 torch.distributed.barrier(barrier)
             else:
                 torch.distributed.barrier()
 
+def profile_func(*range_args, **range_kwargs):
+    from functools import wraps
+    import inspect
+
+    def decorator(func):
+        kwargs = dict(range_kwargs)
+        if 'msg' not in kwargs:
+            if range_args and isinstance(range_args[0], str):
+                kwargs['msg'] = range_args[0]
+            else:
+                kwargs['msg'] = func.__qualname__
+
+        @wraps(func)
+        def wrapper(*args, **kwargs_inner):
+            with profile_range(**kwargs):
+                return func(*args, **kwargs_inner)
+        return wrapper
+
+    if len(range_args) == 1 and not range_kwargs and callable(range_args[0]) and not inspect.isclass(range_args[0]):
+        return decorator(range_args[0])
+    return decorator
+
+def profile_class(*range_args, **range_kwargs):
+    from functools import wraps
+    import inspect
+
+    def _should_wrap(name, func):
+        if name == 'forward':
+            return False
+        if name.startswith('__'):
+            return False
+        if inspect.isbuiltin(func):
+            return False
+        if getattr(func, '__module__', None) == 'builtins':
+            return False
+        return True
+
+    def _wrap(name, func):
+        kwargs = dict(range_kwargs)
+        kwargs.setdefault('msg', name)
+        return profile_func(**kwargs)(func)
+
+    def _patch_module_instance(module):
+        if getattr(module, "_hy_profile_instance_wrapped", False):
+            return
+        module._hy_profile_instance_wrapped = True
+        module_name = getattr(module, "_hy_profile_module_name", module.__class__.__name__)
+        kwargs = dict(range_kwargs)
+        kwargs.setdefault("msg", module_name)
+        if callable(getattr(module, "_call_impl", None)):
+            module._call_impl = profile_func(**kwargs)(module._call_impl)
+        for name, attr in module.__class__.__dict__.items():
+            if not inspect.isfunction(attr) or not _should_wrap(name, attr):
+                continue
+            setattr(module, name, profile_func(**{**kwargs, "msg": f"{module_name}.{name}"})(getattr(module, name)))
+
+    def decorator(cls):
+        if cls.__dict__.get("_hy_profile_class_wrapped", False):
+            return cls
+        setattr(cls, "_hy_profile_class_wrapped", True)
+
+        if issubclass(cls, torch.nn.Module):
+            original_init = cls.__init__
+
+            @wraps(original_init)
+            def wrapped_init(self, *args, **kwargs):
+                original_init(self, *args, **kwargs)
+                for module_name, module in self.named_modules():
+                    module._hy_profile_module_name = module_name
+                    _patch_module_instance(module)
+
+            cls.__init__ = wrapped_init
+            return cls
+
+        for name, attr in list(cls.__dict__.items()):
+            if isinstance(attr, staticmethod):
+                func = attr.__func__
+                if _should_wrap(name, func):
+                    setattr(cls, name, staticmethod(_wrap(name, func)))
+            elif isinstance(attr, classmethod):
+                func = attr.__func__
+                if _should_wrap(name, func):
+                    setattr(cls, name, classmethod(_wrap(name, func)))
+            elif inspect.isfunction(attr) and _should_wrap(name, attr):
+                setattr(cls, name, _wrap(name, attr))
+        return cls
+
+    if len(range_args) == 1 and inspect.isclass(range_args[0]) and not range_kwargs:
+        return decorator(range_args[0])
+    return decorator
+
+def profile_range_func_wrapper(*range_args, **range_kwargs):
+    return profile_func(*range_args, **range_kwargs)
 
 def range_push(msg: str, enable_sync: bool = False):
     if enable_sync:
-        with record_function(f'pre_sync_of_{msg}'), nvtx.range(f'pre_sync_of_{msg}'):
+        with maybe_record_profile_range(f'pre_sync_of_{msg}'):
             torch.cuda.synchronize()
-    nvtx.range_push(msg)
-    record_function_ctx = record_function(msg)
-    record_function_list.append((record_function_ctx, msg))
-    record_function_ctx.__enter__()
+    if is_profiler_enabled():
+        nvtx.range_push(msg)
+        record_function_ctx = record_function(msg)
+        record_function_list.append((record_function_ctx, msg))
+        record_function_ctx.__enter__()
+    else:
+        record_function_list.append((None, msg))
 
 record_function_list = []
 def range_pop(enable_sync: bool = False):
     record_function_ctx, msg = record_function_list.pop()
     if enable_sync:
-        with record_function(f'post_sync_of_{msg}'), nvtx.range(f'post_sync_of_{msg}'):
+        with maybe_record_profile_range(f'post_sync_of_{msg}'):
             torch.cuda.synchronize()
 
-    nvtx.range_pop()
-    record_function_ctx.__exit__(None, None, None)
+    if is_profiler_enabled():
+        nvtx.range_pop()
+        record_function_ctx.__exit__(None, None, None)
 
 def is_under_nsys_profile():
     import psutil

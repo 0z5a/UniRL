@@ -1,7 +1,7 @@
 # Leo2 × UniRL FlowGRPO 接入设计（2026-08-27 夜）
 
 目标：Leo2-MoE-A12B 接入开源 UniRL，trainside 模式（同进程 rollout，无 vllm-omni、无权重同步），
-FlowGRPO 跑通 t2v，32×H20（zuhaoding-0822zw32）。**代码仅存本地/ceph，严禁推任何远端**（copy 已剥离 origin）。
+FlowGRPO 跑通 t2v，最初验证于 32×H20 节点。
 
 ## 蓝本
 
@@ -25,7 +25,7 @@ FlowGRPO 跑通 t2v，32×H20（zuhaoding-0822zw32）。**代码仅存本地/cep
    - t2v：无 audio latent、无 channel cond；CFG 用 guidance=1.0（单分支，logp 干净，抄 HV1 trainside）
 4. **latent 几何**：unpacked (48, (F−1)/4+1, H/16, W/16)；packing 由 prepare_inputs_for_generation 内部处理，
    UniRL 侧 latent_shape 返回 unpacked 形状即可（与 H3 的显式 packing 不同，更简单）。
-5. **权重**：`HYV2.0/ckpts/leo2_moe_a12b_480p/iter_0063300_torch/weights`（torch dcp，150GB 单分片，明文）。
+5. **权重**：`LEO2_CKPT_DIR` 指向 iter-0063300 native Torch DCP（约 150GB 单分片）。
    加载策略：meta-init 构模 → UniRL FSDPBackend 分片 → DCP 按需读取各 rank 分片（DCP ranged reads，单文件也高效）。
    具体挂钩方式等 FSDPBackend 侦察结论。
 6. **LoRA**：只打视频/文本/音频分支的 attention 投影 + dense MLP（q/k/v/o_proj{,_txt,_audio}、gate_and_up/down_proj 非专家部分）；
@@ -36,8 +36,8 @@ FlowGRPO 跑通 t2v，32×H20（zuhaoding-0822zw32）。**代码仅存本地/cep
 
 ## 计划中的产出
 
-- `unirl/models/leo2/`：bundle.py / config.py / conditions.py / text_embed.py / diffusion.py / pipeline.py / vae.py
-  （import hymm 走 PYTHONPATH 指向 HYV2.0/code/hunyuan_multimodal_gen_ar，不 vendor）
+- `unirl/models/leo2/`：bundle.py / config.py / conditions.py / text_embed.py / diffusion.py / pipeline.py / vae.py，
+  并在 `vendor/gen_ar` 内携带 hymm、hy_parallelism、IndexKits 与 processors 的运行闭包。
 - `examples/diffusion/leo2/leo2_t2v_trainside.yaml`
 - 启动脚本（4 节点 × 8 卡，经 ceph 队列 qx.sh 派发）+ 环境补装（UniRL 依赖入 leo2-venv）
 
@@ -65,7 +65,7 @@ FlowGRPO 跑通 t2v，32×H20（zuhaoding-0822zw32）。**代码仅存本地/cep
 | R4 | 根级模块（time_embed 等）仍在 CPU | bundle 加载后把非 block 根子模块搬上卡（FSDP 只搬 block） |
 | R5 | `FSDP expects uniform original parameter dtype {fp32,bf16}` | MoE router gate.wg 在 block 内为 fp32 → 整模统一 bf16（`uniform_bf16`，已知取舍：fp32 router 精度；正式配方可改为把 router 排除出 FSDP 组或走 fp32 主参数方案） |
 
-加载优化：节点本地盘 stage-in（/root/leo2_weights，`LEO2_CKPT_DIR`），加载阶段 35min → 分钟级。
+加载优化：通过 `LEO2_CKPT_DIR` 指向节点本地 stage-in 目录，加载阶段 35min → 分钟级。
 | R6 | 同上断言仍在（整模 bf16 后） | 真凶是 **LoRA 主参数**：wrap.py 把可训练参数预转 `master_dtype`(fp32)，与 block 内 bf16 冻结参数同组 → torch 2.7.1 FSDP2 不支持组内混 dtype（HV1/H3 配方在官方 torch2.10 镜像上无此限制）。冒烟改 `master_dtype: bf16`；正式配方两条路：换 v1.9 镜像(torch2.10) 或把 LoRA 模块单独成 FSDP 组保 fp32 master |
 | R7 | 前向深入到 MoE router：`gate(hidden)` 报 `float != BFloat16` | hymm 在 autocast 关闭区用 fp32 输入乘 router 权重，而 uniform_bf16 把 wg 转成了 bf16。运行时 monkeypatch `gate.wg.forward` 让权重跟随输入 dtype（不改共享 clone 的文件，符合隔离协议） |
 | R8 | 49f 前向 OOM（92.9GB 已分配）；21f 探针报 `image_seq [1,1512] vs index [1,3276]` | ① 21f 探针无效：hymm 把时长 snap 到训练 bucket 下限 **49 帧**（duration_range [49,361] step 4），捕获按 49 算 token 而 UniRL latent 按 21 算 → 几何必须 ≥49 且 4k+1；② OOM 根因待定：已加 pre-rollout 显存/分片报告（dtensor vs plain 参数、本地 GPU 参数字节）与 forward 前打点 |

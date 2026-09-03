@@ -11,10 +11,45 @@ the LoRA update — no separate inference engine, no weight sync.
 |---|---|
 | `unirl/models/leo2/` | model package and vendored gen-ar runtime: `bundle.py` (hymm bootstrap, DCP load, FSDP-ready placement), `vendor/`, `text_embed.py`, `diffusion.py`, `vae.py`, `pipeline.py`, `conditions.py`, `config.py` |
 | `examples/diffusion/leo2/leo2_t2v_trainside.yaml` | base recipe (FSDP2 + LoRA r64, FlowSDE, PickScore, FlowGRPO) |
-| `examples/diffusion/leo2/scripts/` | cluster launchers (`unirl_longrun*.sh`, `unirl_smoke.sh`), one-rollout probes, ops helpers, `perf_table.py` |
+| `examples/diffusion/leo2/scripts/` | portable launchers (`unirl_longrun*.sh`, `unirl_smoke.sh`), probes, artifact validation and performance helpers |
 | `examples/diffusion/leo2/docs/DESIGN.md` | decision log R1–R27 (every pitfall and its fix) |
 | `examples/diffusion/leo2/docs/R15_perf_report.html` | timing / memory / deployment measurements (with erratum) |
+| `examples/diffusion/leo2/docs/CACHE_BENCHMARK_REPORT_20260903.md` | 8×H20、848×464×121 first-block cache 正式实验报告 |
+| `examples/diffusion/leo2/docs/QUALITY_EVALUATION_PLAN.md` | VBench 系列调研、已安装环境、评估协议与复现命令 |
 | `examples/diffusion/leo2/data/` | the 32 training prompts + 8 held-out prompts |
+
+## Portable setup
+
+All Leo2 source dependencies are vendored under `unirl/models/leo2/vendor`;
+there are no Git submodules or external source checkouts at runtime. The default
+model YAML is the vendored 480p stage-3 configuration and the T2V generation
+JSON is a package resource. The recipe uses the committed prompt files.
+
+Weights and model assets remain external because they are about 178 GB. Set
+`LEO2_CKPT_DIR` and `LEO2_ASSETS_BASE` explicitly, then validate them before
+launching:
+
+```bash
+python -m unirl.models.leo2.verify_artifacts --require-checksums
+bash examples/diffusion/leo2/scripts/unirl_smoke.sh
+```
+
+See [ENVIRONMENT.md](ENVIRONMENT.md) for the Torch 2.10 ABI contract, compiled
+FA2/FA3/DeepEP requirements and the 480p×121 launch override. The versioned
+artifact layout and checksum interface is in the packaged
+[artifacts.yaml](../../../unirl/models/leo2/resources/artifacts.yaml).
+
+For a source-isolation check that directly produces one 480p, 121-frame video
+with the retained native sampler, run:
+
+```bash
+LEO2_RUNTIME_PYTHON=/path/to/python \
+  bash examples/diffusion/leo2/scripts/native_t2v.sh
+```
+
+The default is 50 denoising steps. Set `LEO2_INFER_STEPS=1` for a quick load,
+forward and decode smoke; output goes to `outputs/leo2/native_t2v` unless
+`LEO2_OUTPUT_DIR` is set.
 
 ## Native inference first-block cache
 

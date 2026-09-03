@@ -1,4 +1,5 @@
 import contextlib
+import os
 from typing import Optional
 
 import loguru
@@ -6,6 +7,8 @@ import torch
 import torch.distributed as dist
 
 
+from hy_parallelism.bing_utils import gather_obj
+from hy_parallelism.common.logging import trace_log
 from hy_parallelism.models.modules.moe.ops.group_gemm.kernel.group_gemm import group_gemm_same_mn, group_gemm_same_nk
 from hy_parallelism.models.modules.moe.moe_utils import generate_weights_idx, permute, sort_chunks_by_idxs, unpermute
 from hy_parallelism.training.jvp_utils import jvp_guard, tolist
@@ -223,13 +226,119 @@ def tokens_post_all2all(
 
     return unpermute_outputs
 
-def ep_grouped_gemm(
+def _cumsum_to_tokens_per_expert(cumsum: torch.Tensor) -> torch.Tensor:
+    tokens_per_expert = torch.empty_like(cumsum)
+    if cumsum.numel() == 0:
+        return tokens_per_expert.cpu()
+    tokens_per_expert[0] = cumsum[0]
+    if cumsum.numel() > 1:
+        tokens_per_expert[1:] = cumsum[1:] - cumsum[:-1]
+    return tokens_per_expert.cpu()
+
+
+def _ep_grouped_gemm_cutlass(
     permute_tokens,
-    cumsum,
+    tokens_per_expert,
     fc1_1_weight,
     fc1_2_weight,
     fc2_weight,
 ):
+    try:
+        import grouped_gemm  # pyright: ignore[reportMissingImports]
+    except ImportError:
+        grouped_gemm = None
+    if grouped_gemm is None:
+        raise RuntimeError("CUTLASS grouped GEMM is not available. Please install grouped_gemm via `pip3 install grouped_gemm` or unset "
+            "HY_PARALLELISM_USE_CUTLASS_GROUPED_GEMM. "
+            "pssh -i -P -t 0 -h /root/hosts \"pip3 install grouped_gemm\"")
+    # grouped_gemm_installed = grouped_gemm is not None
+    # if not all(gather_obj(grouped_gemm_installed)):
+    #     if os.environ.get('LOCAL_RANK', '0') == '0':
+    #         os.system("pip3 install grouped_gemm")
+    #     dist.barrier()
+    #     try:
+    #         import grouped_gemm
+    #     except ImportError as e:
+    #         raise RuntimeError(
+    #             "CUTLASS grouped GEMM is not available. Please install grouped_gemm via `pip3 install grouped_gemm` or unset "
+    #             "HY_PARALLELISM_USE_CUTLASS_GROUPED_GEMM. "
+    #             "pssh -i -P -t 0 -h /root/hosts \"pip3 install grouped_gemm\""
+    #         ) from e
+
+    tokens_per_expert = tokens_per_expert.cpu() # grouped_gemm requires `batch_sizes.is_cpu()` to be true
+    gg_ops = grouped_gemm.ops
+
+    fc1_1_output = gg_ops.gmm(
+        permute_tokens, fc1_1_weight, tokens_per_expert, trans_b=True,
+    )
+    fc1_2_output = gg_ops.gmm(
+        permute_tokens, fc1_2_weight, tokens_per_expert, trans_b=True,
+    )
+    fc1_output = torch.ops.aten.silu(fc1_1_output) * fc1_2_output
+    return gg_ops.gmm(
+        fc1_output, fc2_weight, tokens_per_expert, trans_b=True,
+    )
+
+
+def grouped_gemm_cutlass_fused_weights(
+    permute_tokens,
+    tokens_per_expert,
+    fc1_weight, # [up, gate]
+    fc2_weight,
+):
+    try:
+        import grouped_gemm  # pyright: ignore[reportMissingImports]
+    except ImportError:
+        grouped_gemm = None
+    if grouped_gemm is None:
+        raise RuntimeError(
+            "CUTLASS grouped GEMM is not available. Please install grouped_gemm via "
+            "`pip3 install grouped_gemm` or unset HY_PARALLELISM_USE_CUTLASS_GROUPED_GEMM. "
+            "pssh -i -P -t 0 -h /root/hosts \"pip3 install grouped_gemm\""
+        )
+
+    tokens_per_expert = tokens_per_expert.cpu()  # grouped_gemm requires `batch_sizes.is_cpu()`
+    gg_ops = grouped_gemm.ops
+
+    fc1_output = gg_ops.gmm(
+        permute_tokens, fc1_weight, tokens_per_expert, trans_b=True,
+    )
+    fc1_2_output, fc1_1_output = fc1_output.chunk(2, dim=-1)
+    intermediate = torch.ops.aten.silu(fc1_1_output) * fc1_2_output
+    return gg_ops.gmm(
+        intermediate, fc2_weight, tokens_per_expert, trans_b=True,
+    )
+
+
+def ep_grouped_gemm(
+    permute_tokens,
+    tokens_per_expert,
+    fc1_1_weight,
+    fc1_2_weight,
+    fc2_weight,
+    d2h_event: Optional[torch.cuda.Event] = None,
+):
+    use_cutlass_env = os.environ.get("HY_PARALLELISM_USE_CUTLASS_GROUPED_GEMM")
+    use_cutlass = use_cutlass_env is None or use_cutlass_env.lower() in ("1", "true", "yes")
+    if use_cutlass:
+        try:
+            # 避免後續 cuda kernel 中 cpu 想讀取時未 ready
+            if d2h_event is not None:
+                d2h_event.synchronize()
+            # else:
+            #     torch.cuda.synchronize()
+            return _ep_grouped_gemm_cutlass(
+                permute_tokens, tokens_per_expert, fc1_1_weight, fc1_2_weight, fc2_weight,
+            )
+        except RuntimeError:
+            if use_cutlass_env is None:
+                trace_log(
+                    "HY_PARALLELISM_USE_CUTLASS_GROUPED_GEMM is unset, but CUTLASS grouped GEMM is unavailable; "
+                    "fallback to EPGroupGemm.apply."
+                )
+            else:
+                raise
+    cumsum = torch.cumsum(tokens_per_expert, dim=0).to(permute_tokens.device)
     return EPGroupGemm.apply(permute_tokens, cumsum, fc1_1_weight, fc1_2_weight, fc2_weight)[0]
 
 

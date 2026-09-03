@@ -108,13 +108,14 @@ class LeoModelHF(LeoModelBase, Leo2PreTrainedModel, GenerationMixin):
             audio_config: Optional[LeoConfig] = None,
             dtype: Optional[torch.dtype] = None,
             device: Optional[torch.device] = None,
+            initialize_weights: bool = True,
     ):
         hf_config = Leo2HFConfig(config.to_hf_config())
         super().__init__(hf_config)
         self.args = args
         self._dtype = dtype
         self.config = hf_config
-        self.__post_init__(config, txt_config, audio_config, dtype, device, args)
+        self.__post_init__(config, txt_config, audio_config, dtype, device, args, initialize_weights)
 
         # Initialize image processor
         self.image_processor = ImageProcessor(args) if "vae_image" in args.modality else None

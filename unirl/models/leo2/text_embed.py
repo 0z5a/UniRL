@@ -1,19 +1,4 @@
-"""Leo2 conditioning stage -- capture the native input prep, then embed.
-
-Instead of re-implementing ``leo_hf.generate_video``'s input preparation
-(template application, tokenization, media layout), we let the native code run
-it and CAPTURE the kwargs at the diffusion-pipeline call boundary. That makes
-this stage immune to drift in hymm's prep logic: whatever the verified
-inference path feeds its denoising loop is exactly what the RL stage gets.
-
-Flow per prompt (batch-1, mirrors pipeline_leo.__call__ up to its loop):
-  1. swap ``model.diffusion_pipeline`` for a recorder, call ``generate_video``
-     with guidance_scale=1.0 -> recorder raises after storing the call kwargs
-  2. run ``pipeline.encode_prompt(model_kwargs)`` (Qwen3.5, frozen)
-  3. pop input_ids, build attention_mask (pipeline_leo.py:810-815)
-  4. stash {input_ids, model_kwargs, image_size, video_duration} on the
-     conditions blob for the diffusion stage / replay.
-"""
+"""Build Leo2 prompt conditions through the native input-preparation boundary."""
 
 from __future__ import annotations
 
@@ -25,7 +10,7 @@ from unirl.config.require import require
 from unirl.types.conditions import TextEmbedCondition
 from unirl.types.primitives import Texts
 
-from .conditions import Leo2Conditions
+from .conditions import LEO2_MODEL_KWARGS, Leo2Conditions
 
 if TYPE_CHECKING:
     from .bundle import Leo2Bundle
@@ -94,9 +79,7 @@ class Leo2CondStage:
         embeds: List[torch.Tensor] = []
         with self.bundle.text_encoder_ctx():
             for prompt, seed in zip(prompts, seeds):
-                captured = self._capture(
-                    prompt, height=height, width=width, num_frames=num_frames, seed=seed
-                )
+                captured = self._capture(prompt, height=height, width=width, num_frames=num_frames, seed=seed)
                 model_kwargs = captured.get("model_kwargs")
                 require(model_kwargs is not None, "Leo2CondStage: captured call carries no model_kwargs")
 
@@ -112,10 +95,15 @@ class Leo2CondStage:
                 # pipeline_leo.py:810-814 verbatim
                 input_ids = model_kwargs.pop("input_ids")
                 attention_mask = self.bundle.model._prepare_attention_mask_for_generation(  # noqa
-                    input_ids, self.bundle.model.generation_config, model_kwargs=model_kwargs,
+                    input_ids,
+                    self.bundle.model.generation_config,
+                    model_kwargs=model_kwargs,
                 )
                 model_kwargs["attention_mask"] = attention_mask.to(self.bundle.device)
-                _report_foreign_types(model_kwargs)
+                model_kwargs = _to_transport_tree(
+                    {key: model_kwargs[key] for key in LEO2_MODEL_KWARGS if key in model_kwargs},
+                    path="model_kwargs",
+                )
                 blobs.append(
                     dict(
                         input_ids=input_ids,
@@ -132,42 +120,39 @@ class Leo2CondStage:
                     else torch.zeros(1, 1, 1)
                 )
 
-        return Leo2Conditions(
-            text=TextEmbedCondition(embeds=torch.cat([e[:1] for e in embeds], dim=0) if embeds else None),
-            hymm=blobs,
+        return Leo2Conditions.from_dict(
+            {
+                "text": TextEmbedCondition(embeds=torch.cat([e[:1] for e in embeds], dim=0) if embeds else None),
+                "hymm": blobs,
+            }
         )
 
 
-_FOREIGN_REPORTED = False
-
-
-def _report_foreign_types(model_kwargs: Dict[str, Any]) -> None:
-    """One-time diagnostic: model_kwargs entries whose class is neither torch nor
-    builtin. Their pickles drag hymm onto the driver's / reward actors' sys.path
-    (R13), so this lists what a pure-tensor blob would have to encode instead."""
-    global _FOREIGN_REPORTED
-    if _FOREIGN_REPORTED:
-        return
-    _FOREIGN_REPORTED = True
-
-    def _cls(v):
-        mod = type(v).__module__
-        return None if mod == "builtins" or mod.startswith("torch") else f"{mod}.{type(v).__qualname__}"
-
-    foreign = {}
-    for k, v in model_kwargs.items():
-        c = _cls(v)
-        if c:
-            foreign[k] = c
-        elif isinstance(v, (list, tuple)):
-            inner = {_cls(x) for x in v if _cls(x)}
-            if inner:
-                foreign[k] = f"{type(v).__name__}[{','.join(sorted(inner))}]"
-        elif isinstance(v, dict):
-            inner = {_cls(x) for x in v.values() if _cls(x)}
-            if inner:
-                foreign[k] = f"dict[{','.join(sorted(inner))}]"
-    print(f"[leo2 cond] non-builtin model_kwargs types: {foreign}", flush=True)
+def _to_transport_tree(value: Any, *, path: str) -> Any:
+    """Copy a value tree into Tensor/builtin-only transport form."""
+    if isinstance(value, torch.Tensor) or value is None or type(value) in (bool, int, float, str):
+        return value
+    if isinstance(value, slice):
+        return slice(
+            _to_transport_tree(value.start, path=f"{path}.start"),
+            _to_transport_tree(value.stop, path=f"{path}.stop"),
+            _to_transport_tree(value.step, path=f"{path}.step"),
+        )
+    if isinstance(value, list):
+        return [_to_transport_tree(item, path=f"{path}[{index}]") for index, item in enumerate(value)]
+    if isinstance(value, tuple):
+        return tuple(_to_transport_tree(item, path=f"{path}[{index}]") for index, item in enumerate(value))
+    if isinstance(value, dict):
+        out = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise TypeError(f"{path} keys must be strings, got {type(key).__name__}")
+            out[key] = _to_transport_tree(item, path=f"{path}.{key}")
+        return out
+    raise TypeError(
+        f"{path} contains non-transportable {type(value).__module__}.{type(value).__qualname__}; "
+        "flatten it to Tensor/builtin values before crossing Ray actors"
+    )
 
 
 def _slim(captured: Dict[str, Any]) -> Dict[str, Any]:

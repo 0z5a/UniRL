@@ -1,5 +1,5 @@
 import os
-from typing import Optional, Sequence, Union
+from typing import Optional, Sequence, Tuple, Union
 
 import torch
 from hy_parallelism.training.jvp_utils import in_jvp_context, jvp_guard, tolist
@@ -10,7 +10,7 @@ USE_FUSED_SORT_CHUNKS = os.environ.get("HY_PARALLELISM_FUSED_SORT_CHUNKS", "0").
     "yes",
 )
 
-def permute(tokens: torch.Tensor, routing_map: torch.Tensor):
+def permute(tokens: torch.Tensor, routing_map: torch.Tensor, cast_dtype: Optional[torch.dtype] = None):
     """
     Permutes the tokens according to the routing map.
 
@@ -21,6 +21,8 @@ def permute(tokens: torch.Tensor, routing_map: torch.Tensor):
     """
     num_tokens, _ = tokens.shape
     num_experts = routing_map.shape[0]
+    if cast_dtype is not None:
+        tokens = tokens.to(cast_dtype)
 
     # mask [num_tokens, num_experts] -> [num_experts, num_tokens]
     routing_map = routing_map.bool()
@@ -35,12 +37,88 @@ def permute(tokens: torch.Tensor, routing_map: torch.Tensor):
     return permuted_input, sorted_indices
 
 
+def permute_no_sync(
+    tokens: torch.Tensor,
+    topk_idx: torch.Tensor,
+    cast_dtype: Optional[torch.dtype] = None,
+):
+    """
+    Permute tokens by sorting ``topk_idx`` into expert-major order.
+
+    Unlike :func:`permute`, the output length is known a priori as
+    ``num_tokens * top_k``, so no CUDA→CPU sync is required.
+
+    Assumes every token has exactly ``top_k`` valid expert assignments
+    (i.e. dropless / no token dropping).
+
+    Args:
+        tokens (torch.Tensor): Input tokens, [num_tokens, hidden_dim].
+        topk_idx (torch.Tensor): Gate top-k expert indices, [num_tokens, top_k].
+        cast_dtype (torch.dtype, optional): Optional dtype to cast tokens to.
+
+    Returns:
+        Tuple[torch.Tensor, torch.Tensor]: Permuted tokens and the token index
+        mapping used for unpermute, both of length ``num_tokens * top_k``.
+    """
+    num_tokens, _ = tokens.shape
+    top_k = topk_idx.shape[-1]
+    if cast_dtype is not None:
+        tokens = tokens.to(cast_dtype)
+
+    topk_idx = topk_idx.reshape(num_tokens, top_k)
+    expert_ids = topk_idx.reshape(-1)
+    token_ids = (
+        torch.arange(num_tokens, device=topk_idx.device)
+        .unsqueeze(1)
+        .expand(-1, top_k)
+        .reshape(-1)
+    )
+    # Stable sort keeps ascending token order within each expert, matching
+    # routing_map.masked_select over [num_experts, num_tokens].
+    sorted_indices = token_ids[torch.argsort(expert_ids, stable=True)]
+    permuted_input = tokens.index_select(0, sorted_indices)
+    return permuted_input, sorted_indices
+
+
+def build_fused_unpermute_row_id_map(
+    permutation_mapping: torch.Tensor,
+    routing_map: torch.Tensor,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Derive fused_unpermute inputs from dropless unpermute args.
+
+    fused_unpermute expects:
+      - routing_map: [num_tokens, num_experts]
+      - row_id_map:  [num_experts * num_tokens], 1-indexed into permuted rows
+        (kernel does ``src_row = row_id_map[...] - 1``)
+
+    permutation_mapping is the expert-major token index list from ``permute``.
+    """
+    routing_map_bool = routing_map.bool()
+    num_experts, num_tokens = routing_map_bool.shape
+    device = permutation_mapping.device
+    tokens_per_expert = routing_map_bool.sum(dim=1)
+    expert_ids = torch.repeat_interleave(
+        torch.arange(num_experts, device=device, dtype=torch.long),
+        tokens_per_expert.long(),
+        output_size=permutation_mapping.numel(), # avoid stream sync
+    )
+    row_id_2d = torch.zeros(num_experts, num_tokens, dtype=torch.int64, device=device)
+    row_id_2d[expert_ids, permutation_mapping] = (
+        torch.arange(permutation_mapping.numel(), device=device, dtype=torch.int64) + 1
+    )
+    routing_map_fused = routing_map_bool.T.contiguous().to(torch.int64)
+    return row_id_2d.reshape(-1), routing_map_fused
+
+
 def unpermute(
     tokens: torch.Tensor,
     hidden_states_shape: torch.Size,
     permutation_mapping: torch.Tensor,
     routing_map: torch.Tensor,
     routing_weights: torch.Tensor = None,
+    use_fused_unpermute: bool = False,
+    *,
+    row_id_map=None, routing_map_fused=None, # only required for fused implementation
 ):
     """
     Unpermutes the tokens and apply the weight.
@@ -54,10 +132,33 @@ def unpermute(
     Returns:
         torch.Tensor: The unpermuted token tensor, [num_tokens, hidden_dim].
     """
+    if (
+        use_fused_unpermute
+        and tokens.is_cuda
+        and permutation_mapping.numel() > 0
+        and not in_jvp_context()
+    ):
+        from hy_parallelism.models.modules.moe.ptm_moe.fused_moe.fused_permutation import (
+            fused_unpermute,
+        )
+
+        if row_id_map is None or routing_map_fused is None:
+            row_id_map, routing_map_fused = build_fused_unpermute_row_id_map(
+                permutation_mapping, routing_map
+            )
+        probs = routing_weights.contiguous() if routing_weights is not None else None
+        return fused_unpermute(
+            tokens.contiguous(),
+            row_id_map,
+            hidden_states_shape,
+            probs,
+            routing_map_fused,
+        )
+
     if routing_weights is not None:
         tokens_weight = routing_weights.T.contiguous().masked_select(routing_map.bool())
         tokens = tokens * tokens_weight.unsqueeze(-1)
-        
+
     hidden_dim = hidden_states_shape[-1]
 
     unpermuted_tokens = torch.zeros(hidden_states_shape, device=tokens.device, dtype=tokens.dtype)

@@ -42,6 +42,18 @@ This project reads the following `HY_PARALLELISM_*` environment variables:
 
 - ENABLE_HY_PARALLELISM_LOGGING
   - 开启 hy_parallelism 的日志格式
+
+- `HY_PARALLELISM_DEEPEP_FAST_EXPERT_SORT`
+  - 开启 deepep 时， fast expert sort 的开关
+
+- `HY_PARALLELISM_DEEPEP_ASYNC_FINISH` (default: `1`)
+  - 开启 deepep 时， dispatch/combine 的 async_finish 通信-计算重叠
+
+- `NUM_MAX_DISPATCH_TOKENS_PER_RANK` (default: `10240`)
+  - 开启 deepep LL 时， num_max_dispatch_tokens_per_rank 的默认值
+
+- `HY_PARALLELISM_USE_CUTLASS_GROUPED_GEMM` (default: `0`)
+  - 开启 cutlass grouped GEMM 的开关
 """
 
 # ================================================
@@ -52,9 +64,17 @@ This project reads the following `HY_PARALLELISM_*` environment variables:
 from .version import __version__
 
 import os
+# try:
+#     if 'CUDA_DEVICE_MAX_CONNECTIONS' not in os.environ or int(os.environ['CUDA_DEVICE_MAX_CONNECTIONS']) <= 1:
+#         os.environ['CUDA_DEVICE_MAX_CONNECTIONS'] = '64'
+# except ValueError:
+#     os.environ['CUDA_DEVICE_MAX_CONNECTIONS'] = '64'
+
+from .cpu_affinity import bind_cpu_for_local_rank
 import atexit
 import torch
 import time
+import loguru
 from packaging import version
 from hy_parallelism.utils import get_taiji_user
 from .failure_state_hooks import register_failure_state_hooks
@@ -77,6 +97,9 @@ __all__ = [
     'parallel_utils',
     'fsdp_util',
     'get_logger',
+    'increase_non_torch_allocator_buffer',
+    'decrease_non_torch_allocator_buffer',
+    'set_non_torch_allocator_buffer',
 ]
 
 
@@ -85,6 +108,8 @@ from . import utils as parallel_utils
 # from .engines import parallel_engine
 from .distributed import fsdp_util
 from .checkpoint import checkpoint_manager
+
+
 
 
 def debug_distributed(TORCH_CPP_LOG_LEVEL="INFO", TORCH_DISTRIBUTED_DEBUG="DETAIL"):
@@ -106,26 +131,87 @@ if os.environ.get('HY_PARALLELISM_DEBUG', '0') == '1':
     atexit.register(context.__exit__, None, None, None)
 
 
+
+
+
 from .common.logging import get_logger, configure_logger_level
-if torch.cuda.is_available():
-    _fraction_raw = os.environ.get("HYMM_CUDA_MEMORY_FRACTION", "0.95")
+
+
+def _cuda_device(device=None):
+    if device is None:
+        device = torch.device(f"cuda:{os.environ.get('LOCAL_RANK', '0')}")
+    return device
+
+
+def _get_memory_fraction(device=None):
+    device = _cuda_device(device)
+    getter = getattr(torch.cuda, 'get_per_process_memory_fraction', None)
+    if getter is None:
+        getter = torch.cuda.memory.get_per_process_memory_fraction
+    return getter(device)
+
+
+def _buffer_ratio(ratio=None, n_gb=None, device=None) -> float:
+    if (ratio is None) == (n_gb is None):
+        raise ValueError('Exactly one of ratio or n_gb must be provided')
+    if ratio is not None:
+        return float(ratio)
+    device = _cuda_device(device)
+    total_mem = torch.cuda.get_device_properties(device).total_memory
+    return float(n_gb) * (1024 ** 3) / total_mem
+
+
+def increase_non_torch_allocator_buffer(ratio=None, n_gb=None, device=None) -> float:
+    r"""Reserve more GPU memory for non-torch allocators by decreasing torch memory fraction.
+
+    Provide exactly one of ``ratio`` (fraction of total GPU memory) or ``n_gb`` (GiB).
+    New fraction = current fraction - delta.
+    """
+    device = _cuda_device(device)
+    delta = _buffer_ratio(ratio=ratio, n_gb=n_gb, device=device)
+    fraction = max(0.0, min(1.0, _get_memory_fraction(device) - delta))
+    torch.cuda.set_per_process_memory_fraction(fraction, device)
+
+    # total_mem = torch.cuda.get_device_properties(device).total_memory
+    # loguru.logger.info(f'increase_non_torch_allocator_buffer: {fraction=} {delta=} {ratio=} {n_gb=} {total_mem=}')
+    return fraction
+
+
+def decrease_non_torch_allocator_buffer(ratio=None, n_gb=None, device=None) -> float:
+    r"""Reserve less GPU memory for non-torch allocators by increasing torch memory fraction.
+
+    Provide exactly one of ``ratio`` (fraction of total GPU memory) or ``n_gb`` (GiB).
+    New fraction = current fraction + delta.
+    """
+    device = _cuda_device(device)
+    delta = _buffer_ratio(ratio=ratio, n_gb=n_gb, device=device)
+    fraction = max(0.0, min(1.0, _get_memory_fraction(device) + delta))
+    torch.cuda.set_per_process_memory_fraction(fraction, device)
+    loguru.logger.info(f'decrease_non_torch_allocator_buffer: {fraction=}')
+    return fraction
+
+
+def set_non_torch_allocator_buffer(ratio=None, n_gb=None, device=None) -> float:
+    r"""Set the GPU memory reserved for non-torch allocators.
+
+    Provide exactly one of ``ratio`` (fraction of total GPU memory) or ``n_gb`` (GiB).
+    Torch memory fraction is set to ``1 - reserved``.
+    """
+    device = _cuda_device(device)
+    reserved = _buffer_ratio(ratio=ratio, n_gb=n_gb, device=device)
+    fraction = max(0.0, min(1.0, 1.0 - reserved))
+    torch.cuda.set_per_process_memory_fraction(fraction, device)
+    return fraction
+
+
+if torch.cuda.is_available() and 'LOCAL_RANK' in os.environ:
     try:
-        _fraction = float(_fraction_raw)
-    except ValueError as exc:
-        raise ValueError(
-            f"HYMM_CUDA_MEMORY_FRACTION must be a float in (0, 1], got {_fraction_raw!r}"
-        ) from exc
-    if not 0.0 < _fraction <= 1.0:
-        raise ValueError(
-            f"HYMM_CUDA_MEMORY_FRACTION must be in (0, 1], got {_fraction}"
-        )
-    try:
-        torch.cuda.set_per_process_memory_fraction(
-            _fraction, torch.device(f"cuda:{os.environ.get('LOCAL_RANK', '0')}")
-        )
-    except RuntimeError as exc:
-        raise RuntimeError(
-            f"failed to set CUDA memory fraction={_fraction} for "
-            f"LOCAL_RANK={os.environ.get('LOCAL_RANK', '0')}"
-        ) from exc
+        local_rank = int(os.environ.get('LOCAL_RANK', '0'))
+        torch.cuda.set_device(local_rank)
+        set_non_torch_allocator_buffer(ratio=0.02)
+        # set_non_torch_allocator_buffer(ratio=0.20) # h800 test on h20
+        # import gc
+        # gc.disable()
+    except Exception as e:
+        pass
 register_failure_state_hooks()

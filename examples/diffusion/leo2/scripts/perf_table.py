@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
-"""Summarise ``[leo2 perf]`` / ``[leo2 mem]`` lines from a UniRL smoke log.
+"""Summarise ``[leo2 perf]`` and ``[leo2 mem]`` lines from a UniRL smoke log."""
 
-Ray dedups identical worker lines ("repeated Nx across cluster"), so counts are
-per *distinct* line; timings/peaks are still representative of every rank.
-"""
 import re
 import statistics
 import sys
@@ -26,11 +23,18 @@ def main(path: str) -> None:
                 m = PERF.search(sub)
                 if m:
                     rep = REPEAT.search(sub)
-                    rows.append({
-                        "idx": int(m[1]), "grad": m[2] == "True", "tokens": int(m[3]),
-                        "dt": float(m[4]), "before": float(m[5]), "after": float(m[6]),
-                        "peak": float(m[7]), "rep": int(rep[1]) if rep else 1,
-                    })
+                    rows.append(
+                        {
+                            "idx": int(m[1]),
+                            "grad": m[2] == "True",
+                            "tokens": int(m[3]),
+                            "dt": float(m[4]),
+                            "before": float(m[5]),
+                            "after": float(m[6]),
+                            "peak": float(m[7]),
+                            "rep": int(rep[1]) if rep else 1,
+                        }
+                    )
                 p = PRE.search(sub)
                 if p:
                     pre = (float(p[1]), float(p[2]))
@@ -41,12 +45,14 @@ def main(path: str) -> None:
         if not sel:
             continue
         dts = [r["dt"] for r in sel]
-        print(f"{'train (grad)' if grad else 'rollout/replay (no_grad)':>26}: "
-              f"n_lines={len(sel)} (x{sum(r['rep'] for r in sel)} incl. dedup) "
-              f"tokens~{statistics.median(r['tokens'] for r in sel):.0f} "
-              f"dt median={statistics.median(dts):.2f}s min={min(dts):.2f}s max={max(dts):.2f}s "
-              f"peak max={max(r['peak'] for r in sel):.1f}GB "
-              f"resident after={max(r['after'] for r in sel):.1f}GB")
+        print(
+            f"{'train (grad)' if grad else 'rollout/replay (no_grad)':>26}: "
+            f"n_lines={len(sel)} (x{sum(r['rep'] for r in sel)} incl. dedup) "
+            f"tokens~{statistics.median(r['tokens'] for r in sel):.0f} "
+            f"dt median={statistics.median(dts):.2f}s min={min(dts):.2f}s max={max(dts):.2f}s "
+            f"peak max={max(r['peak'] for r in sel):.1f}GB "
+            f"resident after={max(r['after'] for r in sel):.1f}GB"
+        )
 
 
 if __name__ == "__main__":

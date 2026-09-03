@@ -88,4 +88,3 @@ dataloader_config:
     num_workers: 4
     pin_memory: True
     prefetch_factor: 2
-  

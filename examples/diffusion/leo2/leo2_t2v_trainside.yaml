@@ -32,7 +32,8 @@ bundle:
     autocast_precision: bf16
     trajectory_precision: bf16
     logprob_precision: fp32
-    ckpt_path: ${oc.env:LEO2_CKPT_DIR,/apdcephfs_zwfy8/share_305110755/hunyuan/zuhaoding/HYV2.0/ckpts/leo2_moe_a12b_480p/iter_0063300_torch/weights}
+    ckpt_path: ${oc.env:LEO2_CKPT_DIR}
+    assets_base: ${oc.env:LEO2_ASSETS_BASE}
     video_shift: 3.0
     text_encoder_gpu_transient: true
 
@@ -133,8 +134,8 @@ data_source:
   _target_: unirl.data.data_source.MultimodalRLDataSource
   args:
     run:
-      data_path: ${oc.env:LEO2_PROMPT_FILE,/apdcephfs_zwfy8/share_305110755/hunyuan/zuhaoding/HYV2.0/experiments/2026-08-27_leo2-unirl-flowgrpo/data/train.txt}
-      eval_data_path: ${oc.env:LEO2_EVAL_PROMPT_FILE,/apdcephfs_zwfy8/share_305110755/hunyuan/zuhaoding/HYV2.0/experiments/2026-08-27_leo2-unirl-flowgrpo/data/test.txt}
+      data_path: ${oc.env:LEO2_PROMPT_FILE,examples/diffusion/leo2/data/train.txt}
+      eval_data_path: ${oc.env:LEO2_EVAL_PROMPT_FILE,examples/diffusion/leo2/data/test.txt}
       seed: ${sampling.seed}
     algorithm:
       prompts_per_rollout: ${batch_size}

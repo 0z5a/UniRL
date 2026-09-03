@@ -26,9 +26,16 @@ all_patches.extend([
     ".torch.patch_pipeline_schedule",
     ".torch.patch_torch_nn_utils_grad_norm",
     '.torch.patch_pick_load_for_old_python',
+    '.torch.patch_checkpoint_wrapper',
     '.torch.patch_dcp_error_pickle_code_object_for_python313',
+    # Must run after patch_dcp_error_pickle_code_object_for_python313 so
+    # reduce_scatter can pick up the patched _wrap_exception at call time.
+    '.torch.patch_dcp_dist_wrapper',
+    # '.torch.patch_all_gather_into_tensor_for_distributed_debug',
     '.fsdp.patch_reshard_after_forward',
     # ".torch.patch_torch_grouped_mm",
+    '.fsdp.patch_skipped_unshard_in_dual_stream_ac',
+    '.fsdp.patch_record_post_forward',
 
     # 如果不需要创建多个 device mesh, 可以不 patch 这个
     # TODO: 这个在新版本的 pytorch 会报错, `_flatten_mesh_list` attribute is not found
@@ -43,8 +50,7 @@ if os.environ.get("HY_PARALLELISM_PATCH_TORCH_LOAD", "0") == "1":
 if os.environ.get('HY_PARALLELISM_ENABLE_JVP', '0') == '1' and TORCH_TITAN_INSTALLED:
     all_patches.append(".moe.patch_for_jvp")
 
-if os.environ.get('HY_PARALLELISM_PACK_CHECKPOINT_FOR_INFERENCE', '0') == '1':
-    all_patches.append(".torch.patch_checkpoint_wrapper")
+# if os.environ.get('HY_PARALLELISM_PACK_CHECKPOINT_FOR_INFERENCE', '0') == '1':
 
 for patch in all_patches:
     if os.environ.get('RANK', '0') == '0':

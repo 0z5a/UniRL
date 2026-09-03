@@ -1,0 +1,14 @@
+{
+  "audio_sample_rate": 48000,
+  "bot_task": "video",
+  "diff_guidance_scale": 1.0,
+  "diff_guidance_scale_audio": 1.0,
+  "diff_infer_steps": 50,
+  "flow_shift": 3.0,
+  "flow_shift_audio": 3.0,
+  "flow_shift_video": 3.0,
+  "ref_mode": "channel",
+  "sequence_template": "instruct",
+  "transformers_version": "5.6.0",
+  "use_system_prompt": "li-dit-encode-visual-qwen-3.5"
+}

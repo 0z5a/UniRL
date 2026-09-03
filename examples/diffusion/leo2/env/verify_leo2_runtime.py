@@ -1,0 +1,188 @@
+#!/usr/bin/env python3
+"""Verify the relocatable Leo2 inference runtime and its compiled kernels."""
+
+from __future__ import annotations
+
+import argparse
+import importlib.metadata
+import inspect
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+EXPECTED = {
+    "python": "3.12",
+    "torch": "2.7.1",
+    "cuda": "12.9",
+    "transformers": "5.6.0",
+    "diffusers": "0.38.0",
+    "flash-attn": "2.7.4.post1",
+    "flash-attn-3": "3.0.0b1",
+    "deep-ep": "1.2.1+R03C03",
+    "nvidia-nvshmem-cu12": "3.7.0",
+    "unirl": "0.1.0",
+}
+
+
+def _version(name: str) -> str:
+    return importlib.metadata.version(name)
+
+
+def _assert_inside(path: str | os.PathLike[str], prefix: Path) -> None:
+    resolved = Path(path).resolve()
+    if not resolved.is_relative_to(prefix):
+        raise RuntimeError(f"runtime module escaped prefix: {resolved}")
+
+
+def _check_filesystem(prefix: Path) -> dict[str, int]:
+    absolute_links: list[str] = []
+    direct_urls: list[str] = []
+    foreign_shebangs: list[str] = []
+    absolute_rpaths: list[str] = []
+    elf_count = 0
+    patchelf = prefix / "bin/patchelf"
+
+    for path in prefix.rglob("*"):
+        if path.is_symlink():
+            target = os.readlink(path)
+            if os.path.isabs(target):
+                absolute_links.append(f"{path}: {target}")
+            continue
+        if not path.is_file():
+            continue
+        if path.name == "direct_url.json":
+            direct_urls.append(str(path))
+        try:
+            with path.open("rb") as handle:
+                head = handle.read(4096)
+        except OSError:
+            continue
+        if head.startswith(b"#!"):
+            shebang = head.splitlines()[0][2:].decode(errors="replace").split()[0]
+            if shebang.startswith("/") and not (
+                Path(shebang).is_relative_to(prefix) or shebang.startswith("/usr/bin/") or shebang.startswith("/bin/")
+            ):
+                foreign_shebangs.append(f"{path}: {shebang}")
+        if head[:4] != b"\x7fELF":
+            continue
+        elf_count += 1
+        result = subprocess.run(
+            [str(patchelf), "--print-rpath", str(path)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            entries = [entry for entry in result.stdout.strip().split(":") if entry]
+            if any(entry.startswith("/") for entry in entries):
+                absolute_rpaths.append(f"{path}: {result.stdout.strip()}")
+
+    errors = {
+        "absolute symlinks": absolute_links,
+        "direct_url metadata": direct_urls,
+        "foreign shebangs": foreign_shebangs,
+        "absolute ELF RPATHs": absolute_rpaths,
+    }
+    messages = [f"{kind}:\n  " + "\n  ".join(paths) for kind, paths in errors.items() if paths]
+    if messages:
+        raise RuntimeError("runtime is not relocatable:\n" + "\n".join(messages))
+    return {"elf_files": elf_count}
+
+
+def _check_gpu(torch: object) -> dict[str, object]:
+    import flash_attn
+    import flash_attn_interface
+
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA is unavailable")
+    if torch.cuda.get_device_capability(0)[0] != 9:
+        raise RuntimeError(f"FA3 requires Hopper, got capability {torch.cuda.get_device_capability(0)}")
+
+    torch.manual_seed(7)
+    q = torch.randn((1, 32, 4, 64), device="cuda", dtype=torch.bfloat16)
+    k = torch.randn_like(q)
+    v = torch.randn_like(q)
+    fa2 = flash_attn.flash_attn_func(q, k, v, causal=False)
+    fa3 = flash_attn_interface.flash_attn_func(q, k, v, causal=False)[0]
+    dense_max_abs = float((fa2 - fa3).abs().max())
+
+    flat_q, flat_k, flat_v = q[0], k[0], v[0]
+    cu = torch.tensor([0, 32], device="cuda", dtype=torch.int32)
+    fa2_varlen = flash_attn.flash_attn_varlen_func(flat_q, flat_k, flat_v, cu, cu, 32, 32, causal=False)
+    fa3_varlen = flash_attn_interface.flash_attn_varlen_func(
+        flat_q, flat_k, flat_v, cu, cu, None, None, 32, 32, causal=False
+    )[0]
+    varlen_max_abs = float((fa2_varlen - fa3_varlen).abs().max())
+    if dense_max_abs != 0.0 or varlen_max_abs != 0.0:
+        raise RuntimeError(f"FA2/FA3 parity failed: dense={dense_max_abs}, varlen={varlen_max_abs}")
+    return {
+        "gpu": torch.cuda.get_device_name(0),
+        "capability": list(torch.cuda.get_device_capability(0)),
+        "fa2_fa3_dense_max_abs": dense_max_abs,
+        "fa2_fa3_varlen_max_abs": varlen_max_abs,
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--gpu", action="store_true")
+    parser.add_argument("--skip-filesystem", action="store_true")
+    args = parser.parse_args()
+
+    prefix = Path(sys.prefix).resolve()
+    actual = {
+        "python": ".".join(map(str, sys.version_info[:2])),
+        **{name: _version(name) for name in EXPECTED if name not in {"python", "torch", "cuda"}},
+    }
+
+    import deep_ep
+    import diffusers
+    import flash_attn
+    import flash_attn_interface
+    import torch
+    import transformers
+    from deep_ep.version import __version_suffix__
+
+    import unirl
+    from unirl.models.leo2 import native_entry
+
+    actual["torch"] = torch.__version__.split("+", 1)[0]
+    actual["cuda"] = torch.version.cuda
+    for name, expected in EXPECTED.items():
+        if actual[name] != expected:
+            raise RuntimeError(f"expected {name}={expected!r}, got {actual[name]!r}")
+    if __version_suffix__ != "R03C03" or deep_ep.topk_idx_t is not torch.int64:
+        raise RuntimeError("DeepEP R03C03 Python API is incomplete")
+    buffer_signature = str(inspect.signature(deep_ep.Buffer))
+    if "use_fabric" not in buffer_signature or "enable_shrink" not in buffer_signature:
+        raise RuntimeError(f"DeepEP Buffer has the wrong API: {buffer_signature}")
+
+    for module in (
+        deep_ep,
+        diffusers,
+        flash_attn,
+        flash_attn_interface,
+        torch,
+        transformers,
+        unirl,
+        native_entry,
+    ):
+        _assert_inside(module.__file__, prefix)
+
+    report: dict[str, object] = {
+        "status": "PASS",
+        "prefix": str(prefix),
+        "versions": actual,
+        "deep_ep_buffer": buffer_signature,
+    }
+    if not args.skip_filesystem:
+        report["filesystem"] = _check_filesystem(prefix)
+    if args.gpu:
+        report["gpu_checks"] = _check_gpu(torch)
+    print(json.dumps(report, indent=2, sort_keys=True))
+
+
+if __name__ == "__main__":
+    main()

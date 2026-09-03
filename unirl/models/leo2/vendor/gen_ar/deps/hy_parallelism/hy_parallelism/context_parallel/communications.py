@@ -4,12 +4,14 @@
 # ================================================
 
 import os
-from typing import Any, Tuple, Union
+from typing import Optional, Sequence, Tuple
 import torch
 import torch.distributed as dist
 
 from torch.nn import functional as F
+from hy_parallelism.distributed.communications.utils import run_on_async_stream
 from hy_parallelism.parallel_states import get_parallel_state
+from hy_parallelism.tools.profiling import profile_range
 
 __enable_sp_padding = True
 
@@ -22,24 +24,110 @@ def broadcast(input_: torch.Tensor, group: dist.ProcessGroup):
     src = dist.get_global_rank(group, 0)
     dist.broadcast(input_, src=src, group=group)
 
+class _AlltoAllSingle(torch.autograd.Function):
+    @staticmethod
+    def forward(group, output, output_split_sizes, input_split_sizes, input):
+        dist.all_to_all_single(
+            output,
+            input,
+            output_split_sizes=output_split_sizes,
+            input_split_sizes=input_split_sizes,
+            group=group,
+        )
+        return output
 
-def _all_to_all_4D(
-        input: torch.tensor, scatter_idx: int = 2, gather_idx: int = 1, input_pad: Union[int, None] = None, group=None
-) -> torch.tensor:
+    @staticmethod
+    def setup_context(ctx, inputs, output):
+        group, _output, output_split_sizes, input_split_sizes, input = inputs
+        ctx.group = group
+        ctx.input_size = input.size()
+        ctx.output_size = output.size()
+        ctx.output_split_sizes = output_split_sizes
+        ctx.input_split_sizes = input_split_sizes
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        tensor = torch.empty(
+            ctx.input_size, device=grad_output.device, dtype=grad_output.dtype
+        )
+        return (None, None, None, None) + (
+            _AlltoAllSingle.apply(
+                ctx.group,
+                tensor,
+                ctx.input_split_sizes,
+                ctx.output_split_sizes,
+                grad_output.contiguous(),
+            ),
+        )
+
+    @staticmethod
+    def jvp(
+        ctx,
+        group_tangent,
+        output_tangent,
+        output_split_sizes_tangent,
+        input_split_sizes_tangent,
+        input_tangent,
+    ):
+        """JVP for AlltoAllSingle: apply the same all-to-all to the input tangent."""
+        if input_tangent is None:
+            return None
+        tensor = torch.empty(
+            ctx.output_size, device=input_tangent.device, dtype=input_tangent.dtype
+        )
+        return _AlltoAllSingle.apply(
+            ctx.group,
+            tensor,
+            ctx.output_split_sizes,
+            ctx.input_split_sizes,
+            input_tangent.contiguous(),
+        )
+
+
+def _resolve_head_split_seq_lens(
+    seq_lens: Sequence[int],
+    group_rank: int,
+) -> Tuple[int, int]:
+    """Return (output_trim, local_pad) for to_split_head all_to_all."""
+    if seq_lens[-1] != seq_lens[0]:
+        if not __enable_sp_padding:
+            raise RuntimeError('SP error')
+        assert seq_lens[0] > seq_lens[-1], f'seq_lens: {seq_lens}'
+        local_pad = seq_lens[0] - seq_lens[group_rank] if seq_lens[group_rank] != seq_lens[0] else 0
+        output_trim = seq_lens[0] * len(seq_lens) - sum(seq_lens)
+    else:
+        local_pad = 0
+        output_trim = 0
+    return output_trim, local_pad
+
+
+def all_to_all_4D(
+        input_: torch.Tensor,
+        group: dist.ProcessGroup,
+        scatter_dim: int = 2,
+        gather_dim: int = 1,
+        split_seq_lens: Optional[Sequence[int]] = None,
+        async_op: bool = False,
+):
     """
     all-to-all for QKV
 
     Args:
-        input (torch.tensor): a tensor sharded along dim scatter dim
-        scatter_idx (int): default 1
-        gather_idx (int): default 2
-        input_pad (int, None): default None. When the user does not set input_pad, all_gather operation is executed. 
-                               When the user explicitly sets input_pad, all_gather operation can be skipped. 
-        group : torch process group
+        input_ (torch.Tensor): a tensor sharded along dim scatter dim
+        group: torch process group
+        scatter_dim (int): default 2
+        gather_dim (int): default 1
+        split_seq_lens (Sequence[int], optional): per-rank local sequence lengths after maybe_scatter_seq.
+            When provided, the runtime all_gather_object for sequence lengths is skipped.
+        async_op (bool): if True, run on a side CUDA stream and return CudaStreamWork
 
     Returns:
-        torch.tensor: resharded tensor (bs, seqlen/P, hc, hs)
+        torch.Tensor: resharded tensor, or CudaStreamWork when async_op=True
     """
+    if async_op and not input_.is_cuda:
+        raise RuntimeError("all_to_all_4D(async_op=True) requires CUDA tensor input")
+
+    input = input_
     assert (
             input.dim() == 4
     ), f"input must be 4D tensor, got {input.dim()} and shape {input.shape}"
@@ -47,27 +135,20 @@ def _all_to_all_4D(
     seq_world_size = dist.get_world_size(group)
     group_rank = dist.get_group_rank(group, dist.get_rank())
 
-    if scatter_idx == 2 and gather_idx == 1: # to split head
+    if scatter_dim == 2 and gather_dim == 1: # to split head
 
-        if input_pad is None:
-
+        if split_seq_lens is not None:
+            seq_lens = list(split_seq_lens)
+            output_trim, local_pad = _resolve_head_split_seq_lens(seq_lens, group_rank)
+            if local_pad > 0:
+                input = F.pad(input, (0, 0, 0, 0, 0, local_pad))
+        else:
             seq_lens = [None] * seq_world_size
             dist.all_gather_object(seq_lens, input.shape[1], group)
 
-            if seq_lens[-1] != seq_lens[0] :
-                if not __enable_sp_padding:
-                    raise RuntimeError('SP error')
-                assert seq_lens[0] > seq_lens[-1], f'seq_lens: {seq_lens}'
-                if seq_lens[group_rank] != seq_lens[0]:
-                    local_pad = seq_lens[0] - seq_lens[group_rank]
-                    input = F.pad(input, (0, 0, 0, 0, 0, local_pad))
-
-                input_pad = seq_lens[0] * seq_world_size - sum(seq_lens)
-            else:
-                input_pad = 0
-        elif input_pad > 0 and dist.get_group_rank(group, dist.get_rank()) == seq_world_size - 1:
-            raise NotImplementedError('Feeding input_pad to all_to_all_4D is not supported anymore.')
-            input = F.pad(input, (0, 0, 0, 0, 0, input_pad))
+            output_trim, local_pad = _resolve_head_split_seq_lens(seq_lens, group_rank)
+            if local_pad > 0:
+                input = F.pad(input, (0, 0, 0, 0, 0, local_pad))
 
         # input (torch.tensor): a tensor sharded along dim 1 (bs, seqlen/P, hc, hs) output: (bs, seqlen, hc/P, hs)
         bs, shard_seqlen, hc, hs = input.shape
@@ -83,28 +164,31 @@ def _all_to_all_4D(
             .contiguous()
         )
 
-        output = torch.empty_like(input_t)
         # https://pytorch.org/docs/stable/distributed.html#torch.distributed.all_to_all_single
         # (P, seq_len/P, bs, hc/P, hs) scatter seqlen -all2all-> (P, seq_len/P, bs, hc/P, hs) scatter head
-        if seq_world_size > 1:
-            # dist.all_to_all_single(output, input_t, group=group)
+        output_t = torch.empty_like(input_t)
+        def run_head_split() -> torch.Tensor:
+            if seq_world_size == 1:
+                return input_t
+            return _AlltoAllSingle.apply(group, output_t, None, None, input_t)
 
-            from torch.distributed.nn.functional import _AlltoAllSingle
-            output = _AlltoAllSingle.apply(group, output, None, None, input_t)
-            # torch.cuda.synchronize()
-        else:
-            output = input_t
-        # if scattering the seq-dim, transpose the heads k to the original dimension
-        output = output.reshape(seqlen, bs, shard_hc, hs)
+        def finalize_head_split(output_t: torch.Tensor) -> torch.Tensor:
+            output_t = output_t.reshape(seqlen, bs, shard_hc, hs)
+            output_t = output_t.transpose(0, 1).contiguous().reshape(bs, seqlen, shard_hc, hs)
+            if output_trim > 0:
+                output_t = output_t[:, :-output_trim]
+            return output_t
 
-        # (seq_len, bs, hc/P, hs) -reshape-> (bs, seq_len, hc/P, hs)
-        output = output.transpose(0, 1).contiguous().reshape(bs, seqlen, shard_hc, hs)
-        if input_pad > 0:
-            output = output[:, :-input_pad]
+        if async_op:
+            return run_on_async_stream(
+                run_head_split,
+                input_.device,
+                record_tensors=(input_t,),
+                on_wait=finalize_head_split,
+            )
+        return finalize_head_split(run_head_split())
 
-        return output
-
-    elif scatter_idx == 1 and gather_idx == 2: # to split seq
+    elif scatter_dim == 1 and gather_dim == 2: # to split seq
 
         # input (torch.tensor): a tensor sharded along dim 1 (bs, seqlen, hc/P, hs) output: (bs, seqlen/P, hc, hs)
         bs, seqlen, shard_hc, hs = input.shape
@@ -138,105 +222,34 @@ def _all_to_all_4D(
             .reshape(seq_world_size, shard_hc, shard_seqlen, bs, hs)
         )
 
-        output = torch.empty_like(input_t)
         # https://pytorch.org/docs/stable/distributed.html#torch.distributed.all_to_all_single
         # (P, bs x hc/P, seqlen/P, hs) scatter seqlen -all2all-> (P, bs x seq_len/P, hc/P, hs) scatter head
-        if seq_world_size > 1:
-            # dist.all_to_all_single(output, input_t, group=group)
-            from torch.distributed.nn.functional import _AlltoAllSingle
-            output = _AlltoAllSingle.apply(group, output, None, None, input_t)
-
-            # torch.cuda.synchronize()
-        else:
-            output = input_t
-        # output = einops.rearrange(output, 'sp sc sl b hs -> b sl (sp sc) hs')
-
-        # if scattering the seq-dim, transpose the heads back to the original dimension
-        output = output.reshape(hc, shard_seqlen, bs, hs)
-
-        # (hc, seqlen/N, bs, hs) -tranpose(0,2)-> (bs, seqlen/N, hc, hs)
-        output = output.transpose(0, 2).contiguous().reshape(bs, shard_seqlen, hc, hs)
-
         local_chunk_len_pad = seqlen // seq_world_size
         local_chunks_nopad = [ min(original_seqlen, (i+1) * local_chunk_len_pad) - i * local_chunk_len_pad for i in range(seq_world_size)]
-        if gap > 0 and local_chunks_nopad[group_rank] != local_chunk_len_pad:
-            output = output[:, :-(local_chunk_len_pad - local_chunks_nopad[group_rank])]
+        output_t = torch.empty_like(input_t)
 
-        return output
+        def run_seq_split() -> torch.Tensor:
+            if seq_world_size == 1:
+                return input_t
+            return _AlltoAllSingle.apply(group, output_t, None, None, input_t)
+
+        def finalize_seq_split(output_t: torch.Tensor) -> torch.Tensor:
+            output_t = output_t.reshape(hc, shard_seqlen, bs, hs)
+            output_t = output_t.transpose(0, 2).contiguous().reshape(bs, shard_seqlen, hc, hs)
+            if gap > 0 and local_chunks_nopad[group_rank] != local_chunk_len_pad:
+                output_t = output_t[:, :-(local_chunk_len_pad - local_chunks_nopad[group_rank])]
+            return output_t
+
+        if async_op:
+            return run_on_async_stream(
+                run_seq_split,
+                input_.device,
+                record_tensors=(input_t,),
+                on_wait=finalize_seq_split,
+            )
+        return finalize_seq_split(run_seq_split())
     else:
-        raise RuntimeError("scatter_idx must be 1 or 2 and gather_idx must be 1 or 2")
-
-
-class SeqAllToAll4D(torch.autograd.Function):
-    @staticmethod
-    def forward(
-            group: dist.ProcessGroup,
-            input: torch.Tensor,
-            scatter_idx: int,
-            gather_idx: int,
-            input_pad: Union[int, None],
-    ) -> torch.Tensor:
-
-        return _all_to_all_4D(input, scatter_idx, gather_idx, input_pad, group=group)
-
-    @staticmethod
-    def backward(ctx: Any, *grad_output: torch.Tensor) -> Tuple[None, torch.Tensor, None, None]:
-        return (
-            None,
-            SeqAllToAll4D.apply(
-                ctx.group, *grad_output, ctx.gather_idx, ctx.scatter_idx, None
-            ),
-            None,
-            None,
-            None,
-        )
-    
-    @staticmethod
-    def setup_context(ctx, inputs, output):
-        group, input_, scatter_idx, gather_idx, input_pad = inputs
-        ctx.group = group
-        ctx.scatter_idx = scatter_idx
-        ctx.gather_idx = gather_idx
-    
-    @staticmethod
-    def jvp(ctx, group_tangent, input_tangent, scatter_idx_tangent, gather_idx_tangent, input_pad_tangent):
-        """
-        JVP implementation for SeqAllToAll4D.
-        
-        For AllToAll operations, the JVP applies the same all-to-all transformation
-        to the tangent vector as was applied to the primal input.
-    
-        Args:
-            ctx: Context from forward pass
-            group_tangent: Tangent for group (always None)
-            input_tangent: Tangent vector for input tensor
-            scatter_idx_tangent: Tangent for scatter_idx (always None)
-            gather_idx_tangent: Tangent for gather_idx (always None)
-        
-        Returns:
-            Tangent of the output tensor
-        """
-        # Only the input tensor has a meaningful tangent
-        if input_tangent is None:
-            return None
-            
-        # Apply the same AllToAll transformation to the tangent vector
-        # Must use apply, other wise, all_gather communication will raise Storage error.
-        return SeqAllToAll4D.apply(ctx.group, input_tangent, ctx.scatter_idx, ctx.gather_idx, None)
-
-        # Storage error: NotImplementedError: Cannot access storage of TensorWrapper
-        # return _all_to_all_4D(
-        #     input_tangent,
-        #     scatter_idx=ctx.scatter_idx,
-        #     gather_idx=ctx.gather_idx,
-        #     group=ctx.group,
-        # )
-
-
-def all_to_all_4D(
-        input_: torch.Tensor, group: dist.ProcessGroup, scatter_dim: int = 2, gather_dim: int = 1, input_pad: Union[int, None] = None,
-):
-    return SeqAllToAll4D.apply(group, input_, scatter_dim, gather_dim, input_pad)
+        raise RuntimeError("scatter_dim must be 1 or 2 and gather_dim must be 1 or 2")
 
 
 def _all_to_all(
@@ -368,19 +381,36 @@ class _AllGather(torch.autograd.Function):
     """
 
     @staticmethod
-    def forward(input_, dim, pad, group):
+    def forward(input_, dim, group, split_seq_lens=None):
         world_size = dist.get_world_size(group)
 
-        # rank = get_parallel_state().sp_mesh.get_local_rank()
-        if pad is None:
-            sizes = [None] * world_size
-            dist.all_gather_object(sizes, input_.shape, group)
-            tensor_list = [torch.empty(sizes[i], dtype=input_.dtype, device=input_.device) for i in range(world_size)]
-
+        if split_seq_lens is not None:
+            sizes = list(split_seq_lens)
+            tensor_list = [
+                torch.empty(
+                    *input_.shape[:dim],
+                    sizes[i],
+                    *input_.shape[dim + 1:],
+                    dtype=input_.dtype,
+                    device=input_.device,
+                )
+                for i in range(world_size)
+            ]
         else:
-            # TODO: update test_sp.py
-            raise NotImplementedError('AllGather with pad is not supported for training. For inference, you can use all_gather_pad instead.')
-            tensor_list = [torch.empty(input_.shape, dtype=input_.dtype, device=input_.device) for i in range(world_size)]
+            sizes = [None] * world_size
+            with profile_range(f'gather sizes for maybe_gather_seq'):
+                dist.all_gather_object(sizes, input_.shape[dim], group)
+            tensor_list = [
+                torch.empty(
+                    *input_.shape[:dim],
+                    sizes[i],
+                    *input_.shape[dim + 1:],
+                    dtype=input_.dtype,
+                    device=input_.device,
+                )
+                for i in range(world_size)
+            ]
+
         input_ = input_.contiguous()
         dist.all_gather(tensor_list, input_, group=group)
 
@@ -395,9 +425,11 @@ class _AllGather(torch.autograd.Function):
         dim = ctx.dim
         input_size = ctx.input_size
 
-
-        sizes = [None] * world_size
-        dist.all_gather_object(sizes, input_size, group=group)
+        if ctx.split_seq_lens is not None:
+            sizes = list(ctx.split_seq_lens)
+        else:
+            sizes = [None] * world_size
+            dist.all_gather_object(sizes, input_size, group=group)
 
         grad_input_list = torch.split(grad_output, sizes, dim=dim)
         grad_input = grad_input_list[rank]
@@ -440,14 +472,15 @@ class _AllGather(torch.autograd.Function):
     
     @staticmethod
     def setup_context(ctx, inputs, output):
-        input_, dim, pad, group = inputs
+        input_, dim, group, split_seq_lens = inputs
         ctx.dim = dim
         ctx.group = group
+        ctx.split_seq_lens = split_seq_lens
         input_size = list(input_.size())
         ctx.input_size = input_size[dim]
     
     @staticmethod
-    def jvp(ctx, input_tangent, dim_tangent, pad_tangent, group_tangent):
+    def jvp(ctx, input_tangent, dim_tangent, group_tangent, split_seq_lens_tangent):
         """
         JVP implementation for _AllGather.
         
@@ -468,11 +501,16 @@ class _AllGather(torch.autograd.Function):
             return None
             
         # Apply the same AllGather transformation to the tangent vector
-        return _AllGather.apply(input_tangent, ctx.dim, None, ctx.group)
+        return _AllGather.apply(input_tangent, ctx.dim, ctx.group, ctx.split_seq_lens)
 
 
 
-def all_gather(input_: torch.Tensor, dim: int = 1, pad: Union[None, int] = None, group=None):
+def all_gather(
+    input_: torch.Tensor,
+    dim: int = 1,
+    group=None,
+    split_seq_lens: Optional[Sequence[int]] = None,
+):
     """Performs an all-gather operation on the input tensor along the specified dimension.
 
     Args:
@@ -482,35 +520,7 @@ def all_gather(input_: torch.Tensor, dim: int = 1, pad: Union[None, int] = None,
     Returns:
         torch.Tensor: Output tensor after all-gather operation, concatenated along 'dim'.
     """
-    return _AllGather.apply(input_, dim, pad, group)
+    return _AllGather.apply(input_, dim, group, split_seq_lens)
     # from torch.distributed.nn.functional import _AllGather
     # gathered_tensor = _AllGather.apply(group, input_)
     # return torch.cat(gathered_tensor, dim=dim)
-
-
-    
-
-def all_gather_pad(input_: torch.Tensor, dim: int = 1, pad: Union[None, int] = None, group=None):
-    """历史遗留代码，不建议使用，这里保留只为了支持一些旧服务"""
-
-    world_size = dist.get_world_size(group)
-
-    # rank = get_parallel_state().sp_mesh.get_local_rank()
-    seq_world_size = dist.get_world_size(group)
-    assert pad is not None
-
-    if pad > 0 and dist.get_group_rank(group, dist.get_rank()) == seq_world_size - 1:
-        if input_.dim() == 4:
-            input_ = F.pad(input_, (0, 0, 0, 0, 0, pad))
-        elif input_.dim() == 3:
-            input_ = F.pad(input_, (0, 0, 0, pad))
-
-    tensor_list = [torch.empty(input_.shape, dtype=input_.dtype, device=input_.device) for i in range(world_size)]
-    input_ = input_.contiguous()
-    dist.all_gather(tensor_list, input_, group=group)
-
-    output = torch.cat(tensor_list, dim=dim)
-    if pad > 0:
-        output = output[:, :-pad]
-    return output
-

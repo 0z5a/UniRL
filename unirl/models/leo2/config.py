@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
@@ -12,7 +13,40 @@ LEO2_VAE_TEMPORAL = 4
 LEO2_TIMESTEP_SCALE = 1000.0
 
 _VENDORED_GEN_AR_ROOT = Path(__file__).resolve().parent / "vendor" / "gen_ar"
-_DEFAULT_LEO2_CONFIG = _VENDORED_GEN_AR_ROOT / "hymm/configs/leo2/leo2_moe_v1_1_a12b_muon_wzd_256p_stage2_part2.yaml"
+_DEFAULT_LEO2_CONFIG = _VENDORED_GEN_AR_ROOT / "hymm/configs/leo2/leo2_moe_v1_1_a12b_muon_wzd_480p_stage3.yaml"
+_DEFAULT_GENERATION_CONFIG = Path(__file__).resolve().parent / "resources" / "generation_config_rl_video.json"
+_QWEN_ASSET_FILES = (
+    "config.json",
+    "model.safetensors.index.json",
+    "model.safetensors-00001-of-00004.safetensors",
+    "model.safetensors-00002-of-00004.safetensors",
+    "model.safetensors-00003-of-00004.safetensors",
+    "model.safetensors-00004-of-00004.safetensors",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "vocab.json",
+    "merges.txt",
+    "chat_template.jinja",
+    "preprocessor_config.json",
+    "video_preprocessor_config.json",
+)
+_VAE_ASSET_FILES = ("config.json", "latent_norm_stats.pt", "pytorch_model.pt")
+
+
+def _required_external_path(value: str, env_name: str) -> str:
+    """Resolve an explicit artifact path and reject an unset value."""
+    path = value or os.environ.get(env_name, "")
+    if not path.strip():
+        raise ValueError(f"Leo2 requires {env_name}; point it at the external artifact described in artifacts.yaml.")
+    return str(Path(path).expanduser().resolve())
+
+
+def _require_path(path: Path, label: str, *, directory: bool) -> None:
+    """Reject a missing file or directory with its Leo2 artifact label."""
+    valid = path.is_dir() if directory else path.is_file()
+    if not valid:
+        kind = "directory" if directory else "file"
+        raise FileNotFoundError(f"Leo2 {label} {kind} does not exist: {path}")
 
 
 @dataclass
@@ -20,28 +54,27 @@ class Leo2PipelineConfig:
     # --- code + weights ---
     hymm_repo_path: str = str(_VENDORED_GEN_AR_ROOT)
     config_yaml: str = str(_DEFAULT_LEO2_CONFIG)
-    ckpt_path: str = (
-        "/apdcephfs_zwfy8/share_305110755/hunyuan/zuhaoding/HYV2.0/ckpts/leo2_moe_a12b_480p/"
-        "iter_0063300_torch/weights"
-    )
-    generation_config_path: str = (
-        "/apdcephfs_zwfy8/share_305110755/hunyuan/zuhaoding/HYV2.0/configs/leo2_genconfig_rl.json"
-    )
-    assets_base: str = (
-        "/apdcephfs_zwfy8/share_305110755/hunyuan/zuhaoding/HYV2.0/assets/hymm_ar_assets"
-    )
+    ckpt_path: str = ""
+    generation_config_path: str = str(_DEFAULT_GENERATION_CONFIG)
+    assets_base: str = ""
     # extra hymm cmd args appended after the yaml (mirrors t2v_smoke.sh minus
     # sampling params, which UniRL owns). EP must stay 1: UniRL FSDP hosts the
     # experts locally (non-fused path).
-    extra_hymm_args: List[str] = field(default_factory=lambda: [
-        "--bot-task", "video",
-        "--use-system-prompt", "li-dit-encode-visual-qwen-3.5",
-        "--gate-impl", "deepseek",
-        "--vae-type", "16x16x4-48c-hy-v3_3-release2",
-    ])
+    extra_hymm_args: List[str] = field(
+        default_factory=lambda: [
+            "--bot-task",
+            "video",
+            "--use-system-prompt",
+            "li-dit-encode-visual-qwen-3.5",
+            "--gate-impl",
+            "deepseek",
+            "--vae-type",
+            "16x16x4-48c-hy-v3_3-release2",
+        ]
+    )
 
     # --- precisions (H3-shaped knobs) ---
-    model_precision: str = "bf16"
+    model_precision: str = "bf16"  # pinned native DCP tensor profile
     autocast_precision: str = "bf16"
     trajectory_precision: str = "bf16"
     logprob_precision: str = "fp32"
@@ -68,6 +101,36 @@ class Leo2PipelineConfig:
     uniform_bf16: bool = True
 
     device: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        """Resolve external artifacts and validate the portable Leo2 layout."""
+        self.ckpt_path = _required_external_path(self.ckpt_path, "LEO2_CKPT_DIR")
+        self.assets_base = _required_external_path(self.assets_base, "LEO2_ASSETS_BASE")
+        self.hymm_repo_path = str(Path(self.hymm_repo_path).expanduser().resolve())
+        self.config_yaml = str(Path(self.config_yaml).expanduser().resolve())
+        self.generation_config_path = str(Path(self.generation_config_path).expanduser().resolve())
+
+        repo = Path(self.hymm_repo_path)
+        checkpoint = Path(self.ckpt_path)
+        assets = Path(self.assets_base)
+        _require_path(repo / "hymm", "vendored hymm runtime", directory=True)
+        _require_path(repo / "processors", "vendored processors runtime", directory=True)
+        _require_path(repo / "deps/hy_parallelism/hy_parallelism", "vendored hy_parallelism", directory=True)
+        _require_path(repo / "deps/IndexKits/index_kits", "vendored IndexKits", directory=True)
+        _require_path(Path(self.config_yaml), "model config", directory=False)
+        _require_path(Path(self.generation_config_path), "generation config", directory=False)
+        _require_path(checkpoint, "checkpoint", directory=True)
+        _require_path(checkpoint / ".metadata", "checkpoint metadata", directory=False)
+        if not any(checkpoint.glob("*.distcp")):
+            raise FileNotFoundError(f"Leo2 checkpoint has no *.distcp shard: {checkpoint}")
+        qwen_assets = assets / "text_encoder/Qwen3.5-9B"
+        vae_assets = assets / "image_encoder/vae_3d/hyvae_vid_leo2.0_v2.5.1_release2"
+        _require_path(qwen_assets, "Qwen3.5-9B assets", directory=True)
+        _require_path(vae_assets, "video VAE assets", directory=True)
+        for name in _QWEN_ASSET_FILES:
+            _require_path(qwen_assets / name, f"Qwen3.5-9B asset {name}", directory=False)
+        for name in _VAE_ASSET_FILES:
+            _require_path(vae_assets / name, f"video VAE asset {name}", directory=False)
 
 
 __all__ = [

@@ -10,6 +10,7 @@ from .tv2a_aries import TV2A_Aries, TV2A_Aries_CONFIG
 
 def build_model(args, pretrained_model=None, logger=None, dtype=None, device=None, **kwargs):
     factor_kwargs = {"device": device, "dtype": dtype}
+    initialize_weights = kwargs.pop("initialize_weights", True)
 
     model_structure = getattr(args, "model_structure", None)
 
@@ -36,7 +37,11 @@ def build_model(args, pretrained_model=None, logger=None, dtype=None, device=Non
             audio_branch_config = None
 
         model = LeoModel(
-            args, model_config, txt_config=text_branch_config, audio_config=audio_branch_config, 
+            args,
+            model_config,
+            txt_config=text_branch_config,
+            audio_config=audio_branch_config,
+            initialize_weights=initialize_weights,
             **factor_kwargs
         )
         return model, dict(main_branch=model_config, text_branch=text_branch_config, audio_branch=audio_branch_config)
@@ -63,7 +68,11 @@ def build_model(args, pretrained_model=None, logger=None, dtype=None, device=Non
             audio_branch_config = None
 
         model = LeoModelHF(
-            args, model_config, txt_config=text_branch_config, audio_config=audio_branch_config,
+            args,
+            model_config,
+            txt_config=text_branch_config,
+            audio_config=audio_branch_config,
+            initialize_weights=initialize_weights,
             **factor_kwargs
         )
         return model, dict(main_branch=model_config, text_branch=text_branch_config, audio_branch=audio_branch_config)

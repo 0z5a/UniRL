@@ -1,10 +1,4 @@
-"""Leo2 video decode stage -- final latents -> Videos primitive.
-
-Mirrors pipeline_leo.__call__'s decode tail (lines ~916-944): denormalize the
-latents against the VAE's norm stats, decode under the VAE autocast dtype, and
-convert to per-sample ``[T, C, H, W]`` float frames in [0, 1] -- the layout
-``Videos.from_list`` expects and VideoPickScoreScorer consumes.
-"""
+"""Decode Leo2 video latents into the UniRL Videos primitive."""
 
 from __future__ import annotations
 
@@ -23,8 +17,7 @@ _DUMP_COUNT = 0
 
 
 def _maybe_dump_frames(visuals: torch.Tensor, tag: str = "decode", max_dumps: int = 6) -> None:
-    """Debug aid: with ``LEO2_DUMP_VIDEOS=<dir>`` write a first/middle/last-frame
-    contact sheet of decoded video 0 (per rank, first ``max_dumps`` decodes)."""
+    """Write first/middle/last-frame contact sheets when ``LEO2_DUMP_VIDEOS`` is set."""
     global _DUMP_COUNT
     out_dir = os.environ.get("LEO2_DUMP_VIDEOS")
     if not out_dir or _DUMP_COUNT >= max_dumps:
@@ -32,6 +25,7 @@ def _maybe_dump_frames(visuals: torch.Tensor, tag: str = "decode", max_dumps: in
     _DUMP_COUNT += 1
     try:
         from PIL import Image
+
         v = visuals[0].detach().float().cpu()  # [C, T, H, W]
         t = v.shape[1]
         sheet = torch.cat([v[:, i] for i in (0, t // 2, t - 1)], dim=-1)  # [C, H, 3W]
@@ -61,7 +55,8 @@ class Leo2VideoDecodeStage:
 
         vae_dtype = pipeline.vae_autocast_dtype
         with torch.autocast(
-            device_type="cuda", dtype=vae_dtype,
+            device_type="cuda",
+            dtype=vae_dtype,
             enabled=vae_dtype is not None and vae_dtype != torch.float32,
         ):
             visuals = vae.decode(latents, return_dict=False)[0]  # [B, C, T, H, W] in [-1, 1]
@@ -72,10 +67,12 @@ class Leo2VideoDecodeStage:
         """``latents [B, C, T, H, W]`` (fp32/traj dtype) -> Videos ([T,C,H,W] each)."""
         visuals = self.decode_to_tensor(latents)
         _maybe_dump_frames(visuals, tag="rollout")
-        return Videos.from_list([
-            Video(frames=visuals[i].permute(1, 0, 2, 3).contiguous().cpu())  # [T, C, H, W]
-            for i in range(visuals.shape[0])
-        ])
+        return Videos.from_list(
+            [
+                Video(frames=visuals[i].permute(1, 0, 2, 3).contiguous().cpu())  # [T, C, H, W]
+                for i in range(visuals.shape[0])
+            ]
+        )
 
 
 __all__ = ["Leo2VideoDecodeStage"]

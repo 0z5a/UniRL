@@ -5,23 +5,36 @@ short       = 5573b65
 commit_date = 2026-08-31
 vendored    = 2026-09-01 (into unirl/models/leo2/vendor/gen_ar/)
 
-The vendored runtime contains the upstream hymm/ and processors/ source trees,
-plus the two inference-time submodules below. Model weights, generation
-configuration, tokenizer/VAE assets, datasets, tests, jobs, and .git metadata
-are intentionally external to this package.
+The vendored runtime contains the Leo2 inference/UniRL closure from the upstream
+hymm/ and processors/ source trees, plus source snapshots based on the two
+inference-time gitlink revisions below. Model weights and tokenizer/VAE assets remain
+external artifacts. The generation configuration and 480p model YAML are
+package resources. Upstream datasets, tests, jobs, and .git metadata are not
+part of the package.
 
 Submodules pinned by the upstream commit:
   deps/hy_parallelism = a2fb81523b4c35563d7129ff47e5a0955f77d204
   deps/IndexKits      = d83299da6b0efdd87c4e0387d603e5f3721210ce
 
 Dependency snapshot provenance:
-  deps/IndexKits was exported exactly from d83299da6b0efdd87c4e0387d603e5f3721210ce.
-  deps/hy_parallelism was copied from the flattened source tree at
-  https://git.woa.com/bowenping/gen-ar.git commit
-  e6b8b5934ce2e57d0ea4abbff8b8d1179fdc49c3; its package version is 1.1.12.
-  The original a2fb815 gitlink repository was unavailable during vendoring, so
-  that SHA could not be independently verified. Replace this snapshot when the
-  pinned repository becomes available.
+  deps/IndexKits is based on d83299da6b0efdd87c4e0387d603e5f3721210ce.
+  deps/hy_parallelism is based on a2fb81523b4c35563d7129ff47e5a0955f77d204;
+  its package version is 1.1.12. Exclusions are documented below.
+
+Deliberate runtime-only pruning:
+  - hymm/trainers, hymm/ptm, hymm/ptm_v2 and hymm/train.py (training entrypoints)
+  - hymm/models/reward_models and hymm/metrics (online/evaluation services)
+  - non-Leo2 sampler modules (the native Leo2 T2V sampler remains available)
+  - all model YAMLs except the required base defaults and validated Leo2 A12B
+    480p stage-3 configuration
+  - hy_parallelism tests, API examples and tools/taiji (non-runtime tooling)
+  - dependency caches, backup files and all nested .git metadata
+
+The UniRL Leo2 pipeline and the retained native T2V sampler do not import the
+pruned modules during model construction, conditioning, denoising or VAE
+decode. Metric evaluation is intentionally outside this source bundle.
+The validated upstream YAML still carries frozen training-data path strings;
+inference parses their values for schema compatibility but never opens them.
 
 Not vendored: deps/AngelPTM and deps/VLMEvalKit. They are not imported by the
 Leo2 inference bootstrap.
@@ -33,9 +46,18 @@ Local integration:
     this tree. User-supplied paths continue to override those defaults.
   - hymm/models/basic/rope_cache.py carries UniRL's exact input-signature cache
     key, explicit reset, and hit/miss counters.
+  - hymm/models/basic/flash_attn_no_pad.py accepts both supported FA3 varlen
+    signatures and normalizes tuple/tensor returns.
+  - hymm/models/diffusion propagates initialize_weights=False into Leo/LeoHF
+    so strict DCP loads do not first initialize all 75B parameters.
+  - UniRL's bundle validates the pinned mixed BF16/FP32 DCP tensor profile;
+    only the checkpoint's BF16 MoE router exception may differ from model init.
+  - hymm/constants.py has no site-specific asset fallback; launchers must set
+    ASSETS_BASE through the documented LEO2_ASSETS_BASE contract.
+  - encrypted-dataset helpers never print any portion of FILE_PASSWORD.
   - hymm/models/diffusion/leo_cache.py plus the Leo model/pipeline integration
     carry UniRL's request-scoped Diffusers-style first-block inference cache.
 
-To re-vendor: export the source commit and IndexKits commit above, obtain the
-hy_parallelism gitlink source (or document its replacement), replace this tree
-without .git metadata, then update this file and rerun the Leo2 bootstrap smoke.
+To re-vendor: export the three commits above, replace this tree without .git
+metadata, apply the documented runtime-only pruning and local integrations,
+then update this file and rerun the wheel-isolation and 8-GPU Leo2 smoke tests.

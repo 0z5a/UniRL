@@ -99,10 +99,20 @@ infer = [
   "accelerate>=0.30",
 ]
 leo2 = [
+  # The Leo2 trainside stack is validated only against the supplied
+  # CUDA-12.9/Torch-2.10 image. FA2, FA3 and DeepEP are ABI-bound kernel
+  # overlays documented in examples/diffusion/leo2/ENVIRONMENT.md, not PyPI
+  # dependencies that this extra can install safely.
+  "torch==2.10.0 ; sys_platform == 'linux'",
+  "torchvision==0.25.0 ; sys_platform == 'linux'",
+  "torchaudio==2.10.0 ; sys_platform == 'linux'",
+  "transformers==5.6.0",
   "accelerate>=0.30",
   "easydict>=1.13",
   "einx>=0.3",
+  "flash-linear-attention[conv1d]==0.5.1 ; sys_platform == 'linux'",
   "imageio>=2.34",
+  "imageio-ffmpeg>=0.5",
   "loguru>=0.7",
   "natsort>=8.4",
   "pandas>=2",
@@ -113,8 +123,6 @@ leo2 = [
   "soundfile>=0.12",
   "tiktoken>=0.7",
   "timm>=1.0",
-  "torchaudio>=2.5",
-  "torchvision>=0.16",
   "tqdm>=4.66",
 ]
 eval = [
@@ -159,6 +167,8 @@ dataset-prep = [
 [tool.uv]
 conflicts = [
   [{ extra = "sglang" }, { extra = "vllm" }],
+  [{ extra = "leo2" }, { extra = "sglang" }],
+  [{ extra = "leo2" }, { extra = "vllm" }],
 ]
 # Local-version anchors only exist on the CUDA indexes; best-match lets every
 # other package take its newest from PyPI while +cuXXX outranks same-release
@@ -219,11 +229,23 @@ include = [
 ]
 
 [tool.setuptools.package-data]
+"unirl.models.leo2" = [
+  "resources/*.json",
+  "resources/*.yaml",
+]
 "unirl.models.leo2.vendor" = [
   "gen_ar/*.md",
   "gen_ar/*.txt",
+  "gen_ar/**/*.cpp",
+  "gen_ar/**/*.cu",
+  "gen_ar/**/*.h",
   "gen_ar/**/*.json",
+  "gen_ar/**/*.md",
+  "gen_ar/**/*.sh",
+  "gen_ar/**/*.tpl",
+  "gen_ar/**/*.txt",
   "gen_ar/**/*.yaml",
+  "gen_ar/**/*.yml",
 ]
 
 [tool.ruff]

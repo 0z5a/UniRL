@@ -6,12 +6,14 @@ import contextlib
 import math
 import os
 import sys
-from typing import Any, Optional
+from typing import Any
 
 import torch
 from torch import nn
 
+from unirl.models.transformers_compat import install_transformers_flash_attention_compat
 from unirl.models.types.bundle import Bundle
+from unirl.utils.dtypes import parse_torch_dtype
 
 from .config import Leo2PipelineConfig
 
@@ -19,21 +21,7 @@ _HYMM_BOOTSTRAPPED = False
 
 
 def ensure_hy_parallel_state() -> bool:
-    """Initialise hy_parallelism's global parallel state exactly once per process.
-
-    This is separate from hymm.core's ``ParallelState``. The Leo forward path
-    calls ``hy_parallelism.parallel_states.get_parallel_state()`` many times per
-    layer (``cp_size`` checks in leo.py, MoE ``.ep`` in moe_layers.py). When the
-    state is NOT initialised, every call constructs a fresh ``ParallelDims`` ->
-    ``build_mesh`` -> ``init_device_mesh`` -> new NCCL process groups + watchdog
-    threads: >10k leaked PGs within one forward, until pthread_create fails with
-    "Resource temporarily unavailable" (R11/R12). Mirrors the fsdp branch of
-    hymm/samplers/entry.py: dp_shard=min(8, world), everything else 1.
-
-    Collective (device-mesh construction) -> must be reached by every rank of the
-    default process group in the same order; the first predict_noise() of a DP
-    rollout satisfies that. Returns True when the state is initialised.
-    """
+    """Initialize hy_parallelism's singleton process state before Leo2 forwards."""
     import torch.distributed as dist
     from hy_parallelism import parallel_states as hy_ps
 
@@ -44,8 +32,13 @@ def ensure_hy_parallel_state() -> bool:
     world = dist.get_world_size()
     dp_shard = min(8, world)
     hy_ps.init_parallel_state(
-        dp_replicate=world // dp_shard, dp_shard=dp_shard,
-        cp=1, tp=1, pp=1, ep=1, world_size=world,
+        dp_replicate=world // dp_shard,
+        dp_shard=dp_shard,
+        cp=1,
+        tp=1,
+        pp=1,
+        ep=1,
+        world_size=world,
     )
     return True
 
@@ -65,8 +58,7 @@ def _bootstrap_hymm(config: Leo2PipelineConfig):
     missing = [f"{label}: {path}" for label, path in required_paths.items() if not os.path.isdir(path)]
     if missing:
         raise FileNotFoundError(
-            "Leo2 hymm runtime is incomplete; set hymm_repo_path to a complete runtime. Missing: "
-            + "; ".join(missing)
+            "Leo2 hymm runtime is incomplete; set hymm_repo_path to a complete runtime. Missing: " + "; ".join(missing)
         )
     if not os.path.isfile(config_yaml):
         raise FileNotFoundError(f"Leo2 config_yaml does not exist: {config_yaml}")
@@ -77,23 +69,29 @@ def _bootstrap_hymm(config: Leo2PipelineConfig):
             p = os.path.join(repo, dep)
             if p not in sys.path:
                 sys.path.insert(0, p)
-    os.environ.setdefault("ASSETS_BASE", config.assets_base)
+    if not isinstance(config.assets_base, str) or not config.assets_base.strip():
+        raise ValueError("Leo2 assets_base must be a non-empty path")
+    os.environ["ASSETS_BASE"] = os.path.abspath(os.path.expanduser(config.assets_base))
     os.environ.setdefault("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "1")
 
     import argparse
 
-    from hymm.core.arguments import parse_argv_from_yaml
     from hymm.config import add_core_args, validate_args
     from hymm.core import global_vars
+    from hymm.core.arguments import parse_argv_from_yaml
 
     if _HYMM_BOOTSTRAPPED:
         return global_vars.get_args()
 
     argv = [
-        "--config-path", config_yaml,
-        "--ckpt", config.ckpt_path,
-        "--task-id", "unirl-leo2",
-        "--framework", "fsdp",
+        "--config-path",
+        config_yaml,
+        "--ckpt",
+        config.ckpt_path,
+        "--task-id",
+        "unirl-leo2",
+        "--framework",
+        "fsdp",
         *config.extra_hymm_args,
     ]
     pre = argparse.ArgumentParser(add_help=False)
@@ -119,10 +117,12 @@ def _bootstrap_hymm(config: Leo2PipelineConfig):
     global_vars.set_args(args)
 
     from loguru import logger as _loguru_logger
+
     global_vars._GLOBAL_LOGGER = None
     global_vars.set_logger(_loguru_logger)
 
     from hymm.core.parallel_states import ParallelState
+
     ParallelState(dp_rank=0, dp_size=1)
 
     # The bundle may be built before torch.distributed is up (then this is a
@@ -133,42 +133,88 @@ def _bootstrap_hymm(config: Leo2PipelineConfig):
     return args
 
 
-def _dcp_load_into(model: nn.Module, weights_dir: str) -> None:
+def _dcp_load_into(model: nn.Module, weights_dir: str, *, model_dtype: torch.dtype) -> None:
     """Fill the (empty) model from the torch-dcp checkpoint, dtype-exact."""
-    import pickle
-
     import torch.distributed.checkpoint as dcp
     from torch.distributed.checkpoint import FileSystemReader
 
-    md = pickle.load(open(os.path.join(weights_dir, ".metadata"), "rb"))
-    saved = md.state_dict_metadata
+    weights_dir = os.path.abspath(os.path.expanduser(weights_dir))
+    metadata_path = os.path.join(weights_dir, ".metadata")
+    if not os.path.isfile(metadata_path):
+        raise FileNotFoundError(f"Leo2 native DCP metadata does not exist: {metadata_path}")
+
+    reader = FileSystemReader(weights_dir)
+    try:
+        saved = reader.read_metadata().state_dict_metadata
+    except Exception as exc:
+        raise RuntimeError(f"Leo2 native DCP metadata is unreadable: {metadata_path}") from exc
 
     dest = model.state_dict()
-    # checkpoint keys are 'model.<k>'; nest one level so DCP fqns line up.
-    wanted = {}
-    missing_in_ckpt = []
-    for k, v in dest.items():
-        ck = f"model.{k}"
-        if ck in saved:
-            meta = saved[ck]
-            props = getattr(meta, "properties", None)
-            sdt = getattr(props, "dtype", None) if props is not None else None
-            if isinstance(v, torch.Tensor) and sdt is not None and v.dtype != sdt:
-                wanted[k] = torch.empty(tuple(meta.size), dtype=sdt)
-            else:
-                wanted[k] = v
-        else:
-            missing_in_ckpt.append(k)
-    if missing_in_ckpt:
-        print(f"[leo2 bundle] {len(missing_in_ckpt)} state keys not in ckpt (kept as built): "
-              f"{missing_in_ckpt[:8]}", flush=True)
+    expected = {f"model.{key}" for key in dest}
+    actual = set(saved)
+    missing = sorted(expected - actual)
+    unexpected = sorted(actual - expected)
+    if missing or unexpected:
+        raise RuntimeError(
+            "Leo2 native DCP keys do not exactly match the model: "
+            f"missing={missing[:8]} ({len(missing)} total), "
+            f"unexpected={unexpected[:8]} ({len(unexpected)} total)."
+        )
 
-    dcp.load({"model": wanted}, storage_reader=FileSystemReader(weights_dir))
-    result = model.load_state_dict(wanted, strict=False, assign=True)
-    if result.unexpected_keys:
-        raise RuntimeError(f"leo2 bundle: unexpected keys on load: {result.unexpected_keys[:8]}")
-    print(f"[leo2 bundle] loaded {len(wanted)} tensors from {weights_dir}; "
-          f"missing(from ckpt)={len(missing_in_ckpt)}", flush=True)
+    invalid = []
+    load_state = {}
+    for key, tensor in dest.items():
+        checkpoint_key = f"model.{key}"
+        metadata = saved[checkpoint_key]
+        properties = getattr(metadata, "properties", None)
+        saved_dtype = getattr(properties, "dtype", None)
+        saved_size = getattr(metadata, "size", None)
+        if not isinstance(tensor, torch.Tensor):
+            invalid.append(f"{checkpoint_key}: destination is {type(tensor).__name__}, not Tensor")
+        elif tensor.is_meta:
+            invalid.append(f"{checkpoint_key}: destination is still on meta")
+        elif saved_size is None or tuple(saved_size) != tuple(tensor.shape):
+            invalid.append(f"{checkpoint_key}: shape checkpoint={saved_size}, model={tuple(tensor.shape)}")
+        elif saved_dtype is None:
+            invalid.append(f"{checkpoint_key}: checkpoint carries no dtype")
+        elif saved_dtype != tensor.dtype and not (
+            saved_dtype == model_dtype
+            and tensor.dtype == torch.float32
+            and key.startswith("layers.")
+            and key.endswith(".mlp.gate.wg.weight")
+        ):
+            invalid.append(f"{checkpoint_key}: dtype checkpoint={saved_dtype}, model={tensor.dtype}")
+        else:
+            load_state[key] = (
+                tensor
+                if saved_dtype == tensor.dtype
+                else torch.empty(tuple(tensor.shape), dtype=saved_dtype, device=tensor.device)
+            )
+    if invalid:
+        raise RuntimeError(
+            "Leo2 native DCP tensor metadata does not match the model: "
+            + "; ".join(invalid[:8])
+            + (f"; {len(invalid)} mismatches total" if len(invalid) > 8 else "")
+        )
+
+    dcp.load({"model": load_state}, storage_reader=reader)
+    result = model.load_state_dict(load_state, strict=True, assign=True)
+    if result.missing_keys or result.unexpected_keys:
+        raise RuntimeError(
+            "Leo2 native DCP load was incomplete: "
+            f"missing={result.missing_keys[:8]}, unexpected={result.unexpected_keys[:8]}"
+        )
+    loaded = model.state_dict()
+    incomplete = [
+        key
+        for key, tensor in loaded.items()
+        if tensor.is_meta
+        or tuple(tensor.shape) != tuple(saved[f"model.{key}"].size)
+        or tensor.dtype != saved[f"model.{key}"].properties.dtype
+    ]
+    if incomplete:
+        raise RuntimeError(f"Leo2 native DCP post-load validation failed for: {incomplete[:8]}")
+    print(f"[leo2 bundle] loaded and validated {len(dest)} tensors from {weights_dir}", flush=True)
 
 
 _BLOCK_CLASSES = ("LeoLayer", "LeoDualLayer", "LeoTripleLayer")
@@ -192,19 +238,25 @@ def _move_non_block_to_device(model: nn.Module, device) -> None:
     for bname, b in list(model._buffers.items()):
         if b is not None:
             model._buffers[bname] = b.to(device)
-    print(f"[leo2 bundle] moved non-block root modules to {device}: {moved/1e9:.3f}B params; "
-          f"block roots kept for FSDP: {sorted(block_roots)}", flush=True)
+    print(
+        f"[leo2 bundle] moved non-block root modules to {device}: {moved / 1e9:.3f}B params; "
+        f"block roots kept for FSDP: {sorted(block_roots)}",
+        flush=True,
+    )
 
 
 def _patch_router_dtype(model: nn.Module) -> None:
     import torch.nn.functional as F
+
     n = 0
     for name, mod in model.named_modules():
         if name.endswith(".gate.wg") and isinstance(mod, nn.Linear):
+
             def _fwd(x, _m=mod):
                 w = _m.weight
                 b = _m.bias
                 return F.linear(x, w.to(x.dtype), None if b is None else b.to(x.dtype))
+
             mod.forward = _fwd
             n += 1
     print(f"[leo2 bundle] router dtype-follow patch applied to {n} gate.wg modules", flush=True)
@@ -219,8 +271,7 @@ def _make_inference_cache_config(config: Leo2PipelineConfig) -> Any | None:
         return None
     if method != "first_block":
         raise ValueError(
-            "Leo2 inference_cache_method must be 'none' or 'first_block', "
-            f"got {config.inference_cache_method!r}."
+            f"Leo2 inference_cache_method must be 'none' or 'first_block', got {config.inference_cache_method!r}."
         )
     if not isinstance(config.inference_cache_threshold, (int, float)):
         raise TypeError("Leo2 inference_cache_threshold must be numeric.")
@@ -259,23 +310,34 @@ class Leo2Bundle(Bundle):
 
     @classmethod
     def from_config(cls, config: Leo2PipelineConfig) -> "Leo2Bundle":
+        if config.skip_load_ckpt:
+            raise ValueError(
+                "Leo2Bundle does not support skip_load_ckpt: build_model uses initialize_weights=False, "
+                "so skipping the native DCP load would leave uninitialized parameters."
+            )
+        install_transformers_flash_attention_compat()
         inference_cache_config = _make_inference_cache_config(config)
         args = _bootstrap_hymm(config)
 
         local_rank = int(os.environ.get("LOCAL_RANK", os.environ.get("RAY_LOCAL_RANK", 0)))
         if torch.cuda.is_available():
             torch.cuda.set_device(local_rank % max(1, torch.cuda.device_count()))
-        device = torch.device(config.device) if config.device else (
-            torch.device("cuda", torch.cuda.current_device()) if torch.cuda.is_available() else torch.device("cpu")
+        device = (
+            torch.device(config.device)
+            if config.device
+            else (
+                torch.device("cuda", torch.cuda.current_device()) if torch.cuda.is_available() else torch.device("cpu")
+            )
         )
 
         from hymm.models import build_model
 
-        dtype = torch.bfloat16 if config.model_precision == "bf16" else torch.float32
+        dtype = parse_torch_dtype(config.model_precision, field_name="Leo2Bundle.model_precision")
+        if dtype != torch.bfloat16:
+            raise ValueError(f"Leo2's pinned DCP checkpoint requires model_precision='bf16', got {dtype}.")
         model, _model_config = build_model(args, dtype=dtype, device="cpu", initialize_weights=False)
 
-        if not config.skip_load_ckpt:
-            _dcp_load_into(model, config.ckpt_path)
+        _dcp_load_into(model, config.ckpt_path, model_dtype=dtype)
         model.requires_grad_(False)
         model.eval()
         if config.uniform_bf16:

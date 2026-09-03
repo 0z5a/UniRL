@@ -14,15 +14,16 @@
 # Not mirrored (inherent): full-param muon lr 1e-5 -> LoRA r64 AdamW 2.5e-5;
 # KL 0.001 ref model / grpo_guard -> none. 8 prompts x 8 = 64 samples/step
 # (DP_SCATTER needs batch_size % 8 == 0), ~2x their 32.
-H=/apdcephfs_zwfy8/share_305110755/hunyuan/zuhaoding/HYV2.0
-X=$H/experiments/2026-08-27_leo2-unirl-flowgrpo
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
+RUN_ROOT="${LEO2_RUN_ROOT:-${REPO_ROOT}/outputs/leo2}"
 export RUN_NAME=leo2_t2v_v3_nativemirror_30s_eta0.5_sde0-4_k8_$(date +%m%d_%H%M)
 export NUM_ROLLOUTS=${NUM_ROLLOUTS:-200}
 export SAVE_INTERVAL=${SAVE_INTERVAL:-20}
 # frame dumps of the first decodes so the first rollout can be eyeballed
-export LEO2_DUMP_VIDEOS=$X/docs/frames_$RUN_NAME
+export LEO2_DUMP_VIDEOS="${RUN_ROOT}/frames_${RUN_NAME}"
 mkdir -p "$LEO2_DUMP_VIDEOS"
-exec bash $H/jobs/remote/unirl_longrun.sh \
+exec bash "${SCRIPT_DIR}/unirl_longrun.sh" \
   sampling.num_inference_steps=30 \
   sampling.eta=0.5 \
   "sampling.sde_indices=[0,1,2,3,4]" \

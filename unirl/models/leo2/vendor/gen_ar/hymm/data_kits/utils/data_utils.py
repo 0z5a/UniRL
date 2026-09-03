@@ -34,8 +34,6 @@ class DataMixin:
             FILE_PASSWORD = os.getenv('FILE_PASSWORD')
             if FILE_PASSWORD is None or FILE_PASSWORD == "":
                 raise ValueError(f"`enable_crypto` is enabled, but `FILE_PASSWORD` environment variable is not set.")
-            elif verbose:
-                print(f"FILE_PASSWORD loaded: {FILE_PASSWORD[:4]}...")
 
         # Initialize cos_base sources and targets
         self.cos_base_sources, self.cos_base_targets, self._cos_required_keys, self.cos_base_source_patterns = self.parse_cos_base(cos_base)

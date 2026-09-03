@@ -1,0 +1,52 @@
+{
+  "archive": {
+    "bytes": 2502296254,
+    "name": "leo2-runtime-py312-torch271-cu129-20260903.tar.gz",
+    "sha256": "ddc1fd7f587a05799a1f5d81bb530b35c1591f380c540b69409a5adf8a193cf7"
+  },
+  "build": {
+    "created_at": "2026-09-03T09:47:15+08:00",
+    "git_head": "471969969b4a9ab3e7f504e2468e19ff1abfb600",
+    "source_state": "non-editable wheel built from the staged self-contained Leo2 tree",
+    "unirl_installed_tree_sha256": "4936b3b66ad3e0eb23697768f261bf1041d42a674d4e2ec3ae60f811206f21f9"
+  },
+  "compatibility": {
+    "cuda_runtime": "12.9",
+    "python": "3.12.12",
+    "target_gpu": "Hopper sm90",
+    "torch": "2.7.1",
+    "v1_9_py313_torch210_compatible": false
+  },
+  "critical_artifacts": {
+    "deep_ep_cpp.cpython-312-x86_64-linux-gnu.so": "0515532546365c7ee0f4bd502826760681fc433bf50f70eccbc57c8057f99958",
+    "deep_ep_python_tree": "f4ae000d7add37f8225a314e136c2307f921e5fa98a891325c50b54e5e6a8868",
+    "flash_attn_2_cuda.cpython-312-x86_64-linux-gnu.so": "74a267ca7adb0f455766641a13a8655d7fc97bcad129eca4d3c77ed576e7036a",
+    "flash_attn_3_cuda.cpython-312-x86_64-linux-gnu.so": "82f45bf692c4cb83fa7ed853ab3c860b1095447198cc2de7f5fbc9b7da278a5f",
+    "libnvshmem_host.so.3": "161522861133edeb240b118d2ee49cc799124c764c11189f00201cfd44b4ae7a"
+  },
+  "release_files": {
+    "deepep_8rank_smoke.py": "fb44e9a02be9978af76d76294c58c599ccc2f234452e591687d3db66ce377f7a",
+    "requirements-20260903.txt": "dd34c073a9aac5ae0fa2806eb5d6d25156b197ed1f1cdcc7010997425f8d8b55",
+    "verify_leo2_runtime.py": "fec1ca3d4c8d95e699715ef6dbcee3c7e2cb0d0d4c4999f1e56243e4c66cdc09"
+  },
+  "versions": {
+    "deep_ep": "1.2.1+R03C03",
+    "diffusers": "0.38.0",
+    "flash_attn": "2.7.4.post1",
+    "flash_attn_3": "3.0.0b1",
+    "nvshmem": "3.7.0",
+    "transformers": "5.6.0",
+    "unirl": "0.1.0"
+  },
+  "verification": {
+    "absolute_rpaths": 0,
+    "absolute_symlinks": 0,
+    "deep_ep_8rank_cached_max_abs": 0.0,
+    "deep_ep_8rank_first_max_abs": 0.0,
+    "direct_url_files": 0,
+    "elf_files_scanned": 766,
+    "fa2_fa3_dense_max_abs": 0.0,
+    "fa2_fa3_varlen_max_abs": 0.0,
+    "relocated_prefix_test": "PASS"
+  }
+}

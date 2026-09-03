@@ -1,3 +1,4 @@
+import inspect
 from typing import Optional
 
 import torch
@@ -18,6 +19,52 @@ try:
 except:
     flash_attn_varlen_func_v3 = None
     print("flash_attn_varlen_func_v3 not available")
+
+
+def _call_flash_attn_varlen_v3(
+    query,
+    key,
+    value,
+    cu_seqlens_q,
+    cu_seqlens_k,
+    max_seqlen_q,
+    max_seqlen_k,
+    *,
+    softmax_scale,
+    causal,
+    deterministic,
+):
+    """Call both the legacy and current FlashAttention-3 varlen APIs."""
+    parameters = inspect.signature(flash_attn_varlen_func_v3).parameters
+    if "seqused_q" in parameters:
+        result = flash_attn_varlen_func_v3(
+            query,
+            key,
+            value,
+            cu_seqlens_q,
+            cu_seqlens_k,
+            None,
+            None,
+            max_seqlen_q,
+            max_seqlen_k,
+            softmax_scale=softmax_scale,
+            causal=causal,
+            deterministic=deterministic,
+        )
+    else:
+        result = flash_attn_varlen_func_v3(
+            query,
+            key,
+            value,
+            cu_seqlens_q,
+            cu_seqlens_k,
+            max_seqlen_q,
+            max_seqlen_k,
+            softmax_scale=softmax_scale,
+            causal=causal,
+            deterministic=deterministic,
+        )
+    return result[0] if isinstance(result, tuple) else result
 
 
 def flash_attn_no_pad(
@@ -95,10 +142,10 @@ def flash_attn_no_pad_v3(
     key_unpad = rearrange(key_unpad, "nnz (h d) -> nnz h d", h=nheads)
     value_unpad = rearrange(value_unpad, "nnz (h d) -> nnz h d", h=nheads)
 
-    output_unpad = flash_attn_varlen_func_v3(
+    output_unpad = _call_flash_attn_varlen_v3(
         query_unpad, key_unpad, value_unpad,
         cu_seqlens_q, cu_seqlens_k,
-        max_seqlen_q, max_seqlen_q, 
+        max_seqlen_q, max_seqlen_q,
         softmax_scale=softmax_scale,
         causal=causal,
         deterministic=deterministic

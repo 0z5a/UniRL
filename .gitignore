@@ -109,6 +109,12 @@ models/**/*.pt
 models/**/*.pth
 models/**/*.ckpt
 models/**/*.safetensors
+*.distcp
+**/ckpts/
+**/checkpoints/
+**/hymm_ar_assets/
+**/leo2_assets/
+**/weights/.metadata
 
 # IDE / editor metadata
 .vscode/

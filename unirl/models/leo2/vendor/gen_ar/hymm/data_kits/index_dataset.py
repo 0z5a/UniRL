@@ -25,8 +25,6 @@ import urllib.parse
 
 # Try to load password from environment variable
 FILE_PASSWORD = os.getenv('FILE_PASSWORD')
-if FILE_PASSWORD is not None:
-    print(f"FILE_PASSWORD loaded: {FILE_PASSWORD[:4]}...")
 
 
 class IndexColumn(dict):

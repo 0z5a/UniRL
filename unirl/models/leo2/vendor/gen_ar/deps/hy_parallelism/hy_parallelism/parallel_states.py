@@ -47,6 +47,21 @@ def init_device_mesh(
     return device_mesh
 
 
+def _get_cp_backend_override(use_high_priority_stream: bool) -> dict:
+    if version.parse(torch.__version__) < version.parse("2.10"):
+        return {}
+    if not use_high_priority_stream:
+        return {}
+    try:
+        from torch.distributed import ProcessGroupNCCL
+        return {'cp': ProcessGroupNCCL.Options(is_high_priority_stream=True)}
+    except Exception:
+        loguru.logger.warning(
+            "ProcessGroupNCCL.Options unavailable; cp high-priority stream disabled"
+        )
+        return {}
+
+
 device_type = 'cuda'
 
 def flatten_mesh(mesh, keys, target_name, force=False):
@@ -76,13 +91,16 @@ class HYParallelDims:
     cp: int = 1
     ep: int = 1
     pp: int = 1
+    expert_dp_shard: int = 1
     world_splits: int = 1
     timeout: datetime.timedelta | float | None = None
 
     # ep sharding will produce zero shape weights, which is incompatible with ptm MOE
     # (maybe we need _experts_shard_placement_fn as in https://github.com/pytorch/torchtitan/blob/fbafd44da2baef0afac58989f07d799c4251bdef/torchtitan/experiments/transformers_modeling_backend/infra/parallelize.py#L350)
     # In addition, sharding ep makes it hard to broadcast parameters during model initialization in dp_replicate mode
-    enable_expert_fsdp_sharding = False 
+    enable_expert_fsdp_sharding: bool = False
+    expert_shard_dim = 0
+    use_high_priority_stream: bool = True
 
     _is_built = False
 
@@ -146,6 +164,34 @@ class HYParallelDims:
         dp_mesh: DeviceMesh | None
         dp_rank: int
         dp_size: int
+
+
+    def should_sync_groups_dict(self):
+        ret = {}
+        ret['fsdp'] = self.default_fsdp_mesh.get_group(-1)
+        if self.enable_expert_fsdp_sharding:
+            ret['expert_fsdp'] = self.expert_fsdp_mesh.get_group(-1)
+        if self.ep > 1:
+            ret['ep'] = self.ep_mesh.get_group(-1)
+        if self.tp > 1:
+            ret['tp'] = self.tp_mesh.get_group(-1)
+        if self.cp > 1:
+            ret['cp'] = self.cp_mesh.get_group(-1)
+        return ret
+
+    def should_sync_groups(self):
+        # 返回邊啲group系需要同時forward嘅；即 forward 時會產生邊啲group嘅通訊
+        yield self.default_fsdp_mesh.get_group(-1)
+        if self.enable_expert_fsdp_sharding:
+            yield self.expert_fsdp_mesh.get_group(-1)
+        if self.ep > 1:
+            yield self.ep_mesh.get_group(-1)
+        if self.tp > 1:
+            yield self.tp_mesh.get_group(-1)
+        if self.cp > 1:
+            yield self.cp_mesh.get_group(-1)
+        if self.pp > 1:
+            yield self.pp_mesh.get_group(-1)
 
     def __post_init__(self):
         self._validate()
@@ -256,11 +302,26 @@ class HYParallelDims:
         self.device_mesh_for_default_fsdp = init_device_mesh(
             device_type, (self.world_splits, self.pp, self.dp_replicate, self.dp_shard, self.tp), mesh_dim_names=('world_splits', 'pp', 'dp_replicate', 'dp_shard', 'tp'), timeout=self.timeout
         )
+
+        # router 只依赖 dtype cast, 不需要shard，全为 dp_replicate
+        device_mesh_for_rounter = init_device_mesh(
+            device_type, (self.world_splits, self.pp, self.dp_replicate * self.dp_shard, 1, self.tp), mesh_dim_names=('world_splits', 'pp', 'dp_replicate', 'dp_shard', 'tp'), timeout=self.timeout
+        )
+        self.router_fsdp_mesh = device_mesh_for_rounter['dp_replicate', 'dp_shard']
+
+        self.device_mesh_for_default_fsdp_fully_replicate = init_device_mesh(
+            device_type, (self.world_splits, self.pp, (self.dp_replicate * self.dp_shard), 1, self.tp), mesh_dim_names=('world_splits', 'pp', 'dp_replicate', 'dp_shard', 'tp'), timeout=self.timeout
+        )
         if self.dp_replicate > 1:
             self.default_fsdp_mesh = self.device_mesh_for_default_fsdp['dp_replicate', 'dp_shard']
         else:
             # self.device_mesh_for_default_fsdp = init_device_mesh(device_type, (self.world_splits, self.pp, self.dp_shard, self.tp), mesh_dim_names=('world_splits', 'pp', 'dp_shard', 'tp'))
             self.default_fsdp_mesh = self.device_mesh_for_default_fsdp['dp_shard']
+
+        # TODO: 8 卡時 fsdp 可能會直接用 default_pg，cp8 嘅話，同時亦都會用 default_pg
+        # 導致無法重疊，呢度嘗試將 fsdp 用另外嘅 group，但係好似依然使用嘅系 default_pg
+        # 未來考慮修復呢個問題
+        self.default_fsdp_mesh = self.device_mesh_for_default_fsdp['dp_replicate', 'dp_shard']
 
         if self.ep > 1:
             ep_shardable_space = self.world_size // (self.world_splits * self.pp * self.ep * self.etp)
@@ -268,20 +329,25 @@ class HYParallelDims:
             # expert_data_parallel_size = self.world_size // expert_tensor_model_pipeline_parallel_size
             assert self.world_size % (self.world_splits * self.pp * self.ep * self.etp) == 0, f'{self.world_size=}, {self.world_splits=}, {self.pp=}, {self.ep=}, {self.etp=}'
             if self.enable_expert_fsdp_sharding:
-                raise NotImplementedError(
-                    'EP sharding is not implemented yet. '
-                    'ep sharding will produce zero shape weights, which is incompatible with ptm MOE. '
-                    'In addition, sharding ep makes it hard to broadcast parameters during model initialization in dp_replicate mode. '
-                )
+                # raise NotImplementedError(
+                #     'EP sharding is not implemented yet. '
+                #     'ep sharding will produce zero shape weights, which is incompatible with ptm MOE. '
+                #     'In addition, sharding ep makes it hard to broadcast parameters during model initialization in dp_replicate mode. '
+                # )
+                assert ep_shardable_space % self.expert_dp_shard == 0
                 self.device_mesh_for_ep = init_device_mesh(
-                    device_type, (self.world_splits, self.pp, ep_shardable_space, self.ep, self.etp), mesh_dim_names=('world_splits', 'pp', 'ep_shardable', 'ep', 'etp'), timeout=self.timeout
+                    device_type,
+                    (self.world_splits, self.pp, ep_shardable_space // self.expert_dp_shard, self.expert_dp_shard, self.ep, self.etp),
+                    mesh_dim_names=('world_splits', 'pp', 'ep_fsdp_replicate', 'ep_fsdp_shard', 'ep', 'etp'),
+                    timeout=self.timeout
                 )
-                self.expert_fsdp_mesh = self.device_mesh_for_ep['ep_shardable']
-                self.ep_related_mesh = self.device_mesh_for_ep[('ep_shardable', 'ep')]
+                self.expert_fsdp_mesh = self.device_mesh_for_ep['ep_fsdp_replicate', 'ep_fsdp_shard']
+                self.ep_related_mesh = self.device_mesh_for_ep['ep_fsdp_replicate', 'ep_fsdp_shard', 'ep', 'etp']
             else:
                 # In this implementation, even if we don't want to apply FSDP sharding on experts,
                 # we still create a dummy FSDP mesh (replicate=n, shard=1).
                 # Note: This dummy mesh may not be used if we skip the apply_fsdp function.
+                assert self.expert_dp_shard == 1
 
                 self.device_mesh_for_ep = init_device_mesh(
                     device_type,
@@ -289,7 +355,7 @@ class HYParallelDims:
                     mesh_dim_names=('world_splits', 'pp', 'ep_fsdp_replicate', 'ep_fsdp_shard', 'ep', 'etp'),
                     timeout=self.timeout
                 )
-                self.expert_shard_mesh = self.device_mesh_for_ep['ep_fsdp_shard'] # helps determine whether to use `shard_placement_fn`
+                # self.expert_shard_mesh = self.device_mesh_for_ep['ep_fsdp_shard'] # helps determine whether to use `shard_placement_fn`
                 self.expert_fsdp_mesh = self.device_mesh_for_ep['ep_fsdp_replicate', 'ep_fsdp_shard']
                 # self.ep_related_mesh = self.device_mesh_for_ep['ep_fsdp_replicate', 'ep_fsdp_shard', 'ep']
                 self.ep_related_mesh = self.device_mesh_for_ep['ep_fsdp_replicate', 'ep_fsdp_shard', 'ep', 'etp']
@@ -300,7 +366,17 @@ class HYParallelDims:
 
         dp = self.world_size // (self.world_splits * self.pp * self.cp * self.tp)
         assert self.world_size % (self.world_splits * self.pp * self.cp * self.tp) == 0
-        self.device_mesh_for_pp_dp_cp_tp = init_device_mesh(device_type, (self.world_splits, self.pp, dp, self.cp, self.tp), mesh_dim_names=('world_splits', 'pp', 'dp', 'cp', 'tp'), timeout=self.timeout)
+        cp_mesh_kwargs = {}
+        cp_backend_override = _get_cp_backend_override(self.use_high_priority_stream)
+        if cp_backend_override:
+            cp_mesh_kwargs['backend_override'] = cp_backend_override
+        self.device_mesh_for_pp_dp_cp_tp = init_device_mesh(
+            device_type,
+            (self.world_splits, self.pp, dp, self.cp, self.tp),
+            mesh_dim_names=('world_splits', 'pp', 'dp', 'cp', 'tp'),
+            timeout=self.timeout,
+            **cp_mesh_kwargs,
+        )
         self.device_mesh_for_pp_dp_cp_tp['pp', 'cp', 'tp']._flatten(mesh_dim_name='non_dp')
 
 
@@ -539,6 +615,7 @@ class TitanParallelDims:
     etp: int
     world_size: int
     timeout: datetime.timedelta | float | None = None
+    use_high_priority_stream: bool = True
 
     _meshes: dict[str, DeviceMesh] = field(default_factory=dict)
     _world_mesh: DeviceMesh | None = None
@@ -631,9 +708,12 @@ class TitanParallelDims:
             to avoid unnecessary process group creation.
             """
             backend_override = {}
+            cp_backend_override = _get_cp_backend_override(self.use_high_priority_stream)
             for name, degree in zip(dim_names, dim_degrees, strict=True):
                 if (not self._mesh_exist(name, degree)) or name == "batch":
                     backend_override[name] = "fake"
+                elif name == "cp" and name in cp_backend_override:
+                    backend_override[name] = cp_backend_override[name]
             if hasattr(world_mesh, "_unflatten"):
                 return world_mesh._unflatten(
                     0, dim_degrees, dim_names, backend_override=backend_override
@@ -916,31 +996,41 @@ _UNDER_DEVICE_MESH_CONTEXT = False
 def get_or_init_parallel_state(
     dp_replicate: int = 1,
     dp_shard: int = -1,
+    expert_dp_shard: int = 1,
     sp: int = 1, # legacy
     cp: int = 1,
     etp: int = 1,
     tp: int = 1,
     pp: int = 1,
     ep: int = 1,
+    enable_expert_fsdp_sharding: bool = False,
     world_size: int = None,
     mesh_tag='default',
+    use_high_priority_stream: bool = True,
 ):
     if mesh_tag in _PARALLEL_STATE_DICT:
         return _PARALLEL_STATE_DICT[mesh_tag]
-    return init_parallel_state(dp_replicate, dp_shard, sp, cp, etp, tp, pp, ep, world_size, mesh_tag)
+    return init_parallel_state(
+        dp_replicate, dp_shard, expert_dp_shard, sp, cp, etp, tp, pp, ep,
+        enable_expert_fsdp_sharding, world_size, mesh_tag, timeout=None,
+        use_high_priority_stream=use_high_priority_stream,
+    )
 
 def init_parallel_state(
     dp_replicate: int = 1,
     dp_shard: int = -1,
+    expert_dp_shard: int = 1,
     sp: int = 1, # legacy
     cp: int = 1,
     etp: int = 1,
     tp: int = 1,
     pp: int = 1,
     ep: int = 1,
+    enable_expert_fsdp_sharding: bool = False,
     world_size: int = None,
     mesh_tag=_DEFAULT_PARALLEL_STATE_KEY,
     timeout: datetime.timedelta | float | None = None,
+    use_high_priority_stream: bool = True,
 ):
     """
     Initializes global parallel state.
@@ -966,13 +1056,16 @@ def init_parallel_state(
     parallel_dims = ParallelDims(
         dp_replicate=dp_replicate,  # world_size//8 在单个Node下进行切片
         dp_shard=dp_shard,
+        expert_dp_shard=expert_dp_shard,
         cp=max(sp, cp),
         tp=tp,
         pp=pp,
         ep=ep,
         etp=etp,
         world_size=world_size,
+        enable_expert_fsdp_sharding=enable_expert_fsdp_sharding,
         timeout=timeout,
+        use_high_priority_stream=use_high_priority_stream,
     )
     parallel_dims.mesh_tag = mesh_tag
     _PARALLEL_STATE_DICT[mesh_tag] = parallel_dims

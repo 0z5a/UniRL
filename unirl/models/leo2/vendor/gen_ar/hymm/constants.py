@@ -28,10 +28,7 @@ INDEX_STRATEGY = {"uniform", "probability"}
 SUPPORTED_LATENT_CHANNEL_EXTEND_TYPES = ("t2i", "t2a", "t2v", "i2v", "fl2v")
 
 # ================ Module Assets (training and evaluation) ================
-# ASSETS_BASE = os.getenv("ASSETS_BASE", "/apdcephfs_nj10/share_301739632/1_public_models/hymm_ar_assets").rstrip('/')
-# ASSETS_BASE = os.getenv("ASSETS_BASE", "/apdcephfs_gy2/share_302507476/1_public_models/hymm_ar_assets").rstrip('/')
-# ASSETS_BASE = os.getenv("ASSETS_BASE", "/apdcephfs_zwfy/share_303937731/1_public_models/hymm_ar_assets").rstrip('/')
-ASSETS_BASE = os.getenv("ASSETS_BASE", "/apdcephfs_wza/1_public_models/hymm_ar_assets").rstrip('/')
+ASSETS_BASE = os.getenv("ASSETS_BASE", "").rstrip('/')
 
 VAE_BASE = os.getenv("VAE_BASE", f"{ASSETS_BASE}/image_encoder").rstrip('/')
 AUDIO_VAE_BASE = os.getenv("VAE_BASE", f"{ASSETS_BASE}/audio_encoder").rstrip('/')

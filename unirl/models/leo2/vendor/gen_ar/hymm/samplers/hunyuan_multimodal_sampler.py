@@ -19,7 +19,6 @@ from hymm.core.global_vars import get_args, get_logger, get_parallel_state
 from hymm.core.parallel_states import ParallelState
 from hymm.data_kits.csv_dataset import MessageListDataset
 from hymm.data_kits.datasampler import DistributedSamplerFix
-from hymm.metrics import load_metric
 from hymm.models import build_model
 from hymm.utils.helpers import default, print_args, readable_time
 from hymm.utils.file_utils import safe_save_file, save_to_json
@@ -449,6 +448,10 @@ class HunyuanMultimodalSampler(object):
             # 3. Build metric instance if needed
             metric_instances = []
             if run_task_type == "eval_metric":
+                raise NotImplementedError(
+                    "Metric evaluation is not included in the vendored Leo2 runtime; "
+                    "run sampling here and evaluate the saved media in a separate evaluation environment."
+                )
                 kwargs = {}
                 if dataset.testset == "mmlu_bench":
                     kwargs = {"tokenizer": self.model.tokenizer}
@@ -458,6 +461,8 @@ class HunyuanMultimodalSampler(object):
                 metric_types = testset_task_kwargs["metric"].split("+")
 
                 for metric_type in metric_types:
+                    from hymm.metrics import load_metric
+
                     metric = load_metric(f"{metric_type}@{dataset.testset}", **kwargs)
                     metric.load_model(self.logger)
                     metric_instances.append((metric, metric_type))

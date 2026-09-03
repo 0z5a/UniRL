@@ -32,7 +32,74 @@ from hy_parallelism.parallel_states import get_parallel_state
 T = TypeVar("T", bound=Optimizer)
 
 
-def maybe_scatter_ep_param(param):
+
+def maybe_scatter_ep_param(param: DTensor) -> DTensor:
+    shard_dim = get_parallel_state().expert_shard_dim
+    if shard_dim == 0:
+        return maybe_scatter_ep_param_expert_shard_on_0(param)
+    else:
+        return maybe_scatter_ep_param_expert_shard_on_other_dim(param)
+
+def maybe_recover_ep_param(param, fsdp_applied_for_experts):
+    # 此時 param 系從 dcp ckpt 讀出嚟嘅參數，placement 應該系同 get_state_dict 出嚟嘅參數一致
+    # 所以唔可以用呢個來判斷本次 run 嘅 Expert 系從邊個維度切分
+    shard_dim = get_parallel_state().expert_shard_dim
+    if shard_dim == 0:
+        return maybe_recover_ep_param_expert_shard_on_0(param, fsdp_applied_for_experts)
+    else:
+        return maybe_recover_ep_param_expert_shard_on_other_dim(param, fsdp_applied_for_experts)
+
+
+def maybe_scatter_ep_param_expert_shard_on_other_dim(param):
+    ep_related_mesh = get_parallel_state().ep_related_mesh
+    ep_related_mesh: DeviceMesh
+    old_placements = param.placements
+
+    assert ep_related_mesh.ndim == 4
+    assert isinstance(param, DTensor)
+    assert len(old_placements) == 2
+    assert isinstance(old_placements[-1], Shard)
+    assert old_placements[-1].dim != 0
+
+    actual_placements = [Replicate(), old_placements[-1], Shard(0), Replicate()] # rep, fsdp, ep, etp
+
+    return DTensor.from_local(
+        local_tensor=param.to_local(),
+        device_mesh=ep_related_mesh,
+        placements=actual_placements,
+    )
+
+def maybe_recover_ep_param_expert_shard_on_other_dim(param, fsdp_applied_for_experts):
+    if not fsdp_applied_for_experts:
+        # 唔記得之前點解要加呢個參數，照計如果行到呢個函數，應該必定開咗 EP，咁必定expert有fsdp
+        raise NotImplementedError
+    ep_related_mesh = get_parallel_state().ep_related_mesh
+    ep_related_mesh: DeviceMesh
+    old_placements = param.placements
+
+    assert ep_related_mesh.ndim == 4
+    from torch.distributed.tensor import distribute_tensor
+    assert len(old_placements) == 2
+    assert isinstance(old_placements[-1], Shard)
+    assert old_placements[-1].dim != 0
+
+    actual_local = distribute_tensor(
+        param.to_local(),
+        ep_related_mesh,
+        # 因為用緊 local, 所以其他可以理解成 replicate
+        [Replicate(), Replicate(), Shard(0), Replicate()],
+    )
+    return DTensor.from_local(
+        local_tensor=actual_local,
+        device_mesh=param.device_mesh,
+        placements=old_placements,
+    )
+
+
+def maybe_scatter_ep_param_expert_shard_on_0(param):
+    # TODO：其實好似有個好好嘅重構思路：只要 expert fsdp 唔系專家切分，
+    # 就唔需要考慮DTensor嘅切分順序同真實先ep再fsdp順序唔一致嘅問題，因為本身就唔係切同一個維度
+
     # ('dp_replicate', 'dp_shard_mod_ep', 'ep')
     ep_related_mesh = get_parallel_state().ep_related_mesh
     ep_related_mesh: DeviceMesh
@@ -82,8 +149,16 @@ def maybe_scatter_ep_param(param):
     if get_parallel_state().tp_enabled:
         raise NotImplementedError('Old EP implementation with TP is not implemented yet.')
 
+    # TODO: 最新代碼應該只支持4維
+    #     其他嘅if分支系為咗適配老代碼
+    #     將來可以棄用
     if ep_related_mesh.ndim == 4: # ep fsdp rep, ep fsdp shard, ep, etp
+        # 最新代碼應該可以認為喺fsdp維度系replicate，因為前面而應full_tensor
+        # 點解要fulltensor？因為同切分順序有關，我哋創建時系先ep再fsdp
+        # 但係dtensor嘅切分順序唔一樣
         placements = [Replicate(), Replicate(), Shard(0), Replicate()]
+        # TODO: 未來呢度唔一定系shard0，因為取決於expert系點shard嘅
+        #     不過應該都得，可以以任何形式儲存，載入時再按對應方式重切分
         target_placements = [Replicate(), Shard(0), Shard(0), Replicate()]
     elif ep_related_mesh.ndim == 3: # ep fsdp rep, ep, etp  | ep fsdp rep, ep fsdp shard, ep
         placements = [Replicate(), Replicate(), Shard(0)]
@@ -102,11 +177,14 @@ def maybe_scatter_ep_param(param):
     # Only shard when the tensor can be evenly sharded.
     # This is a workaround for a PyTorch bug (<2.8.0).
     # See also: https://github.com/pytorch/pytorch/commit/c3bc6b354239d78a15e2bcd43f6567c71db1ba71
+    # TODO: 呢度唔一定睇shape[0]，取決於expert fsdp是否切0
     if param.shape[0] % ep_related_mesh.size(mesh_dim=-2) == 0:
         # Reduce peak memory
+        # 唯獨均勻切分允許先按 fsdp 切好再 save
         dtensor = dtensor.redistribute(placements=target_placements)
     else:
         # Uneven case, save without manual sharding
+        # save 之前唔切fsdp，有可能顯存會高D
         import warnings
         if version.parse(torch.__version__) >= version.parse("2.8.0"):
             if os.environ.get('RANK', '0') == '0' and os.environ.get('HY_PARALLELISM_DEBUG', '0') == '1':
@@ -118,7 +196,7 @@ def maybe_scatter_ep_param(param):
     return dtensor
 
 
-def maybe_recover_ep_param(param, fsdp_applied_for_experts):
+def maybe_recover_ep_param_expert_shard_on_0(param, fsdp_applied_for_experts):
 
     expert_fsdp_mesh = get_parallel_state().expert_fsdp_mesh
     ep_related_mesh = get_parallel_state().ep_related_mesh
@@ -155,6 +233,7 @@ def maybe_recover_ep_param(param, fsdp_applied_for_experts):
     else:
         raise ValueError(f'Unexpected EP related mesh dimension: {ep_related_mesh.ndim}')
 
+    # 啱啱讀入嚟嗰時系純 fsdp dtensor, 需要先恢復完整再切分
     param = param.full_tensor()
 
     # ep sharding
@@ -168,8 +247,10 @@ def maybe_recover_ep_param(param, fsdp_applied_for_experts):
     # This is not the case when expert fsdp is not enabled.
     # We need to add a check for this.
     if expert_fsdp_mesh.ndim == 2:
+        # TODO: 呢度未必系shard0，取決於expert fsdp系點切
         placements = [Replicate(), Shard(0)]
     elif expert_fsdp_mesh.ndim == 1:
+        # TODO: 呢度未必系shard0，取決於expert fsdp系點切
         placements = [Shard(0)]
     else:
         raise ValueError(f'Unexpected expert FSDP mesh dimension: {expert_fsdp_mesh.ndim}')
@@ -393,7 +474,7 @@ class OptimizersContainer(Optimizer, Stateful, Generic[T]):
             for params in self.get_parameter_groups(model, skip_special=True):
                 optimizer_n_diff_mesh.append(optimizer_cls(params, **optimizer_kwargs))
                 all_params.extend(params)
-            
+
             # Only special params are included, ensuring no duplicate optimizers
             for params, special_optimizer_cls, special_optimizer_kwargs in self._special_optimizer_group_configs:
                 optimizer_n_diff_mesh.append(special_optimizer_cls(params, **special_optimizer_kwargs))
@@ -437,7 +518,7 @@ class OptimizersContainer(Optimizer, Stateful, Generic[T]):
         }
 
         global_states = get_global_states()
-        if get_parallel_state().ep_enabled and not global_states.use_titan_moe: 
+        if get_parallel_state().ep_enabled and not global_states.use_titan_moe:
             for fqn in list(ret.keys()):
                 param  = ret[fqn]
                 if self.is_ep_states(fqn, param):
@@ -448,7 +529,7 @@ class OptimizersContainer(Optimizer, Stateful, Generic[T]):
 
     def load_state_dict(self, state_dict: dict[str, Any]) -> None:
         global_states = get_global_states()
-        if get_parallel_state().ep_enabled and not global_states.use_titan_moe: 
+        if get_parallel_state().ep_enabled and not global_states.use_titan_moe:
             for fqn in list(state_dict.keys()):
                 if self.is_ep_states(fqn, state_dict[fqn]):
                     state_dict[fqn] = maybe_recover_ep_param(state_dict[fqn], True)
@@ -556,7 +637,7 @@ class ModelWrapper(Stateful):
         When using `dcp.load`, model tensors might be updated in-place after
         `_load_state_dict` and before `elem.load_state_dict(stateful_sd[key])`.
         However, depending only on in-place updates is risky: if `get_state_dict`
-        changes the state dict, those changes only update a copied statedict inplace, 
+        changes the state dict, those changes only update a copied statedict inplace,
         rather than the original state dict.
         To ensure parameters are properly restored after checkpoint loading,
         `dcp.load` explicitly calls `elem.load_state_dict(stateful_sd[key])`.
@@ -698,7 +779,7 @@ def get_reverse_mapped_stateful(stateful, reverse_mapping_fn: Callable):
 
         def state_dict(self) -> Dict[str, Any]:
             ...
-        
+
         def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
             ...
 
@@ -719,4 +800,3 @@ def wrap_model_to_stateful(models, stateful_class: Optional[Type[Stateful]]=None
             return ModelWrapper(models)
     else:
         return stateful_class(models)
-        

@@ -22,6 +22,7 @@ import torch
 from packaging import version
 from torch import isfinite, nn
 from torch.amp.grad_scaler import GradScaler
+from torch.distributed.fsdp._fully_shard import FSDPModule
 from torch import distributed as dist
 from torch.distributed import init_device_mesh
 from torch.distributed.checkpoint.stateful import Stateful
@@ -57,7 +58,12 @@ from hy_parallelism.utils import (
     sync_object_for_parallel_training,
 )
 from hy_parallelism.tools.profiling import profile_range
-
+from hy_parallelism.training.cast_device import cast_to_device
+from hy_parallelism.training.checkpointing import ACTIVATION_POOL_NAME
+from hy_parallelism.training.pinned_memory_pool import (
+    PinnedMemoryPool,
+    get_pinned_memory_pool,
+)
 
 DEBUG_MODE = False
 
@@ -203,11 +209,11 @@ class DeepSpeedInterface(ABC):
 
     @abstractmethod
     def save_checkpoint(
-        self, 
-        save_dir, 
-        tag=None, 
-        client_state: dict | None = None, 
-        save_latest=True, 
+        self,
+        save_dir,
+        tag=None,
+        client_state: dict | None = None,
+        save_latest=True,
         exclude_frozen_parameters=False,
         save_all_ranks_training_states=False,
         dcp_save_kwargs: dict | None = None,
@@ -302,9 +308,9 @@ class EngineInterface:
         hy_parallelism Parameter initialization:
         1. recursivlly call `reset_parameters` on all modules.
         2. run `param_init_fn` if provided.
-        
+
         An example:
-        
+
         default_fsdp_kwargs = self.default_fsdp_kwargs.copy()
 
         # PTM MOE implementation requires param_dtype to be float32
@@ -488,7 +494,7 @@ class EngineInterface:
             ("experts" in fqn and "deepspeed" not in fqn and 'shared_experts' not in fqn)
             or "deepspeed_experts" in fqn
         )
-    
+
     def is_moe(self, module_full_name, module):
         from hy_parallelism.models.modules.moe import PTMHunYuanMoE, HunYuanMoE, MoE
         if isinstance(module, (PTMHunYuanMoE, HunYuanMoE, MoE)):
@@ -503,7 +509,7 @@ class EngineInterface:
             return True
         if isinstance(module_full_name, str) and \
             (
-                module_full_name.endswith('.router') or 
+                module_full_name.endswith('.router') or
                 (module_full_name.endswith('.gate') and 'router' not in module_full_name) # puretorch gate, filter out router.gate (submodule of titan router)
             ):
             return True
@@ -588,6 +594,7 @@ class BaseParallelEngine(DeepSpeedInterface, EngineInterface):
         activation_offloading=False,
         activation_offloading_pin_memory=True,
         optimizer_offloading=False,
+        optimizer_offloading_pin_memory=True,
 
         # ---------- Mixed Precision/CUDA/Autocast/Quantization ----------
         enable_autocast=True,
@@ -623,6 +630,7 @@ class BaseParallelEngine(DeepSpeedInterface, EngineInterface):
         # ---------- Model Initialization/Meta Param ----------
         initialize_meta_param=True,            # 为了临时适配jianwei的需求加的，如果为 False，则不在切并行之前对meta参数做初始化
         init_meta_stage="post_fsdp",           # ['pre_fsdp' | 'post_fsdp' ]
+        call_module_reset_parameters=True,     # 是否递归调用各 module 的 reset_parameters
         dp_replicate_param_handler='sync',     # ['sync' | 'safe_sync' | 'check', 'none', 'noop']
 
         # ---------- Debug/Check ----------
@@ -802,11 +810,12 @@ class BaseParallelEngine(DeepSpeedInterface, EngineInterface):
         self.parallel_dims = parallel_dims
         self.initialize_meta_param = initialize_meta_param
         self.init_meta_stage = init_meta_stage
+        self.call_module_reset_parameters = call_module_reset_parameters
         assert dp_replicate_param_handler.lower() in ['sync', 'safe_sync', 'check', 'none', 'noop'], f"Invalid dp_replicate_param_handler: {dp_replicate_param_handler}"
         self.dp_replicate_param_handler = dp_replicate_param_handler.lower()
         self.model_stateful_class = model_stateful_class
         self.enable_autocast = enable_autocast
-        self.extra_dcp_states = extra_dcp_states 
+        self.extra_dcp_states = extra_dcp_states
         self.benchmark_m_list = benchmark_m_list
         self.check_grad = check_grad
 
@@ -886,6 +895,10 @@ class BaseParallelEngine(DeepSpeedInterface, EngineInterface):
         self.activation_offloading = activation_offloading
         self.activation_offloading_pin_memory = activation_offloading_pin_memory
         self.optimizer_offloading = optimizer_offloading
+        self.optimizer_offloading_pin_memory = optimizer_offloading_pin_memory
+        self.model_pinned_memory_pool = None
+        if self.optimizer_offloading_pin_memory:
+            self.optimizer_pinned_memory_pool = PinnedMemoryPool()
         self.full_sd = full_sd
         self.load_ckpt_path = load_ckpt_path
 
@@ -1058,10 +1071,10 @@ class BaseParallelEngine(DeepSpeedInterface, EngineInterface):
             #           This make HYImage3.5 fail to call `clear_cached_result` after forward. since they directly
             #           call the original forward method rather than Engine.__call__ in their `GenerationMixin``.
             #
-            #       To fix this: 
+            #       To fix this:
             #            for non-pp case, we keep the forward unchanged and cache the result in __call__.
             #            returning loss in get_real_ret.
-            if self.enable_pp: 
+            if self.enable_pp:
                 m.forward = loss_closure_forward.__get__(m)
 
         if enable_autocast:
@@ -1075,7 +1088,7 @@ class BaseParallelEngine(DeepSpeedInterface, EngineInterface):
 
             """
             AC(FSDP) has a bug. We wrap all submodules' forward with autocast as a workaround.
-            
+
             Sep 28 2025: This bug can be fixed by implementing checkpointing in another way.
             We thus don't apply autocast to submodules since this makes it hard to disable autocast inside forward call (its submodule will be enabled again)
             """
@@ -1131,7 +1144,7 @@ class BaseParallelEngine(DeepSpeedInterface, EngineInterface):
     def _check_optimizer_config(self):
         if self.optimizer_config is None:
             return
-        
+
         if not isinstance(self.optimizer_config, dict):
             raise ValueError(f"optimizer_config must be a dict, but got {type(self.optimizer_config)}")
 
@@ -1160,9 +1173,9 @@ class BaseParallelEngine(DeepSpeedInterface, EngineInterface):
     def state_dict(self):
         """Return the state dictionary of the model for the current pipeline stage.
 
-        This method only handles DTensor, which means it returns only the state of the 
-        current pipeline stage when pipeline parallel is enabled. 
-        The returned state dict includes DTensors (distributed tensors) as-is, 
+        This method only handles DTensor, which means it returns only the state of the
+        current pipeline stage when pipeline parallel is enabled.
+        The returned state dict includes DTensors (distributed tensors) as-is,
         without converting them to regular tensors.
 
         Note:
@@ -1219,7 +1232,7 @@ class BaseParallelEngine(DeepSpeedInterface, EngineInterface):
             ret = {}
             for sd in sds:
                 ret.update(sd)
-        
+
         if lazy:
             ret = LazyStateDict(ret)
 
@@ -1288,24 +1301,24 @@ class BaseParallelEngine(DeepSpeedInterface, EngineInterface):
             >>> import torch
             >>> import torch.nn as nn
             >>> from hy_parallelism.engines import ParallelEngine
-            >>> 
+            >>>
             >>> model = nn.Linear(10, 1)
             >>> engine = ParallelEngine(model)
-            >>> 
+            >>>
             >>> # Define a simple loss closure
             >>> def loss_closure(model_output, model_input):
             ...     loss = model_output.mean()
             ...     return loss, {'loss': loss.item()}
-            >>> 
+            >>>
             >>> engine.register_loss_closure(loss_closure)
             >>> engine.train()
-            >>> 
+            >>>
             >>> # Forward pass returns the loss in training mode
             >>> loss = engine(torch.randn(32, 10))
-            >>> 
+            >>>
             >>> # Retrieve loss dictionary
             >>> loss_dict = engine.get_cached_result("loss_dict")
-            >>> 
+            >>>
             >>> # In eval mode, returns model output instead
             >>> engine.eval()
             >>> output = engine(torch.randn(32, 10))  # Returns model output, not loss
@@ -1340,7 +1353,7 @@ class BaseParallelEngine(DeepSpeedInterface, EngineInterface):
                 "If you are training the model, please register a loss closure function using `register_loss_closure` method. "
                 "If you are performing inference, you must call `engine.eval()` before calling forward."
             )
-        
+
         loss_closure_out = self.__loss_closure(*args, **kwargs)
         (loss, loss_dict) = loss_closure_out
         if self.enable_pp:  # make pp happy
@@ -1415,8 +1428,8 @@ class BaseParallelEngine(DeepSpeedInterface, EngineInterface):
 
         .. warning::
             Batch size can be different in different data parallel groups, which could break
-            expert parallelism (EP). 
-            Setting :attr:`__high_prio_micro_batch_size` can easily result in different `m` in 
+            expert parallelism (EP).
+            Setting :attr:`__high_prio_micro_batch_size` can easily result in different `m` in
             different DP ranks.  If different DP rank has different `m_microbatch`, EP will hang.
         """
         if not self.enable_pp:
@@ -1463,30 +1476,34 @@ class BaseParallelEngine(DeepSpeedInterface, EngineInterface):
                 for group in self.parallel_dims.expert_fsdp_mesh.get_all_groups():
                     dist.barrier(group)
 
-    def backward(self, loss, retain_graph=None, create_graph=False, scale_wrt_gas=True):
+    def backward(self, loss, retain_graph=None, create_graph=False, scale_wrt_gas=True, backward_fn=None):
         self.barrier_fsdp_groups()
         self.remove_loss_closure()
         self.clear_cached_result()
         if self.enable_pp:
-            # if retain_graph is not None or create_graph is not False: # Is not default value
-            #     raise ValueError(f"retain_graph={retain_graph} and create_graph={create_graph} are not supported in pipeline parallel mode yet.")
             pass
         else:
             loss = loss / self.gradient_accumulation_steps
-            if self.enable_grad_scaler:
-                self.grad_scaler.scale(loss).backward(retain_graph=retain_graph, create_graph=create_graph)
+            if backward_fn is not None:
+                backward_fn(loss)
             else:
-                loss.backward(retain_graph=retain_graph, create_graph=create_graph)
+                if self.enable_grad_scaler:
+                    self.grad_scaler.scale(loss).backward(retain_graph=retain_graph, create_graph=create_graph)
+                else:
+                    loss.backward(retain_graph=retain_graph, create_graph=create_graph)
 
         from torch.distributed.fsdp._fully_shard import FSDPModule
         # HACK: Support old PyTorch version
-        if self.enable_ep and not hasattr(FSDPModule, 'set_gradient_divide_factor'): 
+        if self.enable_ep and not hasattr(FSDPModule, 'set_gradient_divide_factor') and self.is_gradient_accumulation_boundary():
             for name, param in self.named_parameters():
                 if self.is_expert(name):
                     default_fsdp_mesh = get_parallel_state().default_fsdp_mesh
                     ep_fsdp_mesh = get_parallel_state().expert_fsdp_mesh
                     if param.grad is not None:
                         param.grad.data.mul_(ep_fsdp_mesh.size() / default_fsdp_mesh.size())
+
+        if not retain_graph:
+            get_pinned_memory_pool(ACTIVATION_POOL_NAME).reset()
 
         if self.check_grad:
             non_count = 0
@@ -1515,7 +1532,7 @@ class BaseParallelEngine(DeepSpeedInterface, EngineInterface):
             if nan_inf_count > 0:
                 loguru.logger.critical(f"{nan_inf_count}/{param_count} ({nan_inf_count/param_count*100:.2f}%) parameters have NaN or Inf gradient")
                 loguru.logger.critical(f"NaN or Inf parameters: {format_keys(nan_inf_param_list)}")
-                
+
 
 
     def is_gradient_accumulation_boundary(self):
@@ -1544,15 +1561,26 @@ class BaseParallelEngine(DeepSpeedInterface, EngineInterface):
         import warnings
         param_cnt = 0
         missing_grad_cnt = 0
+
+        no_grad_fqns = []
+        for name, param in self.named_parameters():
+            if param.requires_grad and getattr(param, 'grad', None) is None:
+                no_grad_fqns.append(name)
+
+        if len(no_grad_fqns) > 0:
+            from hy_parallelism.utils import format_keys
+            if dist.get_rank() == 0:
+                loguru.logger.warning(f"No gradient parameters: {format_keys(no_grad_fqns, prefix='No gradient parameters')}")
+
         for param in self.optimizer_container.all_params:
             param_cnt += 1
             if param.requires_grad and getattr(param, 'grad', None) is None:
                 missing_grad_cnt += 1
                 try:
                     param_name = self._get_param_name_from_param(param)
-                    loguru.logger.warning(f"Gradient is None for parameter '{param_name}'; this parameter has requires_grad=True but no gradient was produced. Consider setting requires_grad=False if gradients are not needed.")
+                    warnings.warn(f"Gradient is None for parameter '{param_name}'; this parameter has requires_grad=True but no gradient was produced. Consider setting requires_grad=False if gradients are not needed.")
                 except Exception:
-                    loguru.logger.warning("Some parameters with requires_grad=True did not produce a gradient. Consider setting requires_grad=False for this parameter if gradients are not needed.")
+                    warnings.warn("Some parameters with requires_grad=True did not produce a gradient. Consider setting requires_grad=False for this parameter if gradients are not needed.")
                 param.grad = torch.zeros_like(param)
 
         if missing_grad_cnt > 0:
@@ -1588,7 +1616,7 @@ class BaseParallelEngine(DeepSpeedInterface, EngineInterface):
         if self.is_gradient_accumulation_boundary():
             if "step_cnt" not in self.training_states:
                 self.training_states["step_cnt"] = 0
-            
+
             # 只需要第一次做即可，保证 optimizer state 正确创建就足够了
             if self.training_states["step_cnt"] == 0:
                 self._init_missing_grad()
@@ -1645,8 +1673,12 @@ class BaseParallelEngine(DeepSpeedInterface, EngineInterface):
         error_if_nonfinite: bool = False,
         foreach=None,
     ):
+        # 之前系只有啓用 ep 或 pp 先會有非標準 DTensor 嘅 model 切分 需要特別實現以正確計算 norm
+        # 但係其實仲有一種可能，就係參數系唔同嘅 group, 俾 optimizer 按照 mesh 分組，需要特別實現以正確計算 norm
+        # (即系調用 clip by mesh)
+        # Otherwise, the original implementation could lead to cross mesh computation.
         if self.enable_pp or self.enable_ep:
-            # This original implementation could lead to cross mesh computation.
+        # if True:
             # return clip_grad_norm_(
             #     parameters, max_norm, norm_type, error_if_nonfinite, foreach, pp_mesh=self.parallel_dims.pp_mesh
             # )
@@ -1840,33 +1872,33 @@ class BaseParallelEngine(DeepSpeedInterface, EngineInterface):
                             if self.has_meta(module):
                                 module.to_empty(device="cuda" if not self.cpu_offload else "cpu")
 
-                    for module_name, module in self.recursive_module_generator_buttom_up(models[i], return_name=True):
-                        if hasattr(module, "reset_parameters"):
-                            # initialized_params, uninitialized_params = get_initialization_status(module)
-                            # if len(initialized_params) > 0:
-                            #     loguru.logger.warning(
-                            #         f"Detected already-initialized parameters during reset_parameters: {module_name}:{initialized_params}. "
-                            #         "This indicates that this module is initialized by its parent module via `reset_parameters`. "
-                            #         # "This is likely due to a recursive call to `reset_parameters`.",
-                            #     )
-                            module.reset_parameters()
-                            mark_as_initialized(module)
-                        else:
-                            assert not self.has_meta(module), f"Module {module_name} does not implement `reset_parameters` and has meta parameters. This is not allowed."
-                            mark_as_initialized(module)
+                    if self.call_module_reset_parameters:
+                        for module_name, module in self.recursive_module_generator_buttom_up(models[i], return_name=True):
+                            if hasattr(module, "reset_parameters"):
+                                # initialized_params, uninitialized_params = get_initialization_status(module)
+                                # if len(initialized_params) > 0:
+                                #     loguru.logger.warning(
+                                #         f"Detected already-initialized parameters during reset_parameters: {module_name}:{initialized_params}. "
+                                #         "This indicates that this module is initialized by its parent module via `reset_parameters`. "
+                                #         # "This is likely due to a recursive call to `reset_parameters`.",
+                                #     )
+                                module.reset_parameters()
+                                mark_as_initialized(module)
+                            else:
+                                assert not self.has_meta(module), f"Module {module_name} does not implement `reset_parameters` and has meta parameters. This is not allowed."
+                                mark_as_initialized(module)
 
-                    if not (is_implemented(self.param_init_fn) or self.full_sd is not None or self.load_ckpt_path is not None):
-                        msg = "No parameter initialization function provided. Please ensure that this is intended."
-                        loguru.logger.warning(msg)
-                        # raise RuntimeError(msg)
+                        if not (is_implemented(self.param_init_fn) or self.full_sd is not None or self.load_ckpt_path is not None):
+                            msg = "No parameter initialization function provided. Please ensure that this is intended."
+                            loguru.logger.warning(msg)
 
-                    initialized_params, uninitialized_params = get_initialization_status(models[i])
-                    assert len(uninitialized_params) == 0, f"Some parameters are not properly initialized (by either `param_init_fn` or `reset_parameters`): {uninitialized_params}"
+                        initialized_params, uninitialized_params = get_initialization_status(models[i])
+                        assert len(uninitialized_params) == 0, f"Some parameters are not properly initialized (by either `param_init_fn` or `reset_parameters`): {uninitialized_params}"
 
                 if call_init_fn and is_implemented(self.param_init_fn):  # and self.full_sd is None and self.load_ckpt_path is None:
                     with torch.no_grad():
                         self.param_init_fn(models[i])
-                
+
                 assert not self.has_meta(models[i])
 
     @property
@@ -1902,6 +1934,19 @@ class BaseParallelEngine(DeepSpeedInterface, EngineInterface):
                 print_model_info(m, tag="Before parallelism")
         with isolate_rng():
             self.apply_parallelism()  # already called _maybe_init_meta_param inside
+
+        # HACK(torch2.10):
+        # fsdp 嘅 lazy init 會創建 _orig_dtype, 但係繫裹所有參數都唔 requires_grad
+        # 則會跳過。導致系 grad reduce 時期，無法正確將 grad cast 到正確嘅 orig_dtype。
+        # 導致 grad_dtype error (因為 PyTorch 2.10 新增對 grad_dtype 嘅檢查)
+        #
+        # Eager FSDP lazy init (no forward) so _orig_dtype is snapshotted while
+        # requires_grad=True. Avoids PyTorch 2.10 grad_dtype error when params
+        # are frozen before the first forward.
+        if self.enable_fsdp:
+            from hy_parallelism.distributed.fsdp_util import ensure_requires_grad_and_eager_fsdp_lazy_init
+            ensure_requires_grad_and_eager_fsdp_lazy_init(self.fsdp_models)
+
         if dist.get_rank() == 0:
             for m in self.pp_models:
                 print_model_info(m, tag="After parallelism")
@@ -1970,6 +2015,8 @@ class BaseParallelEngine(DeepSpeedInterface, EngineInterface):
                                     run_check=True,
                                 )
                             else:
+                                # TODO：似乎所有情況都系用 mesh_dim=0 作為 dp_relicate 嘅 group
+                                #     可以考慮精簡代碼
                                 if (self.parallel_dims.ep_enabled) and model.is_expert(name):
                                     if param_mesh.ndim == 4:
                                         # [(ep_fsdp_replicate=2, ep_fsdp_shard=1, ep=2, etp=2)]
@@ -1978,24 +2025,26 @@ class BaseParallelEngine(DeepSpeedInterface, EngineInterface):
                                     elif param_mesh.ndim == 3:
                                         # (ep_fsdp_replicate, ep_fsdp_shard, ep)
                                         # (ep_fsdp_replicate, ep_fsdp_shard, tp)
-                                        # TODO: (ep_fsdp_shard, ep, etp) Inpossible, since we assume dp_replicate is enabled. 
-                                        #       If `enable_expert_fsdp_sharding` is supported in a future version, 
+                                        # TODO: (ep_fsdp_shard, ep, etp) Inpossible, since we assume dp_replicate is enabled.
+                                        #       If `enable_expert_fsdp_sharding` is supported in a future version,
                                         #       (ep_fsdp_shard, ep, etp) could be possible and the code below need to be modified.
                                         broadcast_group = param_mesh.get_group(mesh_dim=0)
                                     else:
                                         assert param_mesh.ndim == 2, f'Expert param {name} is not on a proper mesh. Got ({param_mesh}). Check `is_expert`, `apply_fsdp` or `apply_ep`.'
                                         # Could be old MOE implementation with dp_replicate or new MOE implementation without dp_replicate
                                         if self.parallel_dims.expert_fsdp_mesh.ndim < param_mesh.ndim:
+                                            # 新 MOE 實現，param 嘅 mesh 自帶 ep 維度
                                             continue
                                         else:
                                             # TODO: Old MOE implementation (ptm / hunyuan torch moe v1)
                                             # raise NotImplementedError
                                             broadcast_group = param_mesh.get_group(mesh_dim=0)
                                 else:
-                                    if param_mesh.ndim == 2: 
+                                    if param_mesh.ndim == 2:
                                         # could be [dp_shard, tp] or [dp_replicate, tp]
                                         # but we assume dp_replicate is enabled above, so this must be [dp_replicate, dp_shard]
                                         # We can assert this param is not Linear that wrap with TP hooks
+                                        assert not self.parallel_dims.tp_enabled
                                         # FIXME(kevinkhwu): PyTorch 2.6 will fail to slice submesh on submesh.
                                         #     We can try parsing dim or name to `get_group` to fix this, but requiring testing.
                                         broadcast_group = param_mesh.get_group(mesh_dim=0)
@@ -2005,7 +2054,7 @@ class BaseParallelEngine(DeepSpeedInterface, EngineInterface):
                                         broadcast_group = param_mesh.get_group(mesh_dim=0)
                                     else:
                                         raise RuntimeError(f'DP replicate is enabled, but param {name} is not on a proper mesh. Got ({param_mesh})')
-                            
+
                                 if self.dp_replicate_param_handler == 'safe_sync':
                                     # with check, raise error if broadcast is incorrect, this is very slow
 
@@ -2120,14 +2169,12 @@ class BaseParallelEngine(DeepSpeedInterface, EngineInterface):
         # after ac and before fsdp
         if self.enable_compile:
             if is_implemented(self.apply_compile):
-                # graph_code logging dumps the full FX graph for every compiled region
-                # (10k+ log lines) and slows tracing/compile; opt-in via env (default off).
-                if os.environ.get("HY_LOG_GRAPH_CODE", "0") == "1":
-                    torch._logging.set_logs(graph_code=True)
+                # if dist.get_rank() == 0:
+                #     torch._logging.set_logs(graph_code=True, recompiles=True)
                 for model in self.pp_models:
                     self.apply_compile(model)
             else:
-                raise RuntimeError("`apply_compile` is not implemented but `enable_compile` is True. Please ensure that this is intended.")
+                loguru.logger.error("`apply_compile` is not implemented but `enable_compile` is True. Please ensure that this is intended.")
 
         if self.enable_fsdp:
             if is_implemented(self.apply_fsdp):
@@ -2152,7 +2199,7 @@ class BaseParallelEngine(DeepSpeedInterface, EngineInterface):
         if self.init_meta_stage == "post_fsdp":
             self._maybe_init_meta_param(self.pp_models, call_init_fn=self.full_sd is None)
 
-        if not self.gradient_sync_during_accumulation and self.gradient_sync_during_accumulation > 1 and self.enable_fsdp:
+        if not self.gradient_sync_during_accumulation and self.gradient_accumulation_steps > 1 and self.enable_fsdp:
             for module in self.fsdp_models:
                 module.set_requires_gradient_sync(False)
 
@@ -2174,7 +2221,7 @@ class BaseParallelEngine(DeepSpeedInterface, EngineInterface):
                 self.pp_stages[i].submod = fsdp_model
             self.fsdp_models.append(fsdp_model)
             self._tag_param_name_to_params(fsdp_model)
-        
+
 
     @staticmethod
     def recursive_get_attr(model, attr):
@@ -2287,10 +2334,10 @@ class BaseParallelEngine(DeepSpeedInterface, EngineInterface):
     def recursive_module_generator_buttom_up(self, model, return_name=False):
         """
         Recursively generate modules in bottom-up order (children before parent).
-        
+
         Args:
             model: The root module to traverse
-            
+
         Yields:
             tuple: (name, module) pairs where name is the full path from root
         """
@@ -2298,12 +2345,12 @@ class BaseParallelEngine(DeepSpeedInterface, EngineInterface):
             for name, child in module.named_children():
                 full_name = f"{prefix}.{name}" if prefix else name
                 yield from _traverse(child, full_name)
-            
+
             if return_name:
                 yield (prefix, module) if prefix else ("", module)
             else:
                 yield module
-        
+
         yield from _traverse(model)
 
     def reshard(self):
@@ -2315,16 +2362,13 @@ class BaseParallelEngine(DeepSpeedInterface, EngineInterface):
                     debug_log(f'Resharding {name} {type(module)=}')
                     module.reshard()
 
-        return
-        # The implementation below is deprecated
-        for m in self._get_fsdp_blocks():
-            if hasattr(m, "reshard"):
-                m.reshard()
-            else:
-                loguru.logger.warning(
-                    f"{type(m)} has no reshard method. Please check your `fsdp_blocks` implementation. "
-                    f"If {type(m)} is an expert module and ep=1, this warning can be ignored."
-                )
+        # Mistargeted prefetch（例如 unshard 咗但無 wait / 無 forward 到）會留下 _all_gather_result，
+        # 入面嘅 all_gather copy_in buffer 會常駐顯存；單純 module.reshard() 對未 copy_out 完嘅
+        # prefetch 會直接 skip 變 no-op，唔會 free。呢度要靠 finalize_backward 先真正清走 copy_in。
+        for module in self.module.modules():
+            if isinstance(module, FSDPModule):
+                module._get_fsdp_state()._fsdp_param_group.finalize_backward()
+
 
     def unshard(self):
         if not self.enable_fsdp:
@@ -2334,18 +2378,9 @@ class BaseParallelEngine(DeepSpeedInterface, EngineInterface):
                 if hasattr(module, "unshard"):
                     debug_log(f'Unsharding {name} {type(module)=}')
                     module.unshard()
-        return
-        # The implementation below is deprecated
-        for m in self._get_fsdp_blocks():
-            if hasattr(m, "unshard"):
-                m.unshard()
-            else:
-                loguru.logger.warning(
-                    f"{type(m)} has no unshard method. Please check your `fsdp_blocks` implementation. "
-                    f"If {type(m)} is an expert module and ep=1, this warning can be ignored."
-                )
 
-    def cast_optimizer(self, device):
+
+    def cast_optimizer_new(self, device):
         with profile_range("cast_optimizer"):
             if getattr(self, "optimizer_container", None) is not None:
                 for optimizer_pp in self.optimizer_container.optimizers:
@@ -2353,16 +2388,59 @@ class BaseParallelEngine(DeepSpeedInterface, EngineInterface):
                         for param, state in optimizer.state.items():
                             for k, v in state.items():
                                 if isinstance(v, torch.Tensor):
-                                    state[k] = v.to(device, non_blocking=True)
+                                    if torch.device(device).type == "cuda":
+                                        state[k] = v.to(device, non_blocking=True)
+                                    else:
+                                        if self.optimizer_offloading_pin_memory:
+                                            if isinstance(v, DTensor):
+                                                local_v = v._local_tensor
+                                                buf = self.optimizer_pinned_memory_pool.allocate(
+                                                    local_v.shape, local_v.dtype
+                                                )
+                                                buf.copy_(local_v, non_blocking=True)
+                                                state[k] = DTensor(
+                                                    buf, v._spec, requires_grad=v.requires_grad
+                                                )
+                                            else:
+                                                buf = self.optimizer_pinned_memory_pool.allocate(
+                                                    v.shape, v.dtype
+                                                )
+                                                buf.copy_(v, non_blocking=True)
+                                                state[k] = buf
+                                        else:
+                                            # Initializing pin memory is time-consuming, so we set non_blocking=False
+                                            state[k] = v.to(device, non_blocking=False)
                 torch.cuda.synchronize()
+                # After on-loading, no need to keep the pinned memory pool alive
+                if self.optimizer_offloading_pin_memory and torch.device(device).type == "cuda":
+                    self.optimizer_pinned_memory_pool.reset()
+
+
+    def cast_optimizer_old(self, device):
+        with profile_range("cast_optimizer"):
+            if getattr(self, "optimizer_container", None) is not None:
+                for optimizer_pp in self.optimizer_container.optimizers:
+                    for optimizer in optimizer_pp:
+                        for param, state in optimizer.state.items():
+                            for k, v in state.items():
+                                if isinstance(v, torch.Tensor):
+                                    if torch.device(device).type == "cuda":
+                                        state[k] = v.to(device, non_blocking=True)
+                                    else:
+                                        # Initializing pin memory is time-consuming, so we set non_blocking=False
+                                        state[k] = v.to(device, non_blocking=False)
+                torch.cuda.synchronize()
+
+    def cast_optimizer(self, device):
+        return self.cast_optimizer_new(device)
 
 
     @contextmanager
     def attr_safe_context_for_module_apply(self):
         """
         .cuda() 这类操作会调用 nn.Module._apply
-        然后调用 torch.utils.swap_tensors 
-        导致 param 的 attr 被重置 
+        然后调用 torch.utils.swap_tensors
+        导致 param 的 attr 被重置
         """
         from collections import defaultdict
         attr_map = defaultdict(dict)
@@ -2378,14 +2456,47 @@ class BaseParallelEngine(DeepSpeedInterface, EngineInterface):
                     if id(param) in attr_map and attr in attr_map[id(param)]:
                         setattr(param, attr, attr_map[id(param)][attr])
 
-    def cpu(self, cast_optimizer=False):
+    def cpu(self, cast_optimizer=False, pin_memory=False):
+        # all_gather copy_in buffer 唔會自動 offload, 繫裹 unshard 嗰時對一啲唔會 Forward 嘅參數 unshard，噉 copy_in buffer 會常駐顯存
+        # 因為唔會 forward 代表唔會進行 post_forward, 代表唔會 reshard, 代表唔會 free_unsharded_buffer
+        # [Mistargeted prefetch]
+        # 要 call finalize_backward 先真正清走 copy_in
+        self.reshard()
+
         with self.attr_safe_context_for_module_apply():
-            for m in self.fsdp_models:
-                m.cpu()
+            if pin_memory:
+                if self.model_pinned_memory_pool is None:
+                    self.model_pinned_memory_pool = PinnedMemoryPool()
+                pool = self.model_pinned_memory_pool
+
+                def _to_pinned_cpu(t):
+                    if isinstance(t, DTensor):
+                        local = cast_to_device(
+                            t._local_tensor,
+                            "cpu",
+                            use_side_stream_for_tensor_copies=True,
+                            pin_memory=True,
+                            pool=pool,
+                        )
+                        return DTensor(local, t._spec, requires_grad=t.requires_grad)
+                    return cast_to_device(
+                        t,
+                        "cpu",
+                        use_side_stream_for_tensor_copies=True,
+                        pin_memory=True,
+                        pool=pool,
+                    )
+
+                for m in self.fsdp_models:
+                    m._apply(_to_pinned_cpu)
+                torch.cuda.synchronize()
+            else:
+                for m in self.fsdp_models:
+                    m.cpu()
         if cast_optimizer:
             self.cast_optimizer("cpu")
         return self
-    
+
 
     def cuda(self, cast_optimizer=False):
         with self.attr_safe_context_for_module_apply():
@@ -2395,6 +2506,9 @@ class BaseParallelEngine(DeepSpeedInterface, EngineInterface):
 
         if cast_optimizer:
             self.cast_optimizer("cuda")
+
+        if self.model_pinned_memory_pool is not None:
+            self.model_pinned_memory_pool.reset()
         return self
 
     @property
@@ -2599,13 +2713,13 @@ class BaseParallelEngine(DeepSpeedInterface, EngineInterface):
         reserved_keys = self.__get_reserved_keys()
         return {k: v for k, v in kwargs.items() if k not in reserved_keys}
 
-    def __call__(self, 
-        *args, 
+    def __call__(self,
+        *args,
 
         sync_input=None,
         check_input=False,
         check_input_prob=1,
-        calc_loss=True,  
+        calc_loss=True,
 
         # target=None,     # placeholder
         # losses=None,     # placeholder
@@ -2662,7 +2776,7 @@ class BaseParallelEngine(DeepSpeedInterface, EngineInterface):
                         log_once(f"Skip syncing: JVP can not run syncing since to_list is called broadcast_object_list, {e}", level="WARNING")
                     else:
                         raise
-        
+
         if check_input:
             import random
             if random.random() < check_input_prob:
@@ -2674,7 +2788,7 @@ class BaseParallelEngine(DeepSpeedInterface, EngineInterface):
         #     context = nullcontext()
         # with context:
         return self.__call_impl(
-            *args, 
+            *args,
             sync_input=sync_input,
             calc_loss=calc_loss,
 
@@ -2982,7 +3096,7 @@ class BaseParallelEngine(DeepSpeedInterface, EngineInterface):
             merge_op (str, optional): One pp forward may include multiple microbatches.
                 This argument specifies the operation to use when merging microbatch results.
                 Supported values are 'cat' (concatenate), 'mean', and 'sum'. Default is 'cat'.
-        
+
         Example:
             >>> ret = self.get_cached_result("loss", merge_op="mean") # return exactly what the loss_closure returns (after mean on the microbatch dimension)
             >>> ret = self.get_cached_result("ret_val") # return exactly what the model.forward / pp_friendly_forward returns

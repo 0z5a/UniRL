@@ -1548,6 +1548,7 @@ class LeoModelBase(HunyuanMultimodalState):
             dtype: Optional[torch.dtype] = None,
             device: Optional[torch.device] = None,
             args: Namespace = None,
+            initialize_weights: bool = True,
     ):
         factory_kwargs = {'device': device, 'dtype': dtype}
         self._config = config
@@ -1662,11 +1663,11 @@ class LeoModelBase(HunyuanMultimodalState):
         self._cache_config = None
         self._leo_cache_controller = None
 
-        # Initialize weights if needed
-        self._prepare_reset_parameters()
-        for name, module in self.named_modules():
-            if hasattr(module, "reset_parameters"):
-                module.reset_parameters()
+        if initialize_weights:
+            self._prepare_reset_parameters()
+            for name, module in self.named_modules():
+                if hasattr(module, "reset_parameters"):
+                    module.reset_parameters()
 
     def _prepare_reset_parameters(self):
         # Globally set Linear and Embedding init methods to normal
@@ -2826,6 +2827,7 @@ class LeoModel(LeoModelBase):
             audio_config: Optional[LeoConfig] = None,
             dtype: Optional[torch.dtype] = None,
             device: Optional[torch.device] = None,
+            initialize_weights: bool = True,
     ):
         super().__init__()
-        self.__post_init__(config, txt_config, audio_config, dtype, device, args)
+        self.__post_init__(config, txt_config, audio_config, dtype, device, args, initialize_weights)

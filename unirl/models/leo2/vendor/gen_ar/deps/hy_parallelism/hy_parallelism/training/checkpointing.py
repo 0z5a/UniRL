@@ -3,23 +3,176 @@ import torch
 from torch.utils.checkpoint import *
 from torch.utils.checkpoint import _DEFAULT_DETERMINISM_MODE, _checkpoint_debug_enabled, _get_debug_context_and_cb, _allowed_determinism_checks_to_fns, _infer_device_type, _get_device_module, _is_compiling, _get_autocast_kwargs, _enable_checkpoint_early_stop, _CheckpointFrame, _NoopSaveInputs, _checkpoint_hook, TorchDispatchMode
 import warnings
-from typing import Any, Tuple, NoReturn, Optional, Callable, ContextManager
+from dataclasses import dataclass, field
+from typing import Any, Dict, Tuple, NoReturn, Optional, Callable, ContextManager, List, Union
+from functools import cache
+
+from hy_parallelism.tools.profiling import profile_func
+from hy_parallelism.tools.profiling import profile_range
+
+ACTIVATION_POOL_NAME = "activation"
+
+DEFAULT_PENDING_OFFLOAD_NAME = "default"
+
+_current_pending_offload_name: str = DEFAULT_PENDING_OFFLOAD_NAME
+_defer_offload_by_name: Dict[str, bool] = {}
+_pending_offloads_by_name: Dict[str, List["OffloadHandle"]] = {}
 
 
-# Global config for offload_checkpoint_fn. None = offload all inputs.
-_offload_list = None
+def set_defer_offload(defer: bool):
+    _defer_offload_by_name[_current_pending_offload_name] = defer
 
-def set_offload_list(offload_list):
-    global _offload_list
-    _offload_list = [k + 2 for k in offload_list] # dummy, kwargs
 
-def get_offload_list():
-    return _offload_list
+def get_defer_offload():
+    return _defer_offload_by_name.get(_current_pending_offload_name, False)
 
-def _tensor_to_cpu(tensor, pin_memory=False):
+
+class PinnedOffloadContext(torch.autograd.graph.saved_tensors_hooks):
+    def __init__(self):
+        def pack_hook(x):
+            return x
+        def unpack_hook(x):
+            return x
+        super().__init__(pack_hook, unpack_hook)
+
+
+@contextlib.contextmanager
+def eager_offload_context():
+    """Force eager (non-deferred) offload for the current pending-offload name."""
+    name = _current_pending_offload_name
+    prev = _defer_offload_by_name.get(name, False)
+    _defer_offload_by_name[name] = False
+    try:
+        yield
+    finally:
+        _defer_offload_by_name[name] = prev
+
+
+# @contextlib.contextmanager
+# def no_recompute_context(offload=False):
+#     from hy_parallelism.utils import is_recomputing
+#     should_forward = not is_recomputing()
+#     if offload:
+#         # import save_to_cpu from torch
+#         from torch.autograd.graph import save_on_cpu
+#         with save_on_cpu():
+#             yield should_forward
+#     else:
+#         with torch.autograd.graph.saved_tensors_hooks(lambda t: t, lambda t: t):
+#             yield should_forward
+
+
+@cache
+def _get_offload_stream():
+    return torch.cuda.Stream()
+
+
+@dataclass
+class OffloadHandle:
+    """Deferred D2H task. ``cpu_buf`` is saved for backward; data is valid after ``issue()``."""
+
+    gpu_tensor: torch.Tensor
+    cpu_buf: torch.Tensor
+    pin_memory: bool = False
+    issued: bool = field(default=False, init=False)
+
+    @profile_func(msg="issue_offload", enable_sync=False)
+    def issue(self) -> torch.Tensor:
+        if self.issued:
+            return self.cpu_buf
+        # if self.cpu_buf.is_pinned():
+        #     self.cpu_buf.copy_(self.gpu_tensor, non_blocking=True)
+        # else:
+        if True:
+            with torch.enable_grad():
+                s = _get_offload_stream()
+                with torch.cuda.stream(s):
+                    self.cpu_buf.copy_(self.gpu_tensor, non_blocking=self.cpu_buf.is_pinned())
+                assert self.cpu_buf.requires_grad == self.gpu_tensor.requires_grad, (
+                    f"{self.cpu_buf.requires_grad=} {self.gpu_tensor.requires_grad=}"
+                )
+                self.gpu_tensor.record_stream(s)
+        self.issued = True
+        return self.cpu_buf
+
+
+def _current_pending_offloads() -> List[OffloadHandle]:
+    return _pending_offloads_by_name.setdefault(_current_pending_offload_name, [])
+
+
+@contextlib.contextmanager
+def pending_offload_context(name: str):
+    """Route deferred offloads / flush / defer flag to a named bucket (e.g. per modality).
+
+    Outside any context, offloads go to ``DEFAULT_PENDING_OFFLOAD_NAME``.
+    """
+    global _current_pending_offload_name
+    prev = _current_pending_offload_name
+    _current_pending_offload_name = name
+    try:
+        yield
+    finally:
+        _current_pending_offload_name = prev
+
+
+def issue_offload(handles: Optional[Union[OffloadHandle, List[OffloadHandle]]] = None) -> None:
+    """Run deferred D2H copies on the offload stream.
+
+    Call during GPU-busy regions (e.g. attention) to hide host-side memcpy work.
+
+    Args:
+        handles: If None, issues all pending handles for the current pending-offload
+            context (see ``pending_offload_context``). Otherwise issues the given
+            handle(s) only.
+    """
+    pending = _current_pending_offloads()
+    if handles is None:
+        to_issue = pending
+        _pending_offloads_by_name[_current_pending_offload_name] = []
+    else:
+        if isinstance(handles, OffloadHandle):
+            handles = [handles]
+        to_issue = handles
+        pending_set = set(pending)
+        for h in handles:
+            if h in pending_set:
+                pending.remove(h)
+    for handle in to_issue:
+        handle.issue()
+
+
+def flush_pending_offloads() -> None:
+    """Issue any still-pending offloads for the current context (safety net before backward)."""
+    if _current_pending_offloads():
+        issue_offload()
+
+
+def pending_offload_count() -> int:
+    return len(_current_pending_offloads())
+
+
+def _tensor_to_cpu(tensor, pin_memory) -> OffloadHandle:
+    _get_offload_stream().wait_stream(torch.cuda.current_stream())
+    with torch.enable_grad():
+        if pin_memory:
+            from hy_parallelism.training.pinned_memory_pool import get_pinned_memory_pool
+            cpu_buf = get_pinned_memory_pool(ACTIVATION_POOL_NAME).allocate(tensor.shape, tensor.dtype)
+        else:
+            cpu_buf = torch.empty_like(
+                tensor, device="cpu", pin_memory=False,
+            )
+        handle = OffloadHandle(tensor, cpu_buf, pin_memory=pin_memory)
+        if get_defer_offload():
+            _current_pending_offloads().append(handle)
+        else:
+            handle.issue()
+    return handle
+
+def _tensor_to_cpu_old(tensor, pin_memory=False):
     assert isinstance(tensor, torch.Tensor), f"Expected a tensor, got {type(tensor)}"
     with torch.enable_grad():
-        ret = tensor.to('cpu', non_blocking=True)
+        # Initializing pin memory is time-consuming, so we set non_blocking=False
+        ret = tensor.to('cpu', non_blocking=False)
         assert ret.requires_grad == tensor.requires_grad, f'{ret.requires_grad=} {tensor.requires_grad=}'
     return ret
     packed = torch.empty(
@@ -32,15 +185,19 @@ def _tensor_to_cpu(tensor, pin_memory=False):
     return packed
 
 
-def _to_cpu(x, pin_memory=False):
+def _to_cpu(x, pin_memory=True):
     if isinstance(x, torch.Tensor):
-        return _tensor_to_cpu(x, pin_memory)
+        return _tensor_to_cpu(x, pin_memory).cpu_buf
     if isinstance(x, (tuple, list)) and all(isinstance(t, torch.Tensor) for t in x):
-        return type(x)(_tensor_to_cpu(t, pin_memory) for t in x)
-    raise AssertionError(f"Expected a tensor, got {type(x)}")
+        return type(x)(_to_cpu(t, pin_memory) for t in x)
+        # TODO: 慳時間，只 offload image 3.5 中嘅一個 input，未來需調整
+        return type(x)(_to_cpu(t, pin_memory) if idx == 1 else t for idx, t in enumerate(x))
+    raise AssertionError(f"Expected a tensor, got {type(x)}: {x}")
 
 
 def _to_cuda(x):
+    flush_pending_offloads()
+    torch.cuda.current_stream().wait_stream(_get_offload_stream())
     if isinstance(x, torch.Tensor):
         with torch.enable_grad():
             return x.cuda(non_blocking=True)
@@ -52,7 +209,8 @@ def _to_cuda(x):
 
 def get_selective_offload_fn(offload_list=None, pin_memory=False):
     offload_all = offload_list is None
-    offload_indices = set() if offload_all else set(offload_list)
+    # inputs are (dummy, kwargs, *args); offload_list indices refer to *args only.
+    offload_indices = set() if offload_all else {k + 2 for k in offload_list}
 
     def should_offload(i):
         return offload_all or i in offload_indices
@@ -65,6 +223,10 @@ def get_selective_offload_fn(offload_list=None, pin_memory=False):
 
         @staticmethod
         def setup_context(ctx: Any, inputs: Tuple[Any, ...], output: Any) -> None:
+            # 輸入一部份會入 tensors, 一部份會入 args, 兩者都會喺 recompute 時 restore
+            # 入 tensor 嘅需要經過 version check (from pinned memory pool, error if calling in-place ops on same buffer with different view.)
+            # 入 args 會跳過此檢查
+            # version check 觸發點在於 ctx.save_for_backward
             tensor_pairs = [
                 (i, _to_cpu(o, pin_memory=pin_memory) if should_offload(i) else o)
                 for i, o in enumerate(inputs)
@@ -101,7 +263,7 @@ def get_selective_offload_fn(offload_list=None, pin_memory=False):
         @staticmethod
         def backward(ctx, *grad_outputs) -> NoReturn:
             raise AssertionError("Did not expect to backward on this graph")
-    
+
     return OffloadSaveInputs
 
 def _checkpoint_without_reentrant_generator(
@@ -113,6 +275,7 @@ def _checkpoint_without_reentrant_generator(
     early_stop: bool = True,
     *args,
     pin_memory: bool = False,
+    offload_list=None,
     **kwargs,
 ):
     unpack_error_cb = None
@@ -158,6 +321,8 @@ def _checkpoint_without_reentrant_generator(
             fwd_devices, fwd_device_states = get_device_states(*args)
 
     def recompute_fn(*inputs):
+        # HACK:
+        torch.cuda.current_stream().wait_stream(_get_offload_stream())
         kwargs, *args = inputs
         # This will be called later during recomputation. This wrapping enables
         # the necessary global state to be captured.
@@ -185,7 +350,10 @@ def _checkpoint_without_reentrant_generator(
         metadata_fn
     )
     dummy = torch.empty((0,), requires_grad=True)
-    new_frame.input_saver = get_selective_offload_fn(get_offload_list(), pin_memory=pin_memory).apply(dummy, kwargs, *args)
+    # HACK: 換 NoopSaveInputs
+    # 用 hook 將 saved tensor 當 payload 存，避開共享 storage view 被 inplace 後嘅 version check。
+    with torch.autograd.graph.saved_tensors_hooks(lambda x: x, lambda x: x):
+        new_frame.input_saver = get_selective_offload_fn(offload_list, pin_memory=pin_memory).apply(dummy, kwargs, *args)
     # new_frame.input_saver = _NoopSaveInputs.apply(dummy, kwargs, *args)
 
     # When ambient grad_mode is False
@@ -195,6 +363,8 @@ def _checkpoint_without_reentrant_generator(
 
     with _checkpoint_hook(new_frame), forward_context:
         yield
+    if get_defer_offload():
+        flush_pending_offloads()
     new_frame.forward_completed = True
 
     if getattr(device_module, "_initialized", False) and \
@@ -263,3 +433,16 @@ def offload_checkpoint_fn(
             next(gen)
         except StopIteration:
             return ret
+
+def forward_with_checkpointing(module, *inputs, use_checkpointing=False, checkpoint_fn=None):
+    def create_custom_forward(module):
+        def custom_forward(*inputs):
+            return module(*inputs)
+        return custom_forward
+
+    if use_checkpointing and torch.is_grad_enabled():
+        if checkpoint_fn is None:
+            checkpoint_fn = torch.utils.checkpoint.checkpoint
+        with eager_offload_context():
+            return checkpoint_fn(create_custom_forward(module), *inputs, use_reentrant=False)
+    return module(*inputs)

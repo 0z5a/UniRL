@@ -1,6 +1,9 @@
 # Copyright (c) 2024, NVIDIA CORPORATION. All rights reserved.
 
 import torch
+import os
+if 'TRITON_ALLOW_NON_CONSTEXPR_GLOBALS' not in os.environ:
+    os.environ['TRITON_ALLOW_NON_CONSTEXPR_GLOBALS'] = '1'
 import triton
 import triton.language as tl
 
@@ -43,11 +46,15 @@ def _location_add(
     expert_capacity: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
 ):
-    pid = tl.program_id(0)
-    offset = tl.arange(0,BLOCK_SIZE)
-    expert_map_pid = tl.load(input_ptr+offset*num_experts+pid,mask=offset < num_tokens, other=0)
+    pid = tl.program_id(0).to(tl.int64)
+    offset = tl.arange(0, BLOCK_SIZE).to(tl.int64)
+    expert_map_pid = tl.load(input_ptr + offset * num_experts + pid, mask=offset < num_tokens, other=0)
     token_sum_pid = tl.cumsum(expert_map_pid)
-    tl.store(output_ptr+offset+num_tokens*pid,token_sum_pid+pid*expert_capacity,mask=offset < num_tokens)
+    tl.store(
+        output_ptr + offset + num_tokens * pid,
+        token_sum_pid + pid * expert_capacity,
+        mask=offset < num_tokens,
+    )
 
 @triton.jit
 def _permute_kernel(
@@ -60,17 +67,17 @@ def _permute_kernel(
     hidden_size: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
 ):
-    pid = tl.program_id(0)
+    pid = tl.program_id(0).to(tl.int64)
     current_start = 0
     while current_start < hidden_size:
-        current_offset = current_start + tl.arange(0, BLOCK_SIZE)
+        current_offset = (current_start + tl.arange(0, BLOCK_SIZE)).to(tl.int64)
         mask = current_offset < hidden_size
         input_offsets = pid * hidden_size + current_offset
         input = tl.load(input_ptr + input_offsets, mask=mask)
         for expert_idx in range(num_experts):
             selected = tl.load(routing_map_ptr + pid * num_experts + expert_idx)
             if selected != 0:
-                dst_row = tl.load(row_id_map_ptr + expert_idx * num_tokens + pid) - 1
+                dst_row = tl.load(row_id_map_ptr + expert_idx * num_tokens + pid).to(tl.int64) - 1
                 output_offsets = dst_row * hidden_size + current_offset
                 tl.store(output_ptr + output_offsets, input, mask=mask)
         current_start += BLOCK_SIZE
@@ -106,16 +113,16 @@ def _unpermute_kernel(
         compute_type = input_ptr.dtype.element_ty
         assert fp8_dtype is None
 
-    pid = tl.program_id(0)
+    pid = tl.program_id(0).to(tl.int64)
     current_start = 0
     while current_start < hidden_size:
-        current_offset = current_start + tl.arange(0, BLOCK_SIZE)
+        current_offset = (current_start + tl.arange(0, BLOCK_SIZE)).to(tl.int64)
         mask = current_offset < hidden_size
         accumulator = tl.zeros((BLOCK_SIZE,), dtype=compute_type)
         for expert_idx in range(num_experts):
             selected = tl.load(routing_map_ptr + pid * num_experts + expert_idx)
             if selected != 0:
-                src_row = tl.load(row_id_map_ptr + expert_idx * num_tokens + pid) - 1
+                src_row = tl.load(row_id_map_ptr + expert_idx * num_tokens + pid).to(tl.int64) - 1
                 input_offsets = src_row * hidden_size + current_offset
                 input = tl.load(input_ptr + input_offsets, mask=mask)
                 if fp8_dtype is not None:
@@ -166,14 +173,14 @@ def _unpermute_bwd_with_probs_kernel(
         compute_type = fwd_output_grad_ptr.dtype.element_ty
         assert fp8_dtype is None
 
-    pid = tl.program_id(0)
+    pid = tl.program_id(0).to(tl.int64)
     for expert_idx in range(num_experts):
         selected = tl.load(routing_map_ptr + pid * num_experts + expert_idx)
         if selected != 0:
             prob_grad_accum = tl.zeros((BLOCK_SIZE,), dtype=tl.float32)
             current_start = 0
             while current_start < hidden_size:
-                current_offset = current_start + tl.arange(0, BLOCK_SIZE)
+                current_offset = (current_start + tl.arange(0, BLOCK_SIZE)).to(tl.int64)
                 mask = current_offset < hidden_size
                 input_offsets = pid * hidden_size + current_offset
                 input = tl.load(fwd_output_grad_ptr + input_offsets, mask=mask)
@@ -183,7 +190,7 @@ def _unpermute_bwd_with_probs_kernel(
                 output = input * prob
                 if fp8_dtype is not None:
                     output = output.to(data_type).to(pytorch_tensor_dtype, bitcast=True)
-                dst_row = tl.load(row_id_map_ptr + expert_idx * num_tokens + pid) - 1
+                dst_row = tl.load(row_id_map_ptr + expert_idx * num_tokens + pid).to(tl.int64) - 1
                 output_offsets = dst_row * hidden_size + current_offset
                 tl.store(fwd_input_grad_ptr + output_offsets, output, mask=mask)
 
@@ -475,7 +482,6 @@ class TritonUnpermuteFunction(torch.autograd.Function):
         act_grad = None
         if ctx.needs_input_grad[0]:
             fwd_input, routing_map, row_id_map, probs = ctx.saved_tensors
-            num_experts, expert_capacity = fwd_input.size(0), fwd_input.size(1)
             with_probs = probs is not None
 
             if with_probs:
@@ -490,8 +496,9 @@ class TritonUnpermuteFunction(torch.autograd.Function):
                 ), "Grad of the output must be in Float8Tensor type for FP8 moe_unpermute."
                 fwd_input_tensor = fwd_input._data
                 input_tensor = unpermuted_act_grad._data
+                # Match fwd_input layout: padded [E, C, H] or dropless [T', H].
                 output_tensor = torch.zeros(
-                    (num_experts, expert_capacity, ctx.hidden_size), dtype=input_tensor.dtype, device='cuda'
+                    fwd_input_tensor.shape, dtype=input_tensor.dtype, device=input_tensor.device
                 )
                 act_grad = Float8Tensor(
                     data=output_tensor,
@@ -502,8 +509,9 @@ class TritonUnpermuteFunction(torch.autograd.Function):
             else:
                 fwd_input_tensor = fwd_input
                 input_tensor = unpermuted_act_grad
+                # Match fwd_input layout: padded [E, C, H] or dropless [T', H].
                 output_tensor = torch.zeros(
-                    (num_experts, expert_capacity, ctx.hidden_size), dtype=input_tensor.dtype, device='cuda'
+                    fwd_input.shape, dtype=input_tensor.dtype, device=input_tensor.device
                 )
                 act_grad = output_tensor
                 fp8_dtype = None
