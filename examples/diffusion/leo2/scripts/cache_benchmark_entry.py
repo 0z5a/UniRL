@@ -20,6 +20,7 @@ from typing import Any
 REQUEST_MARKER = "LEO2_CACHE_BENCH_REQUEST_JSON="
 CONFIG_MARKER = "LEO2_CACHE_BENCH_CONFIG_JSON="
 TAIL_METHODS = {"first_block", "taylor", "magcache", "magcache_calibrate"}
+TOPOLOGY_METHODS = TAIL_METHODS | {"fastercache_dfr"}
 COUNTER_FIELDS = (
     "full_steps",
     "skipped_steps",
@@ -583,9 +584,12 @@ def _install_instrumentation(options: BenchmarkOptions) -> None:
         if cache_config is not None:
             self.model.enable_cache(cache_config)
         sync_plan = None
-        if options.method in TAIL_METHODS:
-            sync_plan = LeoFirstBlockCacheController._synchronization_plan(self.model.layers[0])
-        if options.method in TAIL_METHODS and sync_plan is None:
+        if options.method in TOPOLOGY_METHODS:
+            leader_index = 0
+            if options.method == "fastercache_dfr":
+                leader_index = self.model._leo_cache_controller.selected_layers[0]
+            sync_plan = LeoFirstBlockCacheController._synchronization_plan(self.model.layers[leader_index])
+        if options.method in TOPOLOGY_METHODS and sync_plan is None:
             raise RuntimeError("Leo2 cache benchmark topology is unsupported; cache decisions would always fall back.")
         if self.rank == 0:
             generation_config = self.model.generation_config
@@ -593,7 +597,7 @@ def _install_instrumentation(options: BenchmarkOptions) -> None:
             payload = {
                 "baseline_case": options.baseline_case,
                 "benchmark_schema_version": 2,
-                "cache_decision_supported": sync_plan is not None if options.method in TAIL_METHODS else None,
+                "cache_decision_supported": sync_plan is not None if options.method in TOPOLOGY_METHODS else None,
                 "cache_enabled": bool(self.model.is_cache_enabled),
                 "cache_method": options.method,
                 "cache_threshold": options.cache_threshold,
