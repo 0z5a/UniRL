@@ -4,6 +4,12 @@ This directory stores compact, reviewable snapshots for the acceleration
 experiments. Generated MP4s and latents remain in the output roots listed
 below and are intentionally not committed.
 
+The committed report manifest resolves summary and evaluator inputs from this
+repository. Its separate `source_root` fields preserve the original media
+locations: regenerating with raw latent/video verification therefore requires
+those output roots, while the published tables and their checksums remain
+portable review artifacts.
+
 All evaluation cases use the same 16 prompt/seed pairs, 848x464 output, 121
 frames, 24 FPS, 50 Euler FlowMatch steps, guidance 1.0, `flow_shift_video=9`,
 CP=8, FSDP shard=8, and EP=ETP=TP=PP=1. The immutable exact and static-cache
@@ -48,6 +54,10 @@ Taylor preserves the static cache's approximately 1.98x speedup while
 reducing mean latent and decoded-pixel drift by roughly 10%. It does not
 strictly dominate: the worst latent max-absolute error is larger, and the
 paired-speed confidence intervals overlap.
+
+Taylor cache residency is reported as N/A. This run predates residency
+instrumentation, and the historical summarizer replaced its missing field
+with zero; zero is not treated as a measurement.
 
 ## MagCache calibration and pilot
 
@@ -143,6 +153,9 @@ The complete settings-as-columns, metrics-as-rows result is available as
 CSV and JSON equivalents beside it. The compact view below uses global RMSE,
 defined as `sqrt(MSE)` over all equal-size samples; this is intentionally
 different from the mean per-video RMSE used in the method-specific tables.
+The reporter recomputes timing and counters from request rows, latent metrics
+from digest-checked tensors, pixel aggregates from paired rows, and VBench and
+VideoScore2 aggregates from their raw per-video outputs.
 
 | Metric | Exact off | Static 0.10 | Taylor 0.10 / 0.50 | MagCache 0.12 / 4 | DFR `[10, 49)` / 2 |
 |---|---:|---:|---:|---:|---:|
@@ -179,6 +192,16 @@ ranking; metric disagreement and worst-pair videos should be resolved by a
 blinded human A/B. CFG-cache at guidance 5.0 remains a separate deferred
 experiment and is not included here. Evaluator versions and script hashes are
 recorded in [`EVALUATION_PROVENANCE.md`](EVALUATION_PROVENANCE.md).
+
+From the repository root, regenerate and deeply validate the report with:
+
+```bash
+python examples/diffusion/leo2/scripts/summarize_acceleration_results.py \
+  --spec examples/diffusion/leo2/docs/results/acceleration_benchmark_20260903/consolidated/report_spec.json \
+  --output-dir examples/diffusion/leo2/docs/results/acceleration_benchmark_20260903/consolidated \
+  --name shift9_guidance1 \
+  --force
+```
 
 ## Artifact roots
 

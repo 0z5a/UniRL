@@ -23,7 +23,7 @@ Runner fingerprints from the evaluated repository state:
 | `evaluate_videoscore2.py` | `beaafdcbb087bf6daa0be59a14ebb6167adaa44011860a8eb28e953d8613df2e` |
 | `run_quality_evaluation.sh` | `776480130bd3c2a901a277857c44b5bda572145fc40c3bc524efdcbe44f6373b` |
 | `summarize_quality_evaluation.py` | `9873a8915e37093e5c28b86038a614e67857e38983915d02e382665b750dfd35` |
-| `summarize_acceleration_results.py` | `bcca24983c9cf5f2ea1ff63df05b3714a6ac33605578c0d03e3f21e8a1d00058` |
+| `summarize_acceleration_results.py` | `777e0378670aab25035201f9c99fa4839125336aad46a1be39557ec5b0a0845b` |
 
 The evaluation covered 48 newly evaluated candidate videos (16 per method).
 The consolidated report also reads the previously completed exact and static
@@ -32,3 +32,10 @@ quality results from
 All raw candidate scores and VBench per-item records are retained under each
 full-suite `quality_eval` directory. The JSON report records source artifact
 hashes, while `SHA256SUMS` covers every committed snapshot file.
+
+The consolidated reporter also validates raw evaluator video identities,
+prompt hashes, generation seeds, VideoScore2 model/FPS consistency, and all
+per-video aggregates. It reloads digest-checked final latents to recompute
+latent MSE and pair metrics. Compact report inputs are repository-relative;
+the original uncommitted videos and latents remain required for that deep
+replay and are identified by absolute `source_root` provenance paths.

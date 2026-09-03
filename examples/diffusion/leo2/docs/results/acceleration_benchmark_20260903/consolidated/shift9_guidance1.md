@@ -1,14 +1,16 @@
 # Leo2 acceleration results: flow shift 9, guidance 1
 
 MSE is mean squared error over all equal-size samples; global RMSE is its square root.
-Relative L1/L2 rows are means of per-video norm ratios. `N/A` means the source schema did not record the value.
+Relative L1/L2 rows are means of per-video norm ratios. `N/A` means the source did not record a value or provenance marks it unavailable.
+Speedup intervals are normal-approximation 95% CIs across 16 prompt-paired ratios, not repeated-run uncertainty.
+VBench scores use a 16-video custom-input suite, not the leaderboard; dynamic degree is descriptive, not monotonic quality.
 
 | Metric | Unit | exact | static_0.10 | taylor_0.10_m0.50 | magcache_0.12_k4 | dfr_w10_49_i2 |
 |---|---|---:|---:|---:|---:|---:|
 | Artifact case name | text | cache_off_shift9 | cache_t010_shift9 | taylor_t010_m050_shift9 | magcache_t012_k4_r020_shift9 | dfr_w10_49_i2_shift9 |
 | Acceleration method | text | off | first_block | taylor | magcache | fastercache_dfr |
 | Acceleration method options | JSON | {} | {"threshold":0.1} | {"max_extrapolation":0.5,"threshold":0.1} | {"calibrate":false,"max_skip_steps":4,"profile":"/root/leo2-output/accel-magcache-calibration-shift9-20260904-0001/magcache_shift9_profile.json","profile_ratio_count":50,"profile_sha256":"1fab27b88c5fd74a96de85c4e9f4cd29809289c2cd7df2cb0e143b1b3bef64b7","profile_timestep_count":50,"retention_ratio":0.2,"threshold":0.12} | {"end_step":49,"interval":2,"layers":null,"start_step":10} |
-| Cache threshold | setting | N/A | 0.1 | 0.1 | N/A | N/A |
+| Method decision threshold | setting | N/A | 0.1 | 0.1 | 0.12 | N/A |
 | Paired prompt/video count | count | 16 | 16 | 16 | 16 | 16 |
 | Mean end-to-end generation latency | seconds | 198.118 | 100.179 | 100.342 | 82.623 | 157.306 |
 | Mean generation latency excluding first request | seconds | 197.090 | 99.006 | 99.537 | 81.751 | 156.395 |
@@ -17,7 +19,7 @@ Relative L1/L2 rows are means of per-video norm ratios. `N/A` means the source s
 | Paired speedup mean 95% CI upper bound | x | 1.0000x | 2.0065x | 1.9952x | 2.4217x | 1.2609x |
 | Whole-tail residual reuse ratio | ratio | 0.00% | 55.50% | 55.25% | 64.00% | 0.00% |
 | Managed-attention reuse ratio | ratio | 0.00% | 0.00% | 0.00% | 0.00% | 38.00% |
-| Rank-maximum method cache residency | MiB | N/A | N/A | 0.000 | 93.086 | 4469.250 |
+| Rank-maximum method cache residency | MiB | N/A | N/A | N/A | 93.086 | 4469.250 |
 | Rank-maximum peak CUDA allocation | GiB | 64.648 | 64.919 | 65.011 | 64.739 | 69.019 |
 | Mean per-video relative latent L1 | ratio | 0 | 0.21220811 | 0.19017638 | 0.20628979 | 0.11202521 |
 | Mean per-video relative latent L2 | ratio | 0 | 0.22196082 | 0.20029409 | 0.20910963 | 0.12026318 |

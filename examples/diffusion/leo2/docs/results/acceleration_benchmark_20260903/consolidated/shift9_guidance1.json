@@ -4,15 +4,18 @@
   "flow_shift_video": 9.0,
   "guidance_scale": 1.0,
   "manifest": {
-    "path": "/root/leo2-accel-report-spec-shift9-g1-20260904.json",
-    "sha256": "a85210a4d839801fe428425ef7daefe4ac0312375b7e7e35fa3afc6354c74c23"
+    "path": "report_spec.json",
+    "sha256": "06795c94333f3d8b1677f2c0455998ca7aeabebff57c0ee2888dbdc5032a256c"
   },
   "metric_semantics": {
     "latent_global_rmse": "sqrt(latent_mse)",
     "latent_mse": "mean of per-video final-latent elementwise MSE; latents have identical shape",
     "pixel_global_rmse": "sqrt(pixel_mse)",
     "pixel_mse": "sum squared RGB24 error / decoded RGB sample count after normalization to [0,1]",
-    "relative_l1_l2": "arithmetic mean of per-video candidate-reference norm / reference norm"
+    "relative_l1_l2": "arithmetic mean of per-video candidate-reference norm / reference norm",
+    "speedup_ci95": "normal-approximation interval over 16 prompt-paired speedup ratios",
+    "validation": "timing/counters and pixel metrics are recomputed from pair rows; latent and evaluator metrics are recomputed from digest-checked raw artifacts",
+    "vbench": "custom-input scores over 16 videos; dynamic degree is descriptive motion presence"
   },
   "metrics": [
     {
@@ -52,13 +55,13 @@
       }
     },
     {
-      "description": "Cache threshold",
+      "description": "Method decision threshold",
       "key": "cache_threshold",
       "unit": "setting",
       "values": {
         "dfr_w10_49_i2": null,
         "exact": null,
-        "magcache_0.12_k4": null,
+        "magcache_0.12_k4": 0.12,
         "static_0.10": 0.1,
         "taylor_0.10_m0.50": 0.1
       }
@@ -168,7 +171,7 @@
         "exact": null,
         "magcache_0.12_k4": 93.0859375,
         "static_0.10": null,
-        "taylor_0.10_m0.50": 0.0
+        "taylor_0.10_m0.50": null
       }
     },
     {
@@ -428,84 +431,111 @@
   "schema_version": 1,
   "sources": [
     {
-      "artifact_root": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039",
-      "benchmark_env": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/benchmark.env",
+      "artifact_root": "../../cache_benchmark_20260903",
+      "benchmark_env": "../../cache_benchmark_20260903/benchmark.env",
       "benchmark_env_sha256": "8d5139e6afcd688782a9a21c7611692c0fe804aa3fd061c5e8bd3fec016eaf40",
       "case": "cache_off_shift9",
       "label": "exact",
-      "paired_metrics_csv": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/paired_metrics.csv",
-      "paired_metrics_sha256": "541b83608029332a97d1fb10f8001853c84c86292c0f78ad93e80110a2608d05",
-      "pixel_metrics_pairs_csv": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/pixel_metrics_pairs.csv",
-      "pixel_metrics_pairs_sha256": "63fae60b7cd08f999087bb8ab47431614a0fe503fadaef5afd3628289603bd77",
-      "quality_metrics_json": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/quality_eval/summary/quality_metrics_cases.json",
+      "paired_metrics_csv": "../../cache_benchmark_20260903/paired_metrics.csv",
+      "paired_metrics_sha256": "58e70644b5917565e8f8c6282c500602771372d38779cdb3c785a78fad473b98",
+      "pixel_metrics_pairs_csv": "../../cache_benchmark_20260903/pixel_metrics_pairs.csv",
+      "pixel_metrics_pairs_sha256": "830c1261bbaea8136589671c6aaa2d683544efca9629b381e79d5c76e063a022",
+      "quality_metrics_json": "../../cache_benchmark_20260903/quality_eval/summary/quality_metrics_cases.json",
       "quality_metrics_sha256": "6609d995340831bd5b185f092e245b0d31c3aa92eb332466a5b7b599d2290d6e",
+      "raw_vbench_json": "../../cache_benchmark_20260903/quality_eval/vbench/cache_off_shift9/results_2026-09-03-21:12:40_eval_results.json",
+      "raw_vbench_sha256": "09df42eb56328c1c1fe99e2623d8851a3777ca155e063ebfa1f4970f3a06bbed",
+      "raw_videoscore2_jsonl": "../../cache_benchmark_20260903/quality_eval/videoscore2/cache_off_shift9.jsonl",
+      "raw_videoscore2_sha256": "da885566b9212f1a4eab9aa9404ff8c9c551894ee9d504a0d748734f650073bd",
       "source_root": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039",
-      "summary_json": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/summary.json",
-      "summary_sha256": "8d34165ff89f65fcc194531d04e90c1180e0530c2151c718a0ffc20ee328077f"
+      "summary_json": "../../cache_benchmark_20260903/summary.json",
+      "summary_sha256": "8d34165ff89f65fcc194531d04e90c1180e0530c2151c718a0ffc20ee328077f",
+      "unavailable_metrics": {}
     },
     {
-      "artifact_root": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039",
-      "benchmark_env": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/benchmark.env",
+      "artifact_root": "../../cache_benchmark_20260903",
+      "benchmark_env": "../../cache_benchmark_20260903/benchmark.env",
       "benchmark_env_sha256": "8d5139e6afcd688782a9a21c7611692c0fe804aa3fd061c5e8bd3fec016eaf40",
       "case": "cache_t010_shift9",
       "label": "static_0.10",
-      "paired_metrics_csv": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/paired_metrics.csv",
-      "paired_metrics_sha256": "541b83608029332a97d1fb10f8001853c84c86292c0f78ad93e80110a2608d05",
-      "pixel_metrics_pairs_csv": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/pixel_metrics_pairs.csv",
-      "pixel_metrics_pairs_sha256": "63fae60b7cd08f999087bb8ab47431614a0fe503fadaef5afd3628289603bd77",
-      "quality_metrics_json": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/quality_eval/summary/quality_metrics_cases.json",
+      "paired_metrics_csv": "../../cache_benchmark_20260903/paired_metrics.csv",
+      "paired_metrics_sha256": "58e70644b5917565e8f8c6282c500602771372d38779cdb3c785a78fad473b98",
+      "pixel_metrics_pairs_csv": "../../cache_benchmark_20260903/pixel_metrics_pairs.csv",
+      "pixel_metrics_pairs_sha256": "830c1261bbaea8136589671c6aaa2d683544efca9629b381e79d5c76e063a022",
+      "quality_metrics_json": "../../cache_benchmark_20260903/quality_eval/summary/quality_metrics_cases.json",
       "quality_metrics_sha256": "6609d995340831bd5b185f092e245b0d31c3aa92eb332466a5b7b599d2290d6e",
+      "raw_vbench_json": "../../cache_benchmark_20260903/quality_eval/vbench/cache_t010_shift9/results_2026-09-03-21:12:38_eval_results.json",
+      "raw_vbench_sha256": "1142f5e6f9013f98ee3ad5d41bf57e3d7c47ba9c18216c6515f5c63e9e1b0953",
+      "raw_videoscore2_jsonl": "../../cache_benchmark_20260903/quality_eval/videoscore2/cache_t010_shift9.jsonl",
+      "raw_videoscore2_sha256": "c0e34adb3eeee452cde01e8766daa61f2e08b8d0ad9f1e3d22d2d1236e63949a",
       "source_root": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039",
-      "summary_json": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039/summary.json",
-      "summary_sha256": "8d34165ff89f65fcc194531d04e90c1180e0530c2151c718a0ffc20ee328077f"
+      "summary_json": "../../cache_benchmark_20260903/summary.json",
+      "summary_sha256": "8d34165ff89f65fcc194531d04e90c1180e0530c2151c718a0ffc20ee328077f",
+      "unavailable_metrics": {}
     },
     {
-      "artifact_root": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316",
-      "benchmark_env": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/benchmark.env",
+      "artifact_root": "../taylor/full_m050",
+      "benchmark_env": "../taylor/full_m050/benchmark.env",
       "benchmark_env_sha256": "1d171e0c958e5ddc90b25240b9c04d3e70cef4175d1e9296b92d0a1b157ce552",
       "case": "taylor_t010_m050_shift9",
       "label": "taylor_0.10_m0.50",
-      "paired_metrics_csv": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/paired_metrics.csv",
+      "paired_metrics_csv": "../taylor/full_m050/paired_metrics.csv",
       "paired_metrics_sha256": "79ebe80f1bc48fbd661ba7f984d7eaff2e9b345ff020c8b91d0a70d7cdc4dbf6",
-      "pixel_metrics_pairs_csv": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/pixel_metrics_pairs.csv",
+      "pixel_metrics_pairs_csv": "../taylor/full_m050/pixel_metrics_pairs.csv",
       "pixel_metrics_pairs_sha256": "c97129dbc574acc6b2dfd029d89ac1c8468f00be58350fc7807091ae200d1488",
-      "quality_metrics_json": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/quality_eval/summary/quality_metrics_cases.json",
+      "quality_metrics_json": "../taylor/full_m050/quality_eval/summary/quality_metrics_cases.json",
       "quality_metrics_sha256": "8c4ef3e16d1fb10aba786fc116765505770497e00bc4e31f240ec9be86053729",
+      "raw_vbench_json": "../taylor/full_m050/quality_eval/vbench/taylor_t010_m050_shift9/results_2026-09-04-02:28:44_eval_results.json",
+      "raw_vbench_sha256": "e01fb70d8bb4a483f794422f5c1637b97606ccac85766daea5bc32c511fb805f",
+      "raw_videoscore2_jsonl": "../taylor/full_m050/quality_eval/videoscore2/taylor_t010_m050_shift9.jsonl",
+      "raw_videoscore2_sha256": "1ac58b23645c7af8d751c74e490daacf358efd3466e8aa42ec618980de9e17e6",
       "source_root": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316",
-      "summary_json": "/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316/summary.json",
-      "summary_sha256": "41ab2b800f095370fcd13c393396099b2a97864c25ad559a938dd380705f834b"
+      "summary_json": "../taylor/full_m050/summary.json",
+      "summary_sha256": "41ab2b800f095370fcd13c393396099b2a97864c25ad559a938dd380705f834b",
+      "unavailable_metrics": {
+        "cache_residency_mib": "The run predates cache-residency instrumentation; its serialized zero is not a measurement."
+      }
     },
     {
-      "artifact_root": "/root/leo2-output/accel-magcache-full-t012-k4-shift9-20260904-0038",
-      "benchmark_env": "/root/leo2-output/accel-magcache-full-t012-k4-shift9-20260904-0038/benchmark.env",
+      "artifact_root": "../magcache/full_t012_k4",
+      "benchmark_env": "../magcache/full_t012_k4/benchmark.env",
       "benchmark_env_sha256": "e13a3b97c6606047b3352ee3072dea00e0dcd8ce5a6fdd99845fde14d6a29e67",
       "case": "magcache_t012_k4_r020_shift9",
       "label": "magcache_0.12_k4",
-      "paired_metrics_csv": "/root/leo2-output/accel-magcache-full-t012-k4-shift9-20260904-0038/paired_metrics.csv",
+      "paired_metrics_csv": "../magcache/full_t012_k4/paired_metrics.csv",
       "paired_metrics_sha256": "de7193e762d7fc0b6efac9a8146218edc6fb300287eaedf892fc5c657452d015",
-      "pixel_metrics_pairs_csv": "/root/leo2-output/accel-magcache-full-t012-k4-shift9-20260904-0038/pixel_metrics_pairs.csv",
+      "pixel_metrics_pairs_csv": "../magcache/full_t012_k4/pixel_metrics_pairs.csv",
       "pixel_metrics_pairs_sha256": "e2ce507f5cc8197d00d530dea443713f154212fdb99dfed8bc801f7cc1aa44f2",
-      "quality_metrics_json": "/root/leo2-output/accel-magcache-full-t012-k4-shift9-20260904-0038/quality_eval/summary/quality_metrics_cases.json",
+      "quality_metrics_json": "../magcache/full_t012_k4/quality_eval/summary/quality_metrics_cases.json",
       "quality_metrics_sha256": "4db0bc0cdc1479957c1219444faf25cdf62fa3ad2444b88181a957fb1c1abc2b",
+      "raw_vbench_json": "../magcache/full_t012_k4/quality_eval/vbench/magcache_t012_k4_r020_shift9/results_2026-09-04-02:28:45_eval_results.json",
+      "raw_vbench_sha256": "cc3fc85439756f158d145e7edc16ba266359ec29b60a9115f3a7272a25f96c6c",
+      "raw_videoscore2_jsonl": "../magcache/full_t012_k4/quality_eval/videoscore2/magcache_t012_k4_r020_shift9.jsonl",
+      "raw_videoscore2_sha256": "ca494042240bb9ebe5c7ad34561e07610ce853f31789a5d60046748ee903b67c",
       "source_root": "/root/leo2-output/accel-magcache-full-t012-k4-shift9-20260904-0038",
-      "summary_json": "/root/leo2-output/accel-magcache-full-t012-k4-shift9-20260904-0038/summary.json",
-      "summary_sha256": "d05569c4c469171bb64702f69abb612029ca740fc41336d1a78a11314e4ee95d"
+      "summary_json": "../magcache/full_t012_k4/summary.json",
+      "summary_sha256": "d05569c4c469171bb64702f69abb612029ca740fc41336d1a78a11314e4ee95d",
+      "unavailable_metrics": {}
     },
     {
-      "artifact_root": "/root/leo2-output/accel-dfr-full-w10-49-shift9-20260904-0142",
-      "benchmark_env": "/root/leo2-output/accel-dfr-full-w10-49-shift9-20260904-0142/benchmark.env",
+      "artifact_root": "../fastercache_dfr/full_w10_49_i2",
+      "benchmark_env": "../fastercache_dfr/full_w10_49_i2/benchmark.env",
       "benchmark_env_sha256": "af3a56a26ea3b63ae2b67f68dfe4d0bcfe56ad0c0d50e66277cf083e0239a87a",
       "case": "dfr_w10_49_i2_shift9",
       "label": "dfr_w10_49_i2",
-      "paired_metrics_csv": "/root/leo2-output/accel-dfr-full-w10-49-shift9-20260904-0142/paired_metrics.csv",
-      "paired_metrics_sha256": "042f6f50aaafe3769b9b0d13e446151289bba6c3c1af3e06dd61cbf377fc113a",
-      "pixel_metrics_pairs_csv": "/root/leo2-output/accel-dfr-full-w10-49-shift9-20260904-0142/pixel_metrics_pairs.csv",
-      "pixel_metrics_pairs_sha256": "64e68cfcacb3c70e64eba4d0c80d9af81b849418089ebf9c553d07c7b173395e",
-      "quality_metrics_json": "/root/leo2-output/accel-dfr-full-w10-49-shift9-20260904-0142/quality_eval/summary/quality_metrics_cases.json",
+      "paired_metrics_csv": "../fastercache_dfr/full_w10_49_i2/paired_metrics.csv",
+      "paired_metrics_sha256": "7edabf07149f74ed51935d8eb06ff66359421acade05330d4c05553940d47a86",
+      "pixel_metrics_pairs_csv": "../fastercache_dfr/full_w10_49_i2/pixel_metrics_pairs.csv",
+      "pixel_metrics_pairs_sha256": "d7e2f29cf24208aa05d2f2913f9c7df4260b560c3d5b383268dbf70168c414a6",
+      "quality_metrics_json": "../fastercache_dfr/full_w10_49_i2/quality_eval/summary/quality_metrics_cases.json",
       "quality_metrics_sha256": "1ca6c4e3c087ea0f783d78a65f0f5b60809e2177cfa34d434833f914510b92fd",
+      "raw_vbench_json": "../fastercache_dfr/full_w10_49_i2/quality_eval/vbench/dfr_w10_49_i2_shift9/results_2026-09-04-02:28:45_eval_results.json",
+      "raw_vbench_sha256": "666facc658957cb92b5da6cd8688ee14e3a950a1e2725979f8e812fdfadb0d82",
+      "raw_videoscore2_jsonl": "../fastercache_dfr/full_w10_49_i2/quality_eval/videoscore2/dfr_w10_49_i2_shift9.jsonl",
+      "raw_videoscore2_sha256": "9b24fad6715f47ab2f038b4d7e8b81bc7120875c3477e3e0774e79635060eeee",
       "source_root": "/root/leo2-output/accel-dfr-full-w10-49-shift9-20260904-0142",
-      "summary_json": "/root/leo2-output/accel-dfr-full-w10-49-shift9-20260904-0142/summary.json",
-      "summary_sha256": "25c117cf25467c35c151c9d0b1b303efd8f00557e5ed1067b0b6201fbf188ced"
+      "summary_json": "../fastercache_dfr/full_w10_49_i2/summary.json",
+      "summary_sha256": "25c117cf25467c35c151c9d0b1b303efd8f00557e5ed1067b0b6201fbf188ced",
+      "unavailable_metrics": {}
     }
   ]
 }

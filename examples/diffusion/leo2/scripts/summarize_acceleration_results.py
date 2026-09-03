@@ -1432,6 +1432,10 @@ def _render_json(
     cases: Sequence[CaseResult], manifest_path: Path, baseline: CaseResult, shift: float, guidance: float, count: int
 ) -> str:
     """Render the complete machine-readable report."""
+
+    def artifact_path(path: Path) -> str:
+        return Path(os.path.relpath(path, manifest_path.parent)).as_posix()
+
     document = {
         "schema_version": 1,
         "flow_shift_video": shift,
@@ -1449,26 +1453,26 @@ def _render_json(
             "vbench": "custom-input scores over 16 videos; dynamic degree is descriptive motion presence",
             "validation": "timing/counters and pixel metrics are recomputed from pair rows; latent and evaluator metrics are recomputed from digest-checked raw artifacts",
         },
-        "manifest": {"path": str(manifest_path), "sha256": _sha256(manifest_path)},
+        "manifest": {"path": artifact_path(manifest_path), "sha256": _sha256(manifest_path)},
         "sources": [
             {
                 "label": case.label,
                 "case": case.name,
-                "artifact_root": str(case.root),
+                "artifact_root": artifact_path(case.root),
                 "source_root": str(case.source_root),
-                "benchmark_env": str(case.root / "benchmark.env"),
+                "benchmark_env": artifact_path(case.root / "benchmark.env"),
                 "benchmark_env_sha256": _sha256(case.root / "benchmark.env"),
-                "summary_json": str(case.summary_path),
+                "summary_json": artifact_path(case.summary_path),
                 "summary_sha256": _sha256(case.summary_path),
-                "quality_metrics_json": str(case.quality_path),
+                "quality_metrics_json": artifact_path(case.quality_path),
                 "quality_metrics_sha256": _sha256(case.quality_path),
-                "paired_metrics_csv": str(case.paired_path),
+                "paired_metrics_csv": artifact_path(case.paired_path),
                 "paired_metrics_sha256": _sha256(case.paired_path),
-                "pixel_metrics_pairs_csv": str(case.pixel_path) if case.pixel_path.is_file() else None,
+                "pixel_metrics_pairs_csv": artifact_path(case.pixel_path) if case.pixel_path.is_file() else None,
                 "pixel_metrics_pairs_sha256": _sha256(case.pixel_path) if case.pixel_path.is_file() else None,
-                "raw_vbench_json": str(case.quality_sources["vbench"]),
+                "raw_vbench_json": artifact_path(case.quality_sources["vbench"]),
                 "raw_vbench_sha256": _sha256(case.quality_sources["vbench"]),
-                "raw_videoscore2_jsonl": str(case.quality_sources["videoscore2"]),
+                "raw_videoscore2_jsonl": artifact_path(case.quality_sources["videoscore2"]),
                 "raw_videoscore2_sha256": _sha256(case.quality_sources["videoscore2"]),
                 "unavailable_metrics": dict(case.unavailable_metrics),
             }
