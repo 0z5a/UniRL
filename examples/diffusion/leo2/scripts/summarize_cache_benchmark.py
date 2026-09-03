@@ -19,6 +19,19 @@ EXPECTED_WIDTH = 848
 EXPECTED_HEIGHT = 464
 EXPECTED_FRAMES = 121
 EXPECTED_FPS = 24.0
+TAIL_METHODS = {"first_block", "taylor", "magcache", "magcache_calibrate"}
+COUNTER_FIELDS = (
+    "full_steps",
+    "skipped_steps",
+    "tail_compute_steps",
+    "tail_reuse_steps",
+    "predicted_steps",
+    "static_fallback_steps",
+    "attention_compute_calls",
+    "attention_reuse_calls",
+    "cfg_compute_calls",
+    "cfg_reuse_calls",
+)
 
 
 def _read_markers(log_path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -139,22 +152,54 @@ def _validate_latents(case_dir: Path, requests: list[dict[str, Any]]) -> list[di
     return validation
 
 
+def _method(config: dict[str, Any], metadata: dict[str, str]) -> str:
+    """Resolve an explicit method or infer the original v1 method."""
+    method = config.get("cache_method") or metadata.get("method")
+    if method:
+        return str(method)
+    return "first_block" if config.get("cache_enabled") is True else "off"
+
+
+def _guidance_scale(config: dict[str, Any], metadata: dict[str, str]) -> float:
+    """Resolve guidance, using the fixed v1 value for historical logs."""
+    value = config.get("guidance_scale", metadata.get("guidance_scale", 1.0))
+    return float(value)
+
+
+def _normalize_request_counters(record: dict[str, Any], method: str) -> dict[str, Any]:
+    """Add stable tail, attention and CFG counters to a request record."""
+    record = dict(record)
+    full_steps = int(record.get("full_steps", 0))
+    skipped_steps = int(record.get("skipped_steps", 0))
+    record.setdefault("tail_compute_steps", full_steps if method in TAIL_METHODS else 0)
+    record.setdefault("tail_reuse_steps", skipped_steps if method in TAIL_METHODS else 0)
+    for field in COUNTER_FIELDS[4:]:
+        record.setdefault(field, 0)
+    record.setdefault("cache_bytes", 0)
+    record.setdefault("cache_method", method)
+    record.setdefault("guidance_scale", 1.0)
+    return record
+
+
 def _case_summary(case_dir: Path, expected_videos: int) -> dict[str, Any]:
     """Build one case summary from its log, latents and videos."""
     config, records = _read_markers(case_dir / "run.log")
-    successful = [record for record in records if record.get("status") == "ok"]
+    metadata = _case_metadata(case_dir)
+    method = _method(config, metadata)
+    guidance_scale = _guidance_scale(config, metadata)
+    successful = [_normalize_request_counters(record, method) for record in records if record.get("status") == "ok"]
     elapsed = [float(record["elapsed_seconds"]) for record in successful]
     steady = elapsed[1:]
-    full_steps = sum(int(record.get("full_steps", 0)) for record in successful)
-    skipped_steps = sum(int(record.get("skipped_steps", 0)) for record in successful)
-    cache_steps = full_steps + skipped_steps
+    counters = {field: sum(int(record.get(field, 0)) for record in successful) for field in COUNTER_FIELDS}
+    tail_steps = counters["tail_compute_steps"] + counters["tail_reuse_steps"]
+    attention_calls = counters["attention_compute_calls"] + counters["attention_reuse_calls"]
+    cfg_calls = counters["cfg_compute_calls"] + counters["cfg_reuse_calls"]
     videos = sorted((case_dir / "samples").rglob("*.mp4"))
     video_validation = [_probe_video(path) for path in videos]
     valid_video_count = sum(bool(record["valid"]) for record in video_validation)
     latent_validation = _validate_latents(case_dir, successful)
     valid_latent_count = sum(bool(record["valid"]) for record in latent_validation)
     exit_code = _exit_code(case_dir)
-    metadata = _case_metadata(case_dir)
     complete = (
         exit_code == 0
         and len(successful) == expected_videos
@@ -166,7 +211,12 @@ def _case_summary(case_dir: Path, expected_videos: int) -> dict[str, Any]:
     steady_ci95_low, steady_ci95_high = _mean_ci95(steady)
     return {
         "_case_dir": str(case_dir),
-        "cache_enabled": config.get("cache_enabled"),
+        "baseline_case": config.get("baseline_case") or metadata.get("baseline_case") or None,
+        "benchmark_schema_version": int(config.get("benchmark_schema_version", 1)),
+        "cache_bytes": max((int(record.get("cache_bytes", 0)) for record in successful), default=0),
+        "cache_enabled": method != "off",
+        "cache_method": method,
+        "cache_method_options": config.get("cache_method_options", {}),
         "cache_threshold": config.get("cache_threshold"),
         "case": case_dir.name,
         "complete": complete,
@@ -175,7 +225,7 @@ def _case_summary(case_dir: Path, expected_videos: int) -> dict[str, Any]:
         "exit_code": exit_code,
         "expected_videos": expected_videos,
         "flow_shift_video": config.get("flow_shift_video"),
-        "full_steps": full_steps,
+        "guidance_scale": guidance_scale,
         "generation_mean_seconds": _mean(elapsed),
         "generation_mean_seconds_ci95_high": mean_ci95_high,
         "generation_mean_seconds_ci95_low": mean_ci95_low,
@@ -195,13 +245,17 @@ def _case_summary(case_dir: Path, expected_videos: int) -> dict[str, Any]:
         ),
         "process_wall_seconds": int(metadata["process_wall_seconds"]) if "process_wall_seconds" in metadata else None,
         "request_count": len(successful),
+        "reference_root": config.get("reference_root") or metadata.get("reference_root") or None,
         "requests": successful,
-        "skip_ratio": skipped_steps / cache_steps if cache_steps else 0.0,
-        "skipped_steps": skipped_steps,
+        "skip_ratio": counters["tail_reuse_steps"] / tail_steps if tail_steps else 0.0,
+        "tail_reuse_ratio": counters["tail_reuse_steps"] / tail_steps if tail_steps else 0.0,
+        "attention_reuse_ratio": counters["attention_reuse_calls"] / attention_calls if attention_calls else 0.0,
+        "cfg_reuse_ratio": counters["cfg_reuse_calls"] / cfg_calls if cfg_calls else 0.0,
         "video_count": len(videos),
         "video_valid_count": valid_video_count,
         "video_validation": video_validation,
         "world_size": config.get("world_size"),
+        **counters,
     }
 
 
@@ -247,6 +301,7 @@ def _empty_paired_metrics(row: dict[str, Any]) -> None:
             "latent_pair_count": 0,
             "latent_rel_l1_mean": None,
             "latent_rel_l2_mean": None,
+            "pairing_error": None,
             "paired_speedup_mean": None,
             "paired_speedup_mean_ci95_high": None,
             "paired_speedup_mean_ci95_low": None,
@@ -256,23 +311,79 @@ def _empty_paired_metrics(row: dict[str, Any]) -> None:
     )
 
 
-def _add_paired_metrics(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Pair timings and latents with the cache-off baseline at each flow shift."""
-    baselines = {row["flow_shift_video"]: row for row in rows if row["cache_enabled"] is False and row["complete"]}
+def _same_float(left: Any, right: Any) -> bool:
+    """Compare two serialized floating-point settings."""
+    return math.isclose(float(left), float(right), rel_tol=0, abs_tol=1e-9)
+
+
+def _reference_expected_videos(case_dir: Path, fallback: int) -> int:
+    """Read a reference case's own expected sample count."""
+    metadata = _case_metadata(case_dir)
+    try:
+        return int(metadata.get("expected_videos", fallback))
+    except ValueError as exc:
+        raise ValueError(f"Invalid expected_videos in {case_dir / 'case.env'}") from exc
+
+
+def _add_paired_metrics(rows: list[dict[str, Any]], *, root: Path, expected_videos: int) -> list[dict[str, Any]]:
+    """Pair each case with its explicit local or external baseline."""
+    local_by_name = {row["case"]: row for row in rows}
+    legacy_baselines = {
+        (row["flow_shift_video"], row["guidance_scale"]): row
+        for row in rows
+        if row["cache_enabled"] is False and row["complete"]
+    }
+    external: dict[tuple[str, str], dict[str, Any]] = {}
     paired_rows = []
     for row in rows:
-        baseline = baselines.get(row["flow_shift_video"])
+        baseline_case = row.get("baseline_case")
+        reference_root = row.get("reference_root")
+        if baseline_case and reference_root:
+            baseline_root = Path(reference_root).resolve()
+            key = (str(baseline_root), str(baseline_case))
+            baseline = external.get(key)
+            if baseline is None:
+                case_dir = baseline_root / str(baseline_case)
+                baseline = _case_summary(
+                    case_dir,
+                    _reference_expected_videos(case_dir, expected_videos),
+                )
+                external[key] = baseline
+        elif baseline_case:
+            baseline_root = root
+            baseline = local_by_name.get(str(baseline_case))
+        else:
+            baseline_root = root
+            baseline = legacy_baselines.get((row["flow_shift_video"], row["guidance_scale"]))
         if baseline is None:
             _empty_paired_metrics(row)
+            row["pairing_error"] = f"Baseline not found: {baseline_case or 'legacy cache-off control'}"
+            if baseline_case:
+                row["complete"] = False
             continue
-        baseline_requests = {request["prompt_hash"]: request for request in baseline["requests"]}
+        if not baseline["complete"]:
+            raise ValueError(f"Baseline case is incomplete: {baseline_root / baseline['case']}")
+        for field in ("flow_shift_video", "guidance_scale", "diff_infer_steps"):
+            if not _same_float(row[field], baseline[field]):
+                raise ValueError(
+                    f"Candidate {row['case']} and baseline {baseline['case']} disagree on {field}: "
+                    f"{row[field]!r} != {baseline[field]!r}"
+                )
+        baseline_requests = {
+            (request["prompt_hash"], int(request["seed"])): request for request in baseline["requests"]
+        }
         ratios = []
         steady_ratios = []
         drift_rows = []
         for request in row["requests"]:
-            reference = baseline_requests.get(request["prompt_hash"])
+            reference = baseline_requests.get((request["prompt_hash"], int(request["seed"])))
             if reference is None:
                 continue
+            if int(reference["prompt_index"]) != int(request["prompt_index"]):
+                raise ValueError(
+                    f"Prompt index mismatch for paired hash in {row['case']}: "
+                    f"{request['prompt_index']} != {reference['prompt_index']}"
+                )
             ratio = float(reference["elapsed_seconds"]) / float(request["elapsed_seconds"])
             ratios.append(ratio)
             if int(request["request"]) > 1 and int(reference["request"]) > 1:
@@ -283,11 +394,14 @@ def _add_paired_metrics(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 drift = _latent_drift(_load_latent(baseline, reference), _load_latent(row, request))
             paired = {
                 "baseline_case": baseline["case"],
+                "baseline_root": str(baseline_root),
                 "baseline_seconds": float(reference["elapsed_seconds"]),
+                "cache_method": row["cache_method"],
                 "cache_threshold": row["cache_threshold"],
                 "candidate_seconds": float(request["elapsed_seconds"]),
                 "case": row["case"],
                 "flow_shift_video": row["flow_shift_video"],
+                "guidance_scale": row["guidance_scale"],
                 "prompt_hash": request["prompt_hash"],
                 "prompt_index": request["prompt_index"],
                 "seed": request["seed"],
@@ -308,11 +422,16 @@ def _add_paired_metrics(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "paired_speedup_mean_ci95_high": speedup_ci95_high,
                 "paired_speedup_mean_ci95_low": speedup_ci95_low,
                 "paired_steady_speedup_mean": _mean(steady_ratios),
+                "pairing_error": None,
                 "zero_threshold_exact": None,
             }
         )
         row["complete"] = row["complete"] and len(drift_rows) == row["expected_videos"]
-        if row["cache_enabled"] is True and row["cache_threshold"] == 0:
+        if (
+            row["cache_method"] in {"first_block", "taylor"}
+            and row["cache_threshold"] == 0
+            and baseline["cache_method"] == "off"
+        ):
             exact = len(drift_rows) == len(row["requests"]) and all(item["max_abs"] == 0.0 for item in drift_rows)
             row["zero_threshold_exact"] = exact
             row["complete"] = row["complete"] and exact
@@ -324,9 +443,14 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     fields = [
         "case",
         "complete",
+        "benchmark_schema_version",
+        "cache_method",
         "cache_enabled",
         "cache_threshold",
         "flow_shift_video",
+        "guidance_scale",
+        "baseline_case",
+        "reference_root",
         "diff_infer_steps",
         "world_size",
         "request_count",
@@ -349,6 +473,18 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "full_steps",
         "skipped_steps",
         "skip_ratio",
+        "tail_compute_steps",
+        "tail_reuse_steps",
+        "tail_reuse_ratio",
+        "predicted_steps",
+        "static_fallback_steps",
+        "attention_compute_calls",
+        "attention_reuse_calls",
+        "attention_reuse_ratio",
+        "cfg_compute_calls",
+        "cfg_reuse_calls",
+        "cfg_reuse_ratio",
+        "cache_bytes",
         "max_memory_allocated_bytes",
         "max_memory_reserved_bytes",
         "process_wall_seconds",
@@ -358,6 +494,7 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "latent_cosine_mean",
         "latent_max_abs_max",
         "zero_threshold_exact",
+        "pairing_error",
         "exit_code",
     ]
     with path.open("w", encoding="utf-8", newline="") as handle:
@@ -371,8 +508,11 @@ def _write_paired_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     fields = [
         "case",
         "baseline_case",
+        "baseline_root",
+        "cache_method",
         "cache_threshold",
         "flow_shift_video",
+        "guidance_scale",
         "prompt_index",
         "prompt_hash",
         "seed",
@@ -398,7 +538,7 @@ def main() -> None:
     args = parser.parse_args()
     case_dirs = sorted(path for path in args.root.iterdir() if path.is_dir() and (path / "run.log").exists())
     rows = [_case_summary(path, args.expected_videos) for path in case_dirs]
-    paired_rows = _add_paired_metrics(rows)
+    paired_rows = _add_paired_metrics(rows, root=args.root.resolve(), expected_videos=args.expected_videos)
     for row, case_dir in zip(rows, case_dirs):
         row.pop("_case_dir", None)
         (case_dir / "summary.json").write_text(json.dumps(row, indent=2, sort_keys=True) + "\n", encoding="utf-8")

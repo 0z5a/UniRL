@@ -4,20 +4,30 @@ set -euo pipefail
 ROOT="${1:-/root/leo2-output/cache-full-final-848x464x121-20260903-1039}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 LEO2_DIR="${REPO_ROOT}/examples/diffusion/leo2"
-CASES_CSV="${LEO2_DIR}/data/cache_benchmark_cases.csv"
-PROMPTS_CSV="${LEO2_DIR}/data/cache_benchmark_16.csv"
+CASES_CSV="${LEO2_CACHE_BENCH_CASES:-${LEO2_DIR}/data/cache_benchmark_cases.csv}"
+PROMPTS_CSV="${LEO2_CACHE_BENCH_PROMPTS:-${LEO2_DIR}/data/cache_benchmark_16.csv}"
 OUTPUT="${ROOT}/quality_eval"
 VBENCH_SOURCE="${VBENCH_SOURCE:-/root/leo2-eval/sources/VBench}"
 VBENCH_PYTHON="${VBENCH_PYTHON:-/root/leo2-eval/envs/vbench/bin/python}"
 VIDEOSCORE_PYTHON="${VIDEOSCORE_PYTHON:-/root/leo2-eval/envs/videoscore2/bin/python}"
 
 mkdir -p "${OUTPUT}/vbench" "${OUTPUT}/videoscore2" "${OUTPUT}/logs"
-mapfile -t CASES < <(tail -n +2 "${CASES_CSV}" | cut -d, -f1)
+mapfile -t CASES < <(
+  python "${LEO2_DIR}/scripts/cache_benchmark_cases.py" --emit-records "${CASES_CSV}" \
+    | cut -d $'\x1f' -f1
+)
 
 run_vbench_case() {
   local case="$1" gpu="$2"
   local case_output="${OUTPUT}/vbench/${case}"
-  local videos="${ROOT}/${case}/samples/cache_benchmark_16__16/videos"
+  local videos
+  local -a video_dirs
+  mapfile -t video_dirs < <(find "${ROOT}/${case}/samples" -type d -name videos)
+  if [[ "${#video_dirs[@]}" -ne 1 ]]; then
+    echo "Expected one videos directory for ${case}, found ${#video_dirs[@]}" >&2
+    return 2
+  fi
+  videos="${video_dirs[0]}"
   local prompt_file="${case_output}/prompts.json"
   mkdir -p "${case_output}"
   if compgen -G "${case_output}/*_eval_results.json" >/dev/null; then

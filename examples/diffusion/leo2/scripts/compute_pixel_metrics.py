@@ -19,12 +19,12 @@ from typing import Any, Iterator, Mapping, NoReturn, Sequence
 
 import imageio_ffmpeg
 import numpy as np
+from cache_benchmark_cases import CacheBenchmarkCase, load_cases
 
 EXPECTED_WIDTH = 848
 EXPECTED_HEIGHT = 464
 EXPECTED_FRAMES = 121
 EXPECTED_FPS = 24.0
-EXPECTED_PROMPTS = 16
 FPS_ABS_TOLERANCE = 1e-6
 VIDEO_NAME = re.compile(r"^(?P<prompt_index>[0-9]+)_0[.]mp4$")
 METRIC_NAMES = ("mae", "rmse", "relative_l1", "relative_l2", "max_abs")
@@ -32,13 +32,18 @@ METRIC_NAMES = ("mae", "rmse", "relative_l1", "relative_l2", "max_abs")
 PAIR_FIELDS = (
     "case",
     "baseline_case",
+    "baseline_root",
+    "cache_method",
     "cache_threshold",
     "flow_shift_video",
+    "guidance_scale",
     "prompt_index",
     "prompt_hash",
     "seed",
     "candidate_video",
+    "candidate_video_sha256",
     "baseline_video",
+    "baseline_video_sha256",
     "width",
     "height",
     "frames",
@@ -50,8 +55,11 @@ PAIR_FIELDS = (
 CASE_FIELDS = (
     "case",
     "baseline_case",
+    "baseline_root",
+    "cache_method",
     "cache_threshold",
     "flow_shift_video",
+    "guidance_scale",
     "pair_count",
     *(f"{metric}_mean" for metric in METRIC_NAMES),
     *(f"{metric}_max" for metric in METRIC_NAMES),
@@ -66,19 +74,9 @@ class PromptSpec:
 
 
 @dataclass(frozen=True)
-class CaseSpec:
-    name: str
-    cache_threshold: float | None
-    flow_shift_video: float
-
-    @property
-    def cache_enabled(self) -> bool:
-        return self.cache_threshold is not None
-
-
-@dataclass(frozen=True)
 class CheckedCase:
-    spec: CaseSpec
+    spec: CacheBenchmarkCase
+    root: Path
     summary: Mapping[str, Any]
     requests: Mapping[tuple[float, str, int], Mapping[str, Any]]
     videos: Mapping[int, Path]
@@ -150,8 +148,8 @@ def _load_prompts(path: Path) -> tuple[PromptSpec, ...]:
                     prompt_hash=hashlib.sha256(prompt.encode()).hexdigest(),
                 )
             )
-    if len(prompts) != EXPECTED_PROMPTS:
-        _die(f"Expected exactly {EXPECTED_PROMPTS} prompts, found {len(prompts)} in {path}")
+    if not prompts:
+        _die(f"Prompt CSV is empty: {path}")
     for field, values in (
         ("index", [prompt.prompt_index for prompt in prompts]),
         ("seed", [prompt.seed for prompt in prompts]),
@@ -159,63 +157,7 @@ def _load_prompts(path: Path) -> tuple[PromptSpec, ...]:
     ):
         if len(set(values)) != len(values):
             _die(f"Duplicate {field} in {path}")
-    expected_indices = set(range(EXPECTED_PROMPTS))
-    actual_indices = {prompt.prompt_index for prompt in prompts}
-    if actual_indices != expected_indices:
-        _die(f"Prompt indices must be exactly 0..{EXPECTED_PROMPTS - 1}; got {sorted(actual_indices)}")
     return tuple(sorted(prompts, key=lambda prompt: prompt.prompt_index))
-
-
-def _parse_threshold(raw: str, *, context: str) -> float | None:
-    normalized = raw.strip().lower()
-    if normalized in {"off", "none", "disabled"}:
-        return None
-    try:
-        result = float(normalized)
-    except ValueError as exc:
-        raise ValueError(f"Invalid cache threshold {raw!r} in {context}") from exc
-    if not math.isfinite(result) or result < 0:
-        _die(f"Cache threshold must be finite and non-negative in {context}: {raw!r}")
-    return result
-
-
-def _load_cases(path: Path) -> tuple[CaseSpec, ...]:
-    cases: list[CaseSpec] = []
-    with path.open("r", encoding="utf-8-sig", newline="") as handle:
-        reader = csv.DictReader(handle)
-        required = {"name", "cache_threshold", "flow_shift_video"}
-        if reader.fieldnames is None or not required.issubset(reader.fieldnames):
-            _die(f"Cases CSV must contain {sorted(required)}: {path}")
-        for line_number, row in enumerate(reader, 2):
-            context = f"{path}:{line_number}"
-            name = (row.get("name") or "").strip()
-            if not name or name in {".", ".."} or Path(name).name != name:
-                _die(f"Unsafe or empty case name in {context}: {name!r}")
-            try:
-                shift = float(row["flow_shift_video"])
-            except (TypeError, ValueError) as exc:
-                raise ValueError(f"Invalid flow_shift_video in {context}") from exc
-            if not math.isfinite(shift):
-                _die(f"flow_shift_video must be finite in {context}")
-            cases.append(
-                CaseSpec(
-                    name=name,
-                    cache_threshold=_parse_threshold(row["cache_threshold"], context=context),
-                    flow_shift_video=shift,
-                )
-            )
-    if not cases:
-        _die(f"Cases CSV is empty: {path}")
-    if len({case.name for case in cases}) != len(cases):
-        _die(f"Duplicate case name in {path}")
-    for shift in sorted({case.flow_shift_video for case in cases}):
-        controls = [case for case in cases if case.flow_shift_video == shift and not case.cache_enabled]
-        candidates = [case for case in cases if case.flow_shift_video == shift and case.cache_enabled]
-        if len(controls) != 1:
-            _die(f"flow_shift_video={shift:g} must have exactly one cache-off case; found {len(controls)}")
-        if not candidates:
-            _die(f"flow_shift_video={shift:g} has no cache-enabled candidate")
-    return tuple(cases)
 
 
 def _load_summary(path: Path) -> tuple[Mapping[str, Any], ...]:
@@ -266,13 +208,13 @@ def _paths_under(directory: Path, paths: Sequence[Path], context: str) -> None:
             raise ValueError(f"{context}: path escapes {resolved_directory}: {path}") from exc
 
 
-def _video_map(root: Path, case_dir: Path) -> dict[int, Path]:
+def _video_map(root: Path, case_dir: Path, expected_indices: set[int]) -> dict[int, Path]:
     sample_dir = case_dir / "samples"
     if not sample_dir.is_dir():
         _die(f"Missing samples directory: {sample_dir}")
     videos = sorted(sample_dir.rglob("*.mp4"))
-    if len(videos) != EXPECTED_PROMPTS:
-        _die(f"{case_dir.name}: expected {EXPECTED_PROMPTS} MP4 files, found {len(videos)}")
+    if len(videos) != len(expected_indices):
+        _die(f"{case_dir.name}: expected {len(expected_indices)} MP4 files, found {len(videos)}")
     _paths_under(root, videos, case_dir.name)
     result: dict[int, Path] = {}
     for video in videos:
@@ -285,16 +227,15 @@ def _video_map(root: Path, case_dir: Path) -> dict[int, Path]:
         if prompt_index in result:
             _die(f"{case_dir.name}: duplicate video for prompt index {prompt_index}")
         result[prompt_index] = video.resolve()
-    expected_indices = set(range(EXPECTED_PROMPTS))
     if set(result) != expected_indices:
-        _die(f"{case_dir.name}: video indices must be exactly 0..{EXPECTED_PROMPTS - 1}")
+        _die(f"{case_dir.name}: video indices differ from successful request indices")
     return result
 
 
 def _validate_summary_video_records(row: Mapping[str, Any], videos: Mapping[int, Path], context: str) -> None:
     records = row.get("video_validation")
-    if not isinstance(records, list) or len(records) != EXPECTED_PROMPTS:
-        _die(f"{context}: video_validation must contain {EXPECTED_PROMPTS} records")
+    if not isinstance(records, list) or len(records) != len(videos):
+        _die(f"{context}: video_validation must contain {len(videos)} records")
     recorded_paths: set[Path] = set()
     for position, record in enumerate(records):
         item_context = f"{context}.video_validation[{position}]"
@@ -329,33 +270,46 @@ def _validate_summary_video_records(row: Mapping[str, Any], videos: Mapping[int,
 
 def _check_case(
     root: Path,
-    spec: CaseSpec,
+    spec: CacheBenchmarkCase,
     row: Mapping[str, Any],
     prompts: Sequence[PromptSpec],
+    *,
+    allow_prompt_superset: bool = False,
 ) -> CheckedCase:
     context = f"case {spec.name}"
     if row.get("case") != spec.name:
         _die(f"{context}: summary case name mismatch: {row.get('case')!r}")
     if row.get("complete") is not True or _require_int(row, "exit_code", context) != 0:
         _die(f"{context}: benchmark case is not complete and successful")
+    summary_method = row.get("cache_method") or ("first_block" if row.get("cache_enabled") is True else "off")
+    if summary_method != spec.method:
+        _die(f"{context}: cache_method disagrees with cases CSV: {summary_method!r} != {spec.method!r}")
     if row.get("cache_enabled") is not spec.cache_enabled:
         _die(f"{context}: cache_enabled disagrees with cases CSV")
     threshold = row.get("cache_threshold")
-    if spec.cache_threshold is None:
+    if spec.method == "off":
         if threshold is not None:
             _die(f"{context}: cache-off summary has threshold {threshold!r}")
-    elif not _same_float(_require_float(row, "cache_threshold", context), spec.cache_threshold):
+    elif spec.cache_threshold is not None and not _same_float(
+        _require_float(row, "cache_threshold", context), spec.cache_threshold
+    ):
         _die(f"{context}: cache threshold disagrees with cases CSV")
     summary_shift = _require_float(row, "flow_shift_video", context)
     if not _same_float(summary_shift, spec.flow_shift_video):
         _die(f"{context}: flow shift disagrees with cases CSV")
-    for field in ("expected_videos", "request_count", "video_count", "video_valid_count"):
-        if _require_int(row, field, context) != EXPECTED_PROMPTS:
-            _die(f"{context}: {field} is not {EXPECTED_PROMPTS}")
+    summary_guidance = float(row.get("guidance_scale", 1.0))
+    if not _same_float(summary_guidance, spec.guidance_scale):
+        _die(f"{context}: guidance_scale disagrees with cases CSV")
+    count = _require_int(row, "expected_videos", context)
+    if (allow_prompt_superset and count < len(prompts)) or (not allow_prompt_superset and count != len(prompts)):
+        _die(f"{context}: expected_videos={count} is incompatible with {len(prompts)} selected prompts")
+    for field in ("request_count", "video_count", "video_valid_count"):
+        if _require_int(row, field, context) != count:
+            _die(f"{context}: {field} is not {count}")
 
     raw_requests = row.get("requests")
-    if not isinstance(raw_requests, list) or len(raw_requests) != EXPECTED_PROMPTS:
-        _die(f"{context}: requests must contain exactly {EXPECTED_PROMPTS} records")
+    if not isinstance(raw_requests, list) or len(raw_requests) != count:
+        _die(f"{context}: requests must contain exactly {count} records")
     requests: dict[tuple[float, str, int], Mapping[str, Any]] = {}
     seen_indices: set[int] = set()
     expected_by_index = {prompt.prompt_index: prompt for prompt in prompts}
@@ -369,7 +323,7 @@ def _check_case(
         if not isinstance(prompt_hash, str) or re.fullmatch(r"[0-9a-f]{64}", prompt_hash) is None:
             _die(f"{request_context}: invalid SHA-256 prompt hash {prompt_hash!r}")
         expected = expected_by_index.get(prompt_index)
-        if expected is None or expected.seed != seed or expected.prompt_hash != prompt_hash:
+        if expected is not None and (expected.seed != seed or expected.prompt_hash != prompt_hash):
             _die(f"{request_context}: prompt index/hash/seed disagree with prompts CSV")
         if prompt_index in seen_indices:
             _die(f"{context}: duplicate request for prompt index {prompt_index}")
@@ -377,32 +331,37 @@ def _check_case(
         if not _same_float(_require_float(request, "flow_shift_video", request_context), spec.flow_shift_video):
             _die(f"{request_context}: flow shift disagrees with case")
         request_threshold = request.get("cache_threshold")
-        if spec.cache_threshold is None:
+        if spec.method == "off":
             if request_threshold is not None:
                 _die(f"{request_context}: cache-off request has a threshold")
-        elif not _same_float(_require_float(request, "cache_threshold", request_context), spec.cache_threshold):
+        elif spec.cache_threshold is not None and not _same_float(
+            _require_float(request, "cache_threshold", request_context), spec.cache_threshold
+        ):
             _die(f"{request_context}: cache threshold disagrees with case")
         key = (spec.flow_shift_video, prompt_hash, seed)
         if key in requests:
             _die(f"{context}: duplicate pairing key {key}")
         requests[key] = request
 
-    if seen_indices != set(range(EXPECTED_PROMPTS)):
-        _die(f"{context}: request prompt indices are incomplete")
+    selected_indices = set(expected_by_index)
+    if not selected_indices.issubset(seen_indices):
+        _die(f"{context}: selected prompt indices are missing")
+    if not allow_prompt_superset and seen_indices != selected_indices:
+        _die(f"{context}: request prompt indices differ from the prompt CSV")
     case_dir = root / spec.name
     if not case_dir.is_dir() or case_dir.resolve().parent != root:
         _die(f"Missing or unsafe case directory: {case_dir}")
-    videos = _video_map(root, case_dir)
+    videos = _video_map(root, case_dir, seen_indices)
     _validate_summary_video_records(row, videos, context)
-    return CheckedCase(spec=spec, summary=row, requests=requests, videos=videos)
+    return CheckedCase(spec=spec, root=root, summary=row, requests=requests, videos=videos)
 
 
 def _validate_inputs(
     root: Path,
     summary_rows: Sequence[Mapping[str, Any]],
-    cases: Sequence[CaseSpec],
+    cases: Sequence[CacheBenchmarkCase],
     prompts: Sequence[PromptSpec],
-) -> tuple[CheckedCase, ...]:
+) -> tuple[tuple[CheckedCase, ...], dict[str, CheckedCase]]:
     summary_by_name: dict[str, Mapping[str, Any]] = {}
     for position, row in enumerate(summary_rows):
         name = row.get("case")
@@ -417,21 +376,67 @@ def _validate_inputs(
         extra = sorted(set(summary_by_name) - expected_names)
         _die(f"Final summary/cases CSV differ; missing={missing}, extra={extra}")
     checked = tuple(_check_case(root, case, summary_by_name[case.name], prompts) for case in cases)
-
+    local = {case.spec.name: case for case in checked}
+    external: dict[tuple[Path, str], CheckedCase] = {}
+    baselines: dict[str, CheckedCase] = {}
     for candidate in (case for case in checked if case.spec.cache_enabled):
-        controls = [
-            case
-            for case in checked
-            if not case.spec.cache_enabled and _same_float(case.spec.flow_shift_video, candidate.spec.flow_shift_video)
-        ]
-        if len(controls) != 1:
-            _die(f"{candidate.spec.name}: expected one same-shift cache-off baseline")
-        baseline = controls[0]
-        if set(candidate.requests) != set(baseline.requests):
-            missing = sorted(set(baseline.requests) - set(candidate.requests))
-            extra = sorted(set(candidate.requests) - set(baseline.requests))
-            _die(f"{candidate.spec.name}: candidate/baseline pairs differ; missing={missing}, extra={extra}")
-    return checked
+        baseline_name = candidate.spec.baseline_case
+        baseline_root = Path(candidate.spec.reference_root).resolve() if candidate.spec.reference_root else root
+        if baseline_name is None:
+            controls = [
+                case
+                for case in checked
+                if not case.spec.cache_enabled
+                and _same_float(case.spec.flow_shift_video, candidate.spec.flow_shift_video)
+                and _same_float(case.spec.guidance_scale, candidate.spec.guidance_scale)
+            ]
+            if len(controls) != 1:
+                _die(f"{candidate.spec.name}: expected one same-setting cache-off baseline")
+            baseline = controls[0]
+        elif baseline_root == root and baseline_name in local:
+            baseline = local[baseline_name]
+        else:
+            key = (baseline_root, baseline_name)
+            baseline = external.get(key)
+            if baseline is None:
+                rows = _load_summary(baseline_root / "summary.json")
+                matches = [row for row in rows if row.get("case") == baseline_name]
+                if len(matches) != 1:
+                    _die(f"Expected one {baseline_name!r} row in {baseline_root / 'summary.json'}")
+                baseline_row = matches[0]
+                method = baseline_row.get("cache_method") or (
+                    "first_block" if baseline_row.get("cache_enabled") is True else "off"
+                )
+                baseline_spec = CacheBenchmarkCase(
+                    name=baseline_name,
+                    method=str(method),
+                    cache_threshold=(
+                        float(baseline_row["cache_threshold"])
+                        if baseline_row.get("cache_threshold") is not None
+                        else None
+                    ),
+                    flow_shift_video=float(baseline_row["flow_shift_video"]),
+                    guidance_scale=float(baseline_row.get("guidance_scale", 1.0)),
+                    baseline_case=baseline_name,
+                    reference_root=str(baseline_root),
+                )
+                baseline = _check_case(
+                    baseline_root,
+                    baseline_spec,
+                    baseline_row,
+                    prompts,
+                    allow_prompt_superset=True,
+                )
+                external[key] = baseline
+        if not _same_float(candidate.spec.flow_shift_video, baseline.spec.flow_shift_video):
+            _die(f"{candidate.spec.name}: candidate/baseline flow shifts differ")
+        if not _same_float(candidate.spec.guidance_scale, baseline.spec.guidance_scale):
+            _die(f"{candidate.spec.name}: candidate/baseline guidance scales differ")
+        if not set(candidate.requests).issubset(baseline.requests):
+            missing = sorted(set(candidate.requests) - set(baseline.requests))
+            _die(f"{candidate.spec.name}: baseline lacks candidate pairs: {missing}")
+        baselines[candidate.spec.name] = baseline
+    return checked, baselines
 
 
 def _open_rgb_reader(path: Path) -> tuple[Iterator[bytes], Mapping[str, Any]]:
@@ -548,11 +553,14 @@ def _pixel_metrics(reference_path: Path, candidate_path: Path) -> dict[str, int 
     }
 
 
-def _pair_rows(checked: Sequence[CheckedCase], prompts: Sequence[PromptSpec]) -> list[dict[str, Any]]:
-    controls = {case.spec.flow_shift_video: case for case in checked if not case.spec.cache_enabled}
+def _pair_rows(
+    checked: Sequence[CheckedCase],
+    baselines: Mapping[str, CheckedCase],
+    prompts: Sequence[PromptSpec],
+) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for candidate in (case for case in checked if case.spec.cache_enabled):
-        baseline = controls[candidate.spec.flow_shift_video]
+        baseline = baselines[candidate.spec.name]
         for prompt in prompts:
             key = (candidate.spec.flow_shift_video, prompt.prompt_hash, prompt.seed)
             candidate_request = candidate.requests.get(key)
@@ -570,13 +578,18 @@ def _pair_rows(checked: Sequence[CheckedCase], prompts: Sequence[PromptSpec]) ->
                 {
                     "case": candidate.spec.name,
                     "baseline_case": baseline.spec.name,
+                    "baseline_root": str(baseline.root),
+                    "cache_method": candidate.spec.method,
                     "cache_threshold": candidate.spec.cache_threshold,
                     "flow_shift_video": candidate.spec.flow_shift_video,
+                    "guidance_scale": candidate.spec.guidance_scale,
                     "prompt_index": prompt.prompt_index,
                     "prompt_hash": prompt.prompt_hash,
                     "seed": prompt.seed,
                     "candidate_video": str(candidate_video),
+                    "candidate_video_sha256": _sha256(candidate_video),
                     "baseline_video": str(baseline_video),
+                    "baseline_video_sha256": _sha256(baseline_video),
                     **metrics,
                 }
             )
@@ -588,13 +601,16 @@ def _aggregate_cases(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     aggregates: list[dict[str, Any]] = []
     for case_name in case_names:
         group = [row for row in rows if row["case"] == case_name]
-        if len(group) != EXPECTED_PROMPTS:
-            _die(f"{case_name}: expected {EXPECTED_PROMPTS} computed pairs, found {len(group)}")
+        if not group:
+            _die(f"{case_name}: no computed pairs")
         aggregate: dict[str, Any] = {
             "case": case_name,
             "baseline_case": group[0]["baseline_case"],
+            "baseline_root": group[0]["baseline_root"],
+            "cache_method": group[0]["cache_method"],
             "cache_threshold": group[0]["cache_threshold"],
             "flow_shift_video": group[0]["flow_shift_video"],
+            "guidance_scale": group[0]["guidance_scale"],
             "pair_count": len(group),
         }
         for metric in METRIC_NAMES:
@@ -607,9 +623,9 @@ def _aggregate_cases(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
 
 def _json_document(kind: str, rows: Sequence[Mapping[str, Any]], inputs: Mapping[str, str]) -> dict[str, Any]:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "kind": kind,
-        "reference": "cache-off case with identical flow_shift_video, prompt_hash and seed",
+        "reference": "explicit baseline_case/reference_root with identical settings, prompt_hash and seed",
         "decoded_pixel_domain": "RGB24 normalized to [0, 1]",
         "expected_video": {
             "width": EXPECTED_WIDTH,
@@ -688,7 +704,6 @@ def main() -> None:
     expected_metadata = {
         "image_size": "464x848",
         "num_frames": str(EXPECTED_FRAMES),
-        "expected_videos_per_case": str(EXPECTED_PROMPTS),
     }
     for key, expected in expected_metadata.items():
         if metadata.get(key) != expected:
@@ -698,9 +713,12 @@ def main() -> None:
     cases_csv = _resolve_input(args.cases_csv, metadata, "cases_csv")
     summary_path = root / "summary.json"
     prompts = _load_prompts(prompts_csv)
-    cases = _load_cases(cases_csv)
+    cases = load_cases(cases_csv)
     summary = _load_summary(summary_path)
-    checked = _validate_inputs(root, summary, cases, prompts)
+    expected_videos = int(metadata.get("expected_videos_per_case", 0))
+    if expected_videos != len(prompts):
+        _die(f"benchmark.env expected_videos_per_case={expected_videos} but prompts CSV has {len(prompts)} rows")
+    checked, baselines = _validate_inputs(root, summary, cases, prompts)
 
     output_dir = (args.output_dir or root).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -714,8 +732,8 @@ def main() -> None:
     if existing and not args.force:
         _die(f"Refusing to overwrite existing outputs without --force: {existing}")
 
-    pairs = _pair_rows(checked, prompts)
-    expected_pair_count = sum(case.spec.cache_enabled for case in checked) * EXPECTED_PROMPTS
+    pairs = _pair_rows(checked, baselines, prompts)
+    expected_pair_count = sum(case.spec.cache_enabled for case in checked) * len(prompts)
     if len(pairs) != expected_pair_count:
         _die(f"Expected {expected_pair_count} candidate/baseline pairs, computed {len(pairs)}")
     aggregates = _aggregate_cases(pairs)

@@ -9,6 +9,7 @@ from collections import defaultdict
 from pathlib import Path
 
 import torch
+from cache_benchmark_cases import CacheBenchmarkCase, load_cases
 
 VBENCH_DIMENSIONS = (
     "subject_consistency",
@@ -43,18 +44,19 @@ def latent_tensor(path: Path) -> torch.Tensor:
     return tensor.to(dtype=torch.float64)
 
 
-def latent_mse(root: Path, case: str, baseline: str) -> tuple[float, float]:
+def latent_mse(root: Path, case: str, baseline_root: Path, baseline: str, expected: int) -> tuple[float, float]:
     """Return mean per-video MSE and RMSE against the same-shift baseline."""
     if case == baseline:
         return 0.0, 0.0
     candidate_paths = sorted((root / case / "latents").glob("*.pt"))
-    baseline_paths = sorted((root / baseline / "latents").glob("*.pt"))
-    if len(candidate_paths) != 16 or len(baseline_paths) != 16:
-        raise ValueError(f"expected 16 latent pairs for {case}, got {len(candidate_paths)}")
+    baseline_by_name = {path.name: path for path in (baseline_root / baseline / "latents").glob("*.pt")}
+    if len(candidate_paths) != expected:
+        raise ValueError(f"expected {expected} candidate latents for {case}, got {len(candidate_paths)}")
     values = []
-    for candidate_path, baseline_path in zip(candidate_paths, baseline_paths, strict=True):
-        if candidate_path.name != baseline_path.name:
-            raise ValueError(f"latent names do not align: {candidate_path} vs {baseline_path}")
+    for candidate_path in candidate_paths:
+        baseline_path = baseline_by_name.get(candidate_path.name)
+        if baseline_path is None:
+            raise ValueError(f"baseline lacks latent {candidate_path.name}: {baseline_root / baseline}")
         difference = latent_tensor(candidate_path) - latent_tensor(baseline_path)
         values.append(difference.square().mean().item())
     mean_mse = sum(values) / len(values)
@@ -69,26 +71,24 @@ def find_vbench_result(root: Path, case: str) -> dict:
     return json.loads(matches[0].read_text())
 
 
-def videoscore_means(root: Path, case: str) -> dict[str, float]:
-    """Average the 16 VideoScore2 ordinal scores for one case."""
+def videoscore_means(root: Path, case: str, expected: int) -> dict[str, float]:
+    """Average the VideoScore2 ordinal scores for one case."""
     path = root / "quality_eval" / "videoscore2" / f"{case}.jsonl"
     rows = [json.loads(line) for line in path.read_text().splitlines() if line]
-    if len(rows) != 16:
-        raise ValueError(f"expected 16 VideoScore2 rows for {case}, got {len(rows)}")
-    if sorted(row["prompt_index"] for row in rows) != list(range(16)):
-        raise ValueError(f"VideoScore2 prompt indices are incomplete for {case}")
+    if len(rows) != expected:
+        raise ValueError(f"expected {expected} VideoScore2 rows for {case}, got {len(rows)}")
     return {key: sum(row[key] for row in rows) / len(rows) for key in VIDEOSCORE_DIMENSIONS}
 
 
-def baseline_for(case: dict[str, str]) -> str:
-    """Resolve the cache-off baseline for a flow shift."""
-    shift = float(case["flow_shift_video"])
-    return f"cache_off_shift{int(shift)}"
+def _baseline(case: CacheBenchmarkCase, root: Path) -> tuple[str, Path]:
+    """Resolve an explicit or legacy cache-off baseline."""
+    name = case.baseline_case or f"cache_off_shift{int(case.flow_shift_video)}"
+    return name, Path(case.reference_root).resolve() if case.reference_root else root
 
 
 def aggregate(args: argparse.Namespace) -> list[dict[str, object]]:
     """Combine timing, paired-error, VBench, and VideoScore2 results."""
-    cases = read_csv(args.cases_csv)
+    cases = load_cases(args.cases_csv)
     summaries = {row["case"]: row for row in read_csv(args.benchmark_root / "summary.csv")}
     paired_rows = read_csv(args.benchmark_root / "paired_metrics.csv")
     paired = defaultdict(list)
@@ -101,34 +101,42 @@ def aggregate(args: argparse.Namespace) -> list[dict[str, object]]:
 
     results = []
     for case in cases:
-        name = case["name"]
-        baseline = baseline_for(case)
+        name = case.name
+        baseline, baseline_root = _baseline(case, args.benchmark_root)
         summary = summaries[name]
-        cache_enabled = case["cache_threshold"] != "off"
+        cache_enabled = case.cache_enabled
+        sample_count = int(summary["request_count"])
         row: dict[str, object] = {
             "case": name,
-            "flow_shift_video": float(case["flow_shift_video"]),
-            "cache_threshold": None if not cache_enabled else float(case["cache_threshold"]),
+            "baseline_case": baseline,
+            "baseline_root": str(baseline_root),
+            "cache_method": case.method,
+            "flow_shift_video": case.flow_shift_video,
+            "guidance_scale": case.guidance_scale,
+            "cache_threshold": case.cache_threshold,
             "cache_disabled": not cache_enabled,
-            "sample_count": 16,
+            "quality_source_root": str(args.benchmark_root),
+            "sample_count": sample_count,
             "generation_mean_seconds": float(summary["generation_mean_seconds"]),
             "paired_speedup_mean": float(summary["paired_speedup_mean"]),
             "skip_ratio": float(summary["skip_ratio"]),
-            "latent_relative_l1": sum(float(item["rel_l1"]) for item in paired[name]) / 16,
-            "latent_relative_l2": sum(float(item["rel_l2"]) for item in paired[name]) / 16,
-            "latent_cosine": sum(float(item["cosine"]) for item in paired[name]) / 16,
+            "latent_relative_l1": sum(float(item["rel_l1"]) for item in paired[name]) / sample_count,
+            "latent_relative_l2": sum(float(item["rel_l2"]) for item in paired[name]) / sample_count,
+            "latent_cosine": sum(float(item["cosine"]) for item in paired[name]) / sample_count,
         }
-        row["latent_mse"], row["latent_rmse"] = latent_mse(args.benchmark_root, name, baseline)
+        row["latent_mse"], row["latent_rmse"] = latent_mse(
+            args.benchmark_root, name, baseline_root, baseline, sample_count
+        )
         if cache_enabled:
             case_pixels = pixels[name]
-            if len(case_pixels) != 16:
-                raise ValueError(f"expected 16 pixel pairs for {name}, got {len(case_pixels)}")
+            if len(case_pixels) != sample_count:
+                raise ValueError(f"expected {sample_count} pixel pairs for {name}, got {len(case_pixels)}")
             row.update(
-                pixel_mse=sum(float(item["rmse"]) ** 2 for item in case_pixels) / 16,
-                pixel_mae=sum(float(item["mae"]) for item in case_pixels) / 16,
-                pixel_rmse=math.sqrt(sum(float(item["rmse"]) ** 2 for item in case_pixels) / 16),
-                pixel_relative_l1=sum(float(item["relative_l1"]) for item in case_pixels) / 16,
-                pixel_relative_l2=sum(float(item["relative_l2"]) for item in case_pixels) / 16,
+                pixel_mse=sum(float(item["rmse"]) ** 2 for item in case_pixels) / sample_count,
+                pixel_mae=sum(float(item["mae"]) for item in case_pixels) / sample_count,
+                pixel_rmse=math.sqrt(sum(float(item["rmse"]) ** 2 for item in case_pixels) / sample_count),
+                pixel_relative_l1=sum(float(item["relative_l1"]) for item in case_pixels) / sample_count,
+                pixel_relative_l2=sum(float(item["relative_l2"]) for item in case_pixels) / sample_count,
             )
         else:
             row.update(
@@ -140,8 +148,31 @@ def aggregate(args: argparse.Namespace) -> list[dict[str, object]]:
             )
         vbench = find_vbench_result(args.benchmark_root, name)
         row.update({f"vbench_{key}": float(vbench[key][0]) for key in VBENCH_DIMENSIONS})
-        row.update({f"videoscore2_{key}": value for key, value in videoscore_means(args.benchmark_root, name).items()})
+        row.update(
+            {
+                f"videoscore2_{key}": value
+                for key, value in videoscore_means(args.benchmark_root, name, sample_count).items()
+            }
+        )
         results.append(row)
+    present = {str(row["case"]) for row in results}
+    for case in cases:
+        baseline, baseline_root = _baseline(case, args.benchmark_root)
+        if baseline in present or baseline_root == args.benchmark_root:
+            continue
+        path = baseline_root / "quality_eval" / "summary" / "quality_metrics_cases.json"
+        rows = json.loads(path.read_text())
+        matches = [row for row in rows if row.get("case") == baseline]
+        if len(matches) != 1:
+            raise ValueError(f"expected one quality row for {baseline} in {path}")
+        baseline_row = dict(matches[0])
+        if not math.isclose(float(baseline_row["flow_shift_video"]), case.flow_shift_video):
+            raise ValueError(f"external quality baseline shift mismatch: {path}")
+        baseline_row.setdefault("guidance_scale", case.guidance_scale)
+        baseline_row.setdefault("cache_method", "first_block" if baseline_row.get("cache_disabled") is False else "off")
+        baseline_row["quality_source_root"] = str(baseline_root)
+        results.append(baseline_row)
+        present.add(baseline)
     return results
 
 
@@ -153,7 +184,8 @@ def write_results(results: list[dict[str, object]], output_dir: Path) -> None:
     if csv_path.exists() or json_path.exists():
         raise FileExistsError(f"refusing to overwrite results in {output_dir}")
     with csv_path.open("x", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(results[0]))
+        fields = list(dict.fromkeys(key for row in results for key in row))
+        writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         writer.writerows(results)
     json_path.write_text(json.dumps(results, indent=2) + "\n")

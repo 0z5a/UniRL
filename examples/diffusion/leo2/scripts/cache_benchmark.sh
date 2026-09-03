@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run paired Leo2 first-block-cache benchmarks on one 8-GPU node.
+# Run paired Leo2 cache benchmarks on one 8-GPU node.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -13,14 +13,25 @@ PYTHON_BIN="${LEO2_RUNTIME_PYTHON:-python}"
 DRY_RUN="${LEO2_CACHE_BENCH_DRY_RUN:-0}"
 PILOT="${LEO2_CACHE_BENCH_PILOT:-0}"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
+FIELD_SEPARATOR=$'\x1f'
+
+case_record() {
+  local IFS="${FIELD_SEPARATOR}"
+  printf '%s' "$*"
+}
+
 if [[ "${PILOT}" == "1" ]]; then
   MODE=pilot
   EXPECTED_VIDEOS=1
-  case_rows=$'pilot_off_shift9,off,9.0\npilot_t000_shift9,0,9.0\npilot_t005_shift9,0.05,9.0'
+  case_rows=(
+    "$(case_record pilot_off_shift9 off '' 9.0 1.0 pilot_off_shift9 '' '' '' '' '' '' '' '' '' '')"
+    "$(case_record pilot_t000_shift9 first_block 0 9.0 1.0 pilot_off_shift9 '' '' '' '' '' '' '' '' '' '')"
+    "$(case_record pilot_t010_shift9 first_block 0.10 9.0 1.0 pilot_off_shift9 '' '' '' '' '' '' '' '' '' '')"
+  )
 else
   MODE=full
-  EXPECTED_VIDEOS=16
-  case_rows=""
+  EXPECTED_VIDEOS=""
+  case_rows=()
 fi
 OUTPUT_ROOT="${LEO2_CACHE_BENCH_OUTPUT:-${REPO_ROOT}/outputs/leo2/cache-${MODE}-${TIMESTAMP}}"
 INFER_STEPS="${LEO2_INFER_STEPS:-50}"
@@ -39,7 +50,9 @@ if [[ "${PILOT}" != "0" && "${PILOT}" != "1" ]]; then
   exit 2
 fi
 if [[ "${PILOT}" == "0" ]]; then
-  case_rows="$(tail -n +2 "${CASES_CSV}")"
+  mapfile -t case_rows < <(
+    "${PYTHON_BIN}" "${SCRIPT_DIR}/cache_benchmark_cases.py" --emit-records "${CASES_CSV}"
+  )
 fi
 if [[ "${DRY_RUN}" != "1" ]]; then
   : "${LEO2_CKPT_DIR:?Set LEO2_CKPT_DIR to the native Torch DCP weights directory}"
@@ -66,9 +79,16 @@ export PYTHONPATH="${REPO_ROOT}"
 export TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1
 mkdir -p "${HF_HOME}"
 
-prompt_count="$(awk -F, 'NR > 1 {count += 1} END {print count + 0}' "${PROMPTS_CSV}")"
-if [[ "${prompt_count}" -ne 16 ]]; then
-  echo "Expected 16 prompt rows, found ${prompt_count}: ${PROMPTS_CSV}" >&2
+prompt_count="$(awk 'NR > 1 {count += 1} END {print count + 0}' "${PROMPTS_CSV}")"
+if [[ "${prompt_count}" -eq 0 ]]; then
+  echo "Prompt CSV is empty: ${PROMPTS_CSV}" >&2
+  exit 2
+fi
+if [[ "${PILOT}" == "0" ]]; then
+  EXPECTED_VIDEOS="${LEO2_CACHE_BENCH_EXPECTED_VIDEOS:-${prompt_count}}"
+fi
+if [[ ! "${EXPECTED_VIDEOS}" =~ ^[1-9][0-9]*$ || "${EXPECTED_VIDEOS}" -gt "${prompt_count}" ]]; then
+  echo "Expected video count must be in 1..${prompt_count}, got: ${EXPECTED_VIDEOS}" >&2
   exit 2
 fi
 
@@ -79,7 +99,9 @@ harness_sha256="$(
   sha256sum \
     examples/diffusion/leo2/CACHE_BENCHMARK.md \
     examples/diffusion/leo2/data/cache_benchmark_16.csv \
+    examples/diffusion/leo2/data/cache_benchmark_pilot_4.csv \
     examples/diffusion/leo2/data/cache_benchmark_cases.csv \
+    examples/diffusion/leo2/scripts/cache_benchmark_cases.py \
     examples/diffusion/leo2/scripts/cache_benchmark.sh \
     examples/diffusion/leo2/scripts/cache_benchmark_entry.py \
     examples/diffusion/leo2/scripts/summarize_cache_benchmark.py \
@@ -97,6 +119,7 @@ fi
 
 {
   echo "created_at=${TIMESTAMP}"
+  echo "benchmark_schema_version=2"
   echo "mode=${MODE}"
   echo "repo_root=${REPO_ROOT}"
   echo "git_head=${git_head}"
@@ -122,20 +145,40 @@ fi
 } >"${OUTPUT_ROOT}/benchmark.env"
 
 case_count=0
-while IFS=, read -r case_name cache_threshold flow_shift_video; do
-  if [[ "${case_name}" == "name" || -z "${case_name}" ]]; then
-    continue
-  fi
+for encoded_case in "${case_rows[@]}"; do
+  IFS="${FIELD_SEPARATOR}" read -r \
+    case_name method cache_threshold flow_shift_video guidance_scale baseline_case reference_root \
+    taylor_max_extrapolation magcache_profile magcache_threshold magcache_max_skip_steps \
+    magcache_retention_ratio dfr_start_step dfr_end_step dfr_interval dfr_layers \
+    <<<"${encoded_case}"
   if [[ ! "${case_name}" =~ ^[a-zA-Z0-9._-]+$ ]]; then
     echo "Invalid case name: ${case_name}" >&2
     exit 2
   fi
-  if [[ ! "${cache_threshold}" =~ ^(off|[0-9]+([.][0-9]+)?)$ ]]; then
-    echo "Invalid cache threshold for ${case_name}: ${cache_threshold}" >&2
+  if [[ ! "${method}" =~ ^(off|first_block|taylor|magcache|magcache_calibrate|fastercache_dfr)$ ]]; then
+    echo "Invalid cache method for ${case_name}: ${method}" >&2
     exit 2
   fi
   if [[ ! "${flow_shift_video}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
     echo "Invalid flow shift for ${case_name}: ${flow_shift_video}" >&2
+    exit 2
+  fi
+  if [[ ! "${guidance_scale}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+    echo "Invalid guidance scale for ${case_name}: ${guidance_scale}" >&2
+    exit 2
+  fi
+  if [[ -n "${reference_root}" ]]; then
+    if [[ ! -d "${reference_root}/${baseline_case}" ]]; then
+      echo "Reference baseline does not exist: ${reference_root}/${baseline_case}" >&2
+      exit 2
+    fi
+    if [[ ! -f "${reference_root}/${baseline_case}/run.log" ]]; then
+      echo "Reference baseline has no run.log: ${reference_root}/${baseline_case}" >&2
+      exit 2
+    fi
+  fi
+  if [[ "${method}" == "magcache" && ! -f "${magcache_profile}" ]]; then
+    echo "MagCache profile does not exist: ${magcache_profile}" >&2
     exit 2
   fi
 
@@ -148,7 +191,7 @@ while IFS=, read -r case_name cache_threshold flow_shift_video; do
   command=(
     "${PYTHON_BIN}" -m torch.distributed.run --nproc_per_node=8
     "${SCRIPT_DIR}/cache_benchmark_entry.py"
-    --leo2-cache-threshold "${cache_threshold}"
+    --leo2-cache-method "${method}"
     --leo2-latent-dir "${latent_dir}"
     --leo2-prompt-csv "${PROMPTS_CSV}"
     --config-path "${MODEL_CONFIG}"
@@ -167,7 +210,7 @@ while IFS=, read -r case_name cache_threshold flow_shift_video; do
     --num-frames 121
     --video-fps 24
     --diff-infer-steps "${INFER_STEPS}"
-    --diff-guidance-scale 1.0
+    --diff-guidance-scale "${guidance_scale}"
     --flow-shift-video "${flow_shift_video}"
     --sample-batch-size 1
     --max-sample-batches "${EXPECTED_VIDEOS}"
@@ -175,7 +218,45 @@ while IFS=, read -r case_name cache_threshold flow_shift_video; do
     --context-parallel-size 8
     --expert-model-parallel-size 1
   )
-  if [[ "${PILOT}" == "1" && "${cache_threshold}" != "off" && "${cache_threshold}" != "0" ]]; then
+  if [[ -n "${baseline_case}" ]]; then
+    command+=(--leo2-baseline-case "${baseline_case}")
+  fi
+  if [[ -n "${reference_root}" ]]; then
+    command+=(--leo2-reference-root "${reference_root}")
+  fi
+  case "${method}" in
+    first_block)
+      command+=(--leo2-cache-threshold "${cache_threshold}")
+      ;;
+    taylor)
+      command+=(
+        --leo2-cache-threshold "${cache_threshold}"
+        --leo2-taylor-max-extrapolation "${taylor_max_extrapolation}"
+      )
+      ;;
+    magcache|magcache_calibrate)
+      command+=(
+        --leo2-magcache-threshold "${magcache_threshold}"
+        --leo2-magcache-max-skip-steps "${magcache_max_skip_steps}"
+        --leo2-magcache-retention-ratio "${magcache_retention_ratio}"
+      )
+      if [[ -n "${magcache_profile}" ]]; then
+        command+=(--leo2-magcache-profile "${magcache_profile}")
+      fi
+      ;;
+    fastercache_dfr)
+      command+=(
+        --leo2-dfr-start-step "${dfr_start_step}"
+        --leo2-dfr-end-step "${dfr_end_step}"
+        --leo2-dfr-interval "${dfr_interval}"
+      )
+      if [[ -n "${dfr_layers}" ]]; then
+        command+=(--leo2-dfr-layers "${dfr_layers}")
+      fi
+      ;;
+  esac
+  if [[ "${PILOT}" == "1" && "${method}" != "off" && "${method}" != "magcache_calibrate" \
+    && "${cache_threshold}" != "0" ]]; then
     command+=(--leo2-require-cache-hit)
   fi
   {
@@ -197,8 +278,21 @@ while IFS=, read -r case_name cache_threshold flow_shift_video; do
   chmod +x "${case_dir}/command.sh"
   {
     echo "case=${case_name}"
-    echo "cache_threshold=${cache_threshold}"
+    echo "method=${method}"
+    echo "cache_threshold=${cache_threshold:-off}"
     echo "flow_shift_video=${flow_shift_video}"
+    echo "guidance_scale=${guidance_scale}"
+    echo "baseline_case=${baseline_case}"
+    echo "reference_root=${reference_root}"
+    echo "taylor_max_extrapolation=${taylor_max_extrapolation}"
+    echo "magcache_profile=${magcache_profile}"
+    echo "magcache_threshold=${magcache_threshold}"
+    echo "magcache_max_skip_steps=${magcache_max_skip_steps}"
+    echo "magcache_retention_ratio=${magcache_retention_ratio}"
+    echo "dfr_start_step=${dfr_start_step}"
+    echo "dfr_end_step=${dfr_end_step}"
+    echo "dfr_interval=${dfr_interval}"
+    echo "dfr_layers=${dfr_layers}"
     echo "expected_videos=${EXPECTED_VIDEOS}"
   } >"${case_dir}/case.env"
 
@@ -210,7 +304,7 @@ while IFS=, read -r case_name cache_threshold flow_shift_video; do
     continue
   fi
 
-  echo "Starting ${case_name}: cache=${cache_threshold}, flow_shift_video=${flow_shift_video}"
+  echo "Starting ${case_name}: method=${method}, flow_shift_video=${flow_shift_video}, guidance=${guidance_scale}"
   started_epoch="$(date +%s)"
   echo "started_epoch=${started_epoch}" >>"${case_dir}/case.env"
   set +e
@@ -233,7 +327,7 @@ while IFS=, read -r case_name cache_threshold flow_shift_video; do
     'import json,sys; raise SystemExit(0 if json.load(open(sys.argv[1]))["complete"] else 1)' \
     "${case_dir}/summary.json" \
     || { echo "Benchmark validation failed: ${case_name}" >&2; exit 1; }
-done <<<"${case_rows}"
+done
 
 if [[ "${case_count}" -eq 0 ]]; then
   echo "No benchmark cases found in ${CASES_CSV}" >&2
