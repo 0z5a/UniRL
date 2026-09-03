@@ -27,6 +27,8 @@ from hy_parallelism.context_parallel.core import (
 )
 
 from .leo_cache import (
+    LeoFasterCacheConfig,
+    LeoFasterCacheController,
     LeoFirstBlockCacheConfig,
     LeoFirstBlockCacheController,
     LeoMagCacheConfig,
@@ -1091,6 +1093,28 @@ class LeoLayer(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         raise NotImplementedError()
 
+    def _run_self_attention(
+            self,
+            hidden_states,
+            *,
+            attention_mask,
+            rotary_position_embeddings,
+            token_indices,
+            cache_controller: Optional[LeoFasterCacheController],
+    ):
+        """Compute or extrapolate the raw self-attention outputs for this layer."""
+        if cache_controller is not None and cache_controller.should_reuse_attention(self.layer_idx):
+            return cache_controller.reuse_attention(self.layer_idx)
+        outputs = self.self_attn(
+            hidden_states,
+            attention_mask=attention_mask,
+            rotary_position_embeddings=rotary_position_embeddings,
+            token_indices=token_indices,
+        )
+        if cache_controller is not None:
+            cache_controller.record_attention(self.layer_idx, outputs)
+        return outputs
+
 
 class LeoDualLayer(LeoLayer):
     def __init__(
@@ -1147,6 +1171,7 @@ class LeoDualLayer(LeoLayer):
             token_lengths: tuple[torch.Tensor, torch.Tensor] = None,
             gen_cond_token_mask: Optional[torch.Tensor] = None,
             zero_timestep_states: Optional[torch.Tensor] = None,
+            cache_controller: Optional[LeoFasterCacheController] = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
 
         gen_lengths_for_mod = token_lengths[0] if token_lengths is not None else None
@@ -1198,12 +1223,21 @@ class LeoDualLayer(LeoLayer):
         txt_hidden_states = modulate(txt_hidden_states, shift=txt_attn_mod_shift, scale=txt_attn_mod_scale)
 
         # Self Attention
-        hidden_states, txt_hidden_states = self.self_attn(
-            (hidden_states, txt_hidden_states),
-            attention_mask=attention_mask,
-            rotary_position_embeddings=rotary_position_embeddings,
-            token_indices=token_indices,
-        )
+        if cache_controller is None:
+            hidden_states, txt_hidden_states = self.self_attn(
+                (hidden_states, txt_hidden_states),
+                attention_mask=attention_mask,
+                rotary_position_embeddings=rotary_position_embeddings,
+                token_indices=token_indices,
+            )
+        else:
+            hidden_states, txt_hidden_states = self._run_self_attention(
+                (hidden_states, txt_hidden_states),
+                attention_mask=attention_mask,
+                rotary_position_embeddings=rotary_position_embeddings,
+                token_indices=token_indices,
+                cache_controller=cache_controller,
+            )
 
         # -- img --
         # Modulate (Gate, No-Op if modulation is not enabled)
@@ -1334,6 +1368,7 @@ class LeoTripleLayer(LeoDualLayer):
             token_lengths: tuple[torch.Tensor, torch.Tensor, torch.Tensor] = None,
             gen_cond_token_mask: Optional[torch.Tensor] = None,
             zero_timestep_states: Optional[torch.Tensor] = None,
+            cache_controller: Optional[LeoFasterCacheController] = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         # Calculate Modulation Coefficients
         attn_mod_shift = attn_mod_scale = attn_mod_gate = None
@@ -1408,12 +1443,21 @@ class LeoTripleLayer(LeoDualLayer):
             audio_hidden_states = modulate(audio_hidden_states, shift=audio_attn_mod_shift, scale=audio_attn_mod_scale)
 
         # Self Attention
-        hidden_states, audio_hidden_states, txt_hidden_states = self.self_attn(
-            (hidden_states, audio_hidden_states, txt_hidden_states),
-            attention_mask=attention_mask,
-            rotary_position_embeddings=rotary_position_embeddings,
-            token_indices=token_indices,
-        )
+        if cache_controller is None:
+            hidden_states, audio_hidden_states, txt_hidden_states = self.self_attn(
+                (hidden_states, audio_hidden_states, txt_hidden_states),
+                attention_mask=attention_mask,
+                rotary_position_embeddings=rotary_position_embeddings,
+                token_indices=token_indices,
+            )
+        else:
+            hidden_states, audio_hidden_states, txt_hidden_states = self._run_self_attention(
+                (hidden_states, audio_hidden_states, txt_hidden_states),
+                attention_mask=attention_mask,
+                rotary_position_embeddings=rotary_position_embeddings,
+                token_indices=token_indices,
+                cache_controller=cache_controller,
+            )
 
         # -- img/video --
         if self.training or hidden_states.size(1) > 0:
@@ -1702,6 +1746,8 @@ class LeoModelBase(HunyuanMultimodalState):
             config = LeoFirstBlockCacheConfig()
         if isinstance(config, LeoMagCacheConfig):
             controller = LeoMagCacheController(config)
+        elif isinstance(config, LeoFasterCacheConfig):
+            controller = LeoFasterCacheController(config, num_layers=len(self.layers))
         else:
             controller = LeoFirstBlockCacheController(config)
         self._cache_config = config
@@ -2480,8 +2526,16 @@ class LeoModelBase(HunyuanMultimodalState):
         middle_layer_hidden_states = None
         # === Transformer blocks ===
         cache_controller = self._leo_cache_controller
-        cache_active = (
-            cache_controller is not None
+        fastercache_controller = (
+            cache_controller if isinstance(cache_controller, LeoFasterCacheController) else None
+        )
+        fastercache_active = (
+            fastercache_controller is not None
+            and fastercache_controller.active
+            and not self.training
+        )
+        tail_cache_active = (
+            isinstance(cache_controller, LeoFirstBlockCacheController)
             and cache_controller.active
             and not self.training
             and len(self.layers) > 1
@@ -2492,7 +2546,7 @@ class LeoModelBase(HunyuanMultimodalState):
             block_head_inputs = (hidden_states, txt_hidden_states)
         block_head_outputs = None
         cache_hit = False
-        magcache_active = cache_active and isinstance(cache_controller, LeoMagCacheController)
+        magcache_active = tail_cache_active and isinstance(cache_controller, LeoMagCacheController)
         if magcache_active and cache_controller.should_reuse(
             block_head_inputs,
             leader_block=self.layers[0],
@@ -2504,6 +2558,13 @@ class LeoModelBase(HunyuanMultimodalState):
             else:
                 hidden_states, txt_hidden_states = cached_outputs
             cache_hit = True
+        if fastercache_active:
+            leader_idx = fastercache_controller.selected_layers[0]
+            fastercache_controller.begin_step(
+                block_head_inputs,
+                leader_block=self.layers[leader_idx],
+                audio_present=audio_latents is not None,
+            )
         for layer_idx, layer in enumerate(self.layers):
             if cache_hit:
                 break
@@ -2516,11 +2577,19 @@ class LeoModelBase(HunyuanMultimodalState):
                     (gen_token_indices, audio_token_indices, und_token_indices),
                     (gen_token_lengths, audio_token_lengths, und_token_lengths),
                 ]
-                hidden_states, audio_hidden_states, txt_hidden_states = layer(
-                    *layer_inputs,
-                    gen_cond_token_mask=gen_cond_token_mask,
-                    zero_timestep_states=zero_timestep_states,
-                )
+                if fastercache_active:
+                    hidden_states, audio_hidden_states, txt_hidden_states = layer(
+                        *layer_inputs,
+                        gen_cond_token_mask=gen_cond_token_mask,
+                        zero_timestep_states=zero_timestep_states,
+                        cache_controller=fastercache_controller,
+                    )
+                else:
+                    hidden_states, audio_hidden_states, txt_hidden_states = layer(
+                        *layer_inputs,
+                        gen_cond_token_mask=gen_cond_token_mask,
+                        zero_timestep_states=zero_timestep_states,
+                    )
             else:
                 layer_inputs = [
                     (hidden_states, txt_hidden_states),
@@ -2530,13 +2599,21 @@ class LeoModelBase(HunyuanMultimodalState):
                     (gen_token_indices, und_token_indices),
                     (gen_token_lengths, und_token_lengths),
                 ]
-                hidden_states, txt_hidden_states = layer(
-                    *layer_inputs,
-                    gen_cond_token_mask=gen_cond_token_mask,
-                    zero_timestep_states=zero_timestep_states,
-                )
+                if fastercache_active:
+                    hidden_states, txt_hidden_states = layer(
+                        *layer_inputs,
+                        gen_cond_token_mask=gen_cond_token_mask,
+                        zero_timestep_states=zero_timestep_states,
+                        cache_controller=fastercache_controller,
+                    )
+                else:
+                    hidden_states, txt_hidden_states = layer(
+                        *layer_inputs,
+                        gen_cond_token_mask=gen_cond_token_mask,
+                        zero_timestep_states=zero_timestep_states,
+                    )
 
-            if cache_active and not magcache_active and layer_idx == 0:
+            if tail_cache_active and not magcache_active and layer_idx == 0:
                 if self._audio_config is not None:
                     block_head_outputs = (hidden_states, audio_hidden_states, txt_hidden_states)
                 else:
@@ -2565,7 +2642,7 @@ class LeoModelBase(HunyuanMultimodalState):
                 if get_parallel_state().cp_size > 1:
                     hidden_states = scatter_seq_and_register_cp_info(hidden_states, LEO_MEDIA_CP_INFO)
 
-        if cache_active and not cache_hit:
+        if tail_cache_active and not cache_hit:
             if self._audio_config is not None:
                 block_outputs = (hidden_states, audio_hidden_states, txt_hidden_states)
             else:

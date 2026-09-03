@@ -56,7 +56,8 @@ Local integration:
     ASSETS_BASE through the documented LEO2_ASSETS_BASE contract.
   - encrypted-dataset helpers never print any portion of FILE_PASSWORD.
   - hymm/models/diffusion/leo_cache.py plus the Leo model/pipeline integration
-    carry UniRL's request-scoped Diffusers-style first-block inference cache.
+    carry UniRL's request-scoped first-block, Taylor, calibrated MagCache and
+    FasterCache-style DFR inference caches.
 
 To re-vendor: export the three commits above, replace this tree without .git
 metadata, apply the documented runtime-only pruning and local integrations,

@@ -99,6 +99,44 @@ class LeoMagCacheConfig:
         object.__setattr__(self, "expected_timesteps", tuple(float(value) for value in expected_timesteps))
 
 
+@dataclass(frozen=True)
+class LeoFasterCacheConfig:
+    """Configure Leo attention-output dynamic feature reuse."""
+
+    start_step: int = 4
+    end_step: int = 46
+    interval: int = 2
+    layers: tuple[int, ...] | list[int] | None = None
+    weight_schedule = "linear_window"
+
+    def __post_init__(self) -> None:
+        """Validate the denoising window and normalize selected layer indices."""
+        for name in ("start_step", "end_step", "interval"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise TypeError(f"Leo FasterCache `{name}` must be an integer.")
+        if self.start_step < 0:
+            raise ValueError("Leo FasterCache start_step must be non-negative.")
+        if self.end_step <= self.start_step:
+            raise ValueError("Leo FasterCache end_step must be greater than start_step.")
+        if self.interval < 1:
+            raise ValueError("Leo FasterCache interval must be positive.")
+        if self.layers is None:
+            return
+        if not isinstance(self.layers, (list, tuple)):
+            raise TypeError("Leo FasterCache layers must be a list or tuple of layer indices.")
+        layers = tuple(self.layers)
+        if not layers:
+            raise ValueError("Leo FasterCache layers must not be empty.")
+        if any(isinstance(layer, bool) or not isinstance(layer, int) for layer in layers):
+            raise TypeError("Leo FasterCache layer indices must be integers.")
+        if any(layer < 0 for layer in layers):
+            raise ValueError("Leo FasterCache layer indices must be non-negative.")
+        if len(set(layers)) != len(layers):
+            raise ValueError("Leo FasterCache layer indices must be unique.")
+        object.__setattr__(self, "layers", layers)
+
+
 class LeoFirstBlockCacheController:
     """Track request-local Leo block residuals without registering model state."""
 
@@ -829,3 +867,230 @@ class LeoMagCacheController(LeoFirstBlockCacheController):
         if not math.isfinite(ratio_value) or ratio_value <= 0:
             raise RuntimeError(f"MagCache calibration produced an invalid ratio: {ratio_value}.")
         return ratio_value
+
+
+class LeoFasterCacheController:
+    """Track request-local exact attention outputs for FasterCache-style DFR."""
+
+    def __init__(self, config: LeoFasterCacheConfig, *, num_layers: int):
+        if not isinstance(config, LeoFasterCacheConfig):
+            raise TypeError("Leo FasterCache controller requires LeoFasterCacheConfig.")
+        if isinstance(num_layers, bool) or not isinstance(num_layers, int) or num_layers < 1:
+            raise ValueError("Leo FasterCache requires a positive model layer count.")
+        selected_layers = tuple(range(num_layers)) if config.layers is None else config.layers
+        if any(layer >= num_layers for layer in selected_layers):
+            raise ValueError(
+                f"Leo FasterCache layer indices must be smaller than the model's {num_layers} layers."
+            )
+
+        self.config = config
+        self.method = "fastercache_dfr"
+        self.start_step = config.start_step
+        self.end_step = config.end_step
+        self.interval = config.interval
+        self.selected_layers = tuple(selected_layers)
+        self.weight_schedule = config.weight_schedule
+        self._selected_layer_set = frozenset(self.selected_layers)
+        self._context_depth = 0
+        self._cache_bytes_peak = 0
+        self.attention_compute_calls = 0
+        self.attention_reuse_calls = 0
+        self.full_steps = 0
+        self.skipped_steps = 0
+        self.reset()
+
+    @property
+    def active(self) -> bool:
+        """Return whether an inference context currently owns the cache."""
+        return self._context_depth > 0 and not torch.is_grad_enabled()
+
+    @contextmanager
+    def context(self, name: str = "default") -> Iterator[None]:
+        """Scope attention history to one complete denoising trajectory."""
+        _ = name
+        if self._context_depth == 0:
+            self.reset()
+            self._cache_bytes_peak = 0
+            self.attention_compute_calls = 0
+            self.attention_reuse_calls = 0
+            self.full_steps = 0
+            self.skipped_steps = 0
+        self._context_depth += 1
+        try:
+            yield
+        finally:
+            self._context_depth -= 1
+            if self._context_depth == 0:
+                self.reset()
+
+    def reset(self) -> None:
+        """Drop request-local attention outputs while retaining the latest counters."""
+        self._step_index = 0
+        self._reuse_step = False
+        self._cacheable_step = False
+        self._weight = 0.0
+        self._expected_signature = None
+        self._histories: dict[int, list[TensorStreams]] = {}
+        self._history_input_signatures: dict[int, tuple] = {}
+
+    @torch.compiler.disable
+    def begin_step(
+        self,
+        streams: TensorStreams,
+        *,
+        leader_block: object = None,
+        audio_present: bool = False,
+    ) -> bool:
+        """Make one synchronized exact-or-reuse decision for the current denoising step."""
+        self._reuse_step = False
+        self._cacheable_step = False
+        if not self.active:
+            return False
+        if audio_present:
+            raise RuntimeError("Leo FasterCache DFR currently supports video-only inference; audio is unsupported.")
+
+        step = self._step_index
+        self._step_index += 1
+        self._expected_signature = LeoFirstBlockCacheController._stream_signature(streams)
+        reference = next((stream for stream in streams if stream is not None), None)
+        if reference is None:
+            self.full_steps += 1
+            self._drop_histories()
+            return False
+
+        sync_plan = LeoFirstBlockCacheController._synchronization_plan(leader_block)
+        if sync_plan is None:
+            self.full_steps += 1
+            self._drop_histories()
+            return False
+        groups = [*sync_plan[0], *sync_plan[1]]
+
+        candidate = (
+            self.start_step <= step < self.end_step
+            and (step - self.start_step) % self.interval != 0
+        )
+        decision_low = torch.tensor((step, int(candidate)), device=reference.device, dtype=torch.int64)
+        decision_high = decision_low.clone()
+        LeoFirstBlockCacheController._all_reduce(decision_low, groups, dist.ReduceOp.MIN)
+        LeoFirstBlockCacheController._all_reduce(decision_high, groups, dist.ReduceOp.MAX)
+        step_is_uniform = bool(decision_low[0].item() == decision_high[0].item())
+        candidate_is_uniform = bool(decision_low[1].item() == decision_high[1].item())
+        step = int(decision_low[0].item())
+        candidate = step_is_uniform and candidate_is_uniform and bool(decision_low[1].item())
+
+        if step >= self.end_step or not step_is_uniform:
+            self._drop_histories()
+        self._cacheable_step = step < self.end_step and step_is_uniform
+        if not candidate:
+            self.full_steps += 1
+            return False
+
+        locally_valid = all(self._history_is_valid(layer) for layer in self.selected_layers)
+        valid = torch.tensor(int(locally_valid), device=reference.device, dtype=torch.int32)
+        LeoFirstBlockCacheController._all_reduce(valid, groups, dist.ReduceOp.MIN)
+        self._reuse_step = bool(valid.item())
+        if self._reuse_step:
+            self._weight = (step - self.start_step) / max(self.end_step - self.start_step, 1)
+            self.skipped_steps += 1
+        else:
+            self.full_steps += 1
+        return self._reuse_step
+
+    def manages_layer(self, layer_idx: int) -> bool:
+        """Return whether a layer participates in attention-output reuse."""
+        return layer_idx in self._selected_layer_set
+
+    def should_reuse_attention(self, layer_idx: int) -> bool:
+        """Return the already synchronized decision for a selected layer."""
+        return self._reuse_step and self.manages_layer(layer_idx)
+
+    @torch.compiler.disable
+    def reuse_attention(self, layer_idx: int) -> TensorStreams:
+        """Extrapolate one layer's attention output from its two exact snapshots."""
+        if not self.should_reuse_attention(layer_idx):
+            raise RuntimeError(f"Leo FasterCache layer {layer_idx} has no active reuse decision.")
+        history = self._histories.get(layer_idx)
+        if history is None or len(history) != 2:
+            raise RuntimeError(f"Leo FasterCache layer {layer_idx} has no valid exact history.")
+        previous, latest = history
+        LeoFirstBlockCacheController._validate_streams(latest, previous, "extrapolate")
+        self.attention_reuse_calls += 1
+        return tuple(
+            None if current is None else current + (current - prior) * self._weight
+            for current, prior in zip(latest, previous)
+        )
+
+    @torch.compiler.disable
+    def record_attention(self, layer_idx: int, outputs: TensorStreams) -> None:
+        """Record an exact selected-layer output without retaining an autograd graph."""
+        if not self.manages_layer(layer_idx):
+            return
+        self.attention_compute_calls += 1
+        if not self._cacheable_step or self._reuse_step:
+            return
+        snapshot = LeoFirstBlockCacheController._detach_streams(outputs)
+        if not self._output_matches_input_layout(snapshot):
+            self._histories.pop(layer_idx, None)
+            self._history_input_signatures.pop(layer_idx, None)
+            return
+        signature = LeoFirstBlockCacheController._stream_signature(snapshot)
+        history = self._histories.setdefault(layer_idx, [])
+        if self._history_input_signatures.get(layer_idx) != self._expected_signature or (
+            history and LeoFirstBlockCacheController._stream_signature(history[-1]) != signature
+        ):
+            history.clear()
+        self._history_input_signatures[layer_idx] = self._expected_signature
+        history.append(snapshot)
+        del history[:-2]
+        cache_bytes = sum(
+            stream.numel() * stream.element_size()
+            for snapshots in self._histories.values()
+            for streams in snapshots
+            for stream in streams
+            if stream is not None
+        )
+        self._cache_bytes_peak = max(self._cache_bytes_peak, cache_bytes)
+
+    def stats(self) -> dict[str, object]:
+        """Return DFR configuration and counters from the latest cache context."""
+        return {
+            "method": self.method,
+            "start_step": self.start_step,
+            "end_step": self.end_step,
+            "interval": self.interval,
+            "selected_layers": list(self.selected_layers),
+            "weight_schedule": self.weight_schedule,
+            "full_steps": self.full_steps,
+            "skipped_steps": self.skipped_steps,
+            "attention_compute_calls": self.attention_compute_calls,
+            "attention_reuse_calls": self.attention_reuse_calls,
+            "cache_bytes": self._cache_bytes_peak,
+        }
+
+    def _history_is_valid(self, layer_idx: int) -> bool:
+        """Return whether both exact snapshots match the current stream layout."""
+        history = self._histories.get(layer_idx)
+        return (
+            history is not None
+            and len(history) == 2
+            and self._history_input_signatures.get(layer_idx) == self._expected_signature
+            and self._output_matches_input_layout(history[0])
+            and LeoFirstBlockCacheController._stream_signature(history[0])
+            == LeoFirstBlockCacheController._stream_signature(history[1])
+        )
+
+    def _output_matches_input_layout(self, outputs: TensorStreams) -> bool:
+        """Return whether attention outputs match current branch shapes and devices."""
+        if self._expected_signature is None or len(outputs) != len(self._expected_signature):
+            return False
+        for output, expected in zip(outputs, self._expected_signature):
+            if (output is None) != (expected is None):
+                return False
+            if output is not None and (tuple(output.shape), output.dtype, output.device) != expected:
+                return False
+        return True
+
+    def _drop_histories(self) -> None:
+        """Release all cached tensors and their input signatures."""
+        self._histories.clear()
+        self._history_input_signatures.clear()

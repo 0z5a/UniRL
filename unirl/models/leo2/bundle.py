@@ -263,16 +263,26 @@ def _patch_router_dtype(model: nn.Module) -> None:
 
 
 def _make_inference_cache_config(config: Leo2PipelineConfig) -> Any | None:
-    """Validate Leo2 inference-cache options and build the Diffusers config."""
+    """Validate Leo2 inference-cache options and build its controller config."""
     if not isinstance(config.inference_cache_method, str):
         raise TypeError("Leo2 inference_cache_method must be a string.")
     method = config.inference_cache_method.strip().lower()
     if method == "none":
         return None
-    if method not in {"first_block", "taylor", "magcache"}:
+    if method not in {"first_block", "taylor", "magcache", "fastercache_dfr"}:
         raise ValueError(
-            "Leo2 inference_cache_method must be 'none', 'first_block', 'taylor', or 'magcache', "
+            "Leo2 inference_cache_method must be 'none', 'first_block', 'taylor', or "
+            "'magcache', or 'fastercache_dfr', "
             f"got {config.inference_cache_method!r}."
+        )
+    if method == "fastercache_dfr":
+        from hymm.models.diffusion.leo_cache import LeoFasterCacheConfig
+
+        return LeoFasterCacheConfig(
+            start_step=config.inference_cache_fastercache_start_step,
+            end_step=config.inference_cache_fastercache_end_step,
+            interval=config.inference_cache_fastercache_interval,
+            layers=config.inference_cache_fastercache_layers,
         )
     if not isinstance(config.inference_cache_threshold, (int, float)):
         raise TypeError("Leo2 inference_cache_threshold must be numeric.")

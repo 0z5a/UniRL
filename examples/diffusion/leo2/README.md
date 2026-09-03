@@ -51,7 +51,7 @@ The default is 50 denoising steps. Set `LEO2_INFER_STEPS=1` for a quick load,
 forward and decode smoke; output goes to `outputs/leo2/native_t2v` unless
 `LEO2_OUTPUT_DIR` is set.
 
-## Native inference first-block cache
+## Native inference caches
 
 Leo2's vendored hymm pipeline supports the same user-facing lifecycle as
 Diffusers `FirstBlockCacheConfig`: disabled by default, enabled on the model,
@@ -81,10 +81,38 @@ bundle.model.enable_cache(FirstBlockCacheConfig(threshold=0.05))
 The cache always runs Leo block 0 and compares its residual with the last full
 step. When the normalized change is below the threshold, it reuses the residual
 of blocks 1..N. Higher thresholds usually skip more work but can reduce quality.
+
+For pure-video, guidance-1 inference, `fastercache_dfr` instead caches each
+selected layer's raw self-attention outputs after FA3/CP and `o_proj`, before
+the layer's gate and residual. It keeps two exact outputs and linearly
+extrapolates non-anchor steps inside a half-open denoising-step window:
+
+```python
+config = Leo2PipelineConfig(
+    inference_cache_method="fastercache_dfr",
+    inference_cache_fastercache_start_step=4,
+    inference_cache_fastercache_end_step=46,
+    inference_cache_fastercache_interval=2,
+    inference_cache_fastercache_layers=None,  # all Leo layers
+)
+```
+
+The fixed `linear_window` schedule uses
+`w=(step-start_step)/(end_step-start_step)` in
+`latest + (latest - previous) * w`. Window-external and interval-anchor steps
+run exact attention, skipped steps do not advance exact history, and all
+selected layers share one decision per denoising step. `cache_stats()` reports
+`attention_compute_calls`, `attention_reuse_calls`, `selected_layers`, and the
+peak request-local `cache_bytes`. Audio is explicitly unsupported. First-block,
+Taylor, FasterCache DFR, and any additional installed controller are mutually
+exclusive through the model's single `enable_cache()` slot.
+
 Only hymm's native `generate_image` / `generate_video` path opens a cache
 context; UniRL rollout and gradient replay remain exact. CP statistics are
 combined before the decision, and the maximum score is synchronized over the
 block's actual FSDP shard group for the supported EP=ETP=TP=PP=1 topology.
+DFR synchronizes its step, history validity, and final exact/reuse decision over
+the same CP and actual FSDP groups.
 Other parallel topologies, uninitialized distributed parallel state, or an
 unresolvable shard group conservatively fall back to a full forward. The
 decision remains eager code; whole-model `torch.compile(fullgraph=True)` is not

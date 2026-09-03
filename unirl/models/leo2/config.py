@@ -93,6 +93,10 @@ class Leo2PipelineConfig:
     inference_cache_magcache_ratios: List[float] = field(default_factory=list)
     inference_cache_magcache_expected_timesteps: List[float] = field(default_factory=list)
     inference_cache_magcache_calibrate: bool = False
+    inference_cache_fastercache_start_step: int = 4
+    inference_cache_fastercache_end_step: int = 46
+    inference_cache_fastercache_interval: int = 2
+    inference_cache_fastercache_layers: Optional[List[int]] = None
 
     # --- placement ---
     # Qwen3.5-9B (18 GB bf16) parked on CPU; moved to GPU transiently for the

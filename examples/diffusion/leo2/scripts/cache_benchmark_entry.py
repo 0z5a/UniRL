@@ -520,6 +520,10 @@ def _validate_cache_stats(stats: dict[str, int], *, method: str, expected_steps:
     elif method == "fastercache_dfr":
         if stats["tail_compute_steps"] or stats["tail_reuse_steps"]:
             raise RuntimeError("FasterCache DFR unexpectedly reported whole-tail cache steps.")
+        if stats["full_steps"] + stats["skipped_steps"] != expected_steps:
+            raise RuntimeError("FasterCache DFR did not account for every denoising step.")
+        if stats["attention_compute_calls"] + stats["attention_reuse_calls"] == 0:
+            raise RuntimeError("FasterCache DFR did not report any managed attention calls.")
 
 
 def _save_latent(
