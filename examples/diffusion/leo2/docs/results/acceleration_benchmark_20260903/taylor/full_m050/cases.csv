@@ -1,0 +1,2 @@
+name,method,cache_threshold,flow_shift_video,guidance_scale,baseline_case,reference_root,taylor_max_extrapolation,magcache_profile,magcache_threshold,magcache_max_skip_steps,magcache_retention_ratio,dfr_start_step,dfr_end_step,dfr_interval,dfr_layers
+taylor_t010_m050_shift9,taylor,0.10,9.0,1.0,cache_off_shift9,/root/leo2-output/cache-full-final-848x464x121-20260903-1039,0.5,,,,,,,,

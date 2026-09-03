@@ -1,0 +1,2 @@
+case,baseline_case,baseline_root,cache_method,cache_threshold,flow_shift_video,guidance_scale,pair_count,mae_mean,rmse_mean,relative_l1_mean,relative_l2_mean,max_abs_mean,mae_max,rmse_max,relative_l1_max,relative_l2_max,max_abs_max
+taylor_t010_m025_shift9,cache_off_shift9,/root/leo2-output/cache-full-final-848x464x121-20260903-1039,taylor,0.1,9.0,1.0,4,0.0481826466733614,0.0843028805984308,0.13176272503072062,0.19793388905089,0.9833333333333334,0.07096273570562577,0.12505337344213002,0.1754787177486677,0.2669841175733734,1.0

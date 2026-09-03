@@ -1,0 +1,44 @@
+{
+  "cases": [
+    {
+      "baseline_case": "cache_off_shift9",
+      "baseline_root": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039",
+      "cache_method": "taylor",
+      "cache_threshold": 0.1,
+      "case": "taylor_t010_m025_shift9",
+      "flow_shift_video": 9.0,
+      "guidance_scale": 1.0,
+      "mae_max": 0.07096273570562577,
+      "mae_mean": 0.0481826466733614,
+      "max_abs_max": 1.0,
+      "max_abs_mean": 0.9833333333333334,
+      "pair_count": 4,
+      "relative_l1_max": 0.1754787177486677,
+      "relative_l1_mean": 0.13176272503072062,
+      "relative_l2_max": 0.2669841175733734,
+      "relative_l2_mean": 0.19793388905089,
+      "rmse_max": 0.12505337344213002,
+      "rmse_mean": 0.0843028805984308
+    }
+  ],
+  "decoded_pixel_domain": "RGB24 normalized to [0, 1]",
+  "expected_video": {
+    "fps": 24.0,
+    "frames": 121,
+    "height": 464,
+    "width": 848
+  },
+  "inputs": {
+    "benchmark_root": "/root/leo2-output/accel-taylor-pilot-m025-shift9-20260903-2306",
+    "cases_csv": "/root/leo2-taylor-pilot-m025-cases-20260903.csv",
+    "cases_sha256": "81a24be2234c5d38f7818f66195b352446e3f59febe95b8bd8fa5ffc5438ef55",
+    "prompts_csv": "/root/Unirl-leo2/examples/diffusion/leo2/data/cache_benchmark_pilot_4.csv",
+    "prompts_sha256": "e8bafabaf7ebb2532dca25957894ea19fd2b8c521ebc86794456d18267c94969",
+    "summary_json": "/root/leo2-output/accel-taylor-pilot-m025-shift9-20260903-2306/summary.json"
+  },
+  "kind": "cases",
+  "reference": "explicit baseline_case/reference_root with identical settings, prompt_hash and seed",
+  "relative_l1": "L1(candidate-reference) / max(L1(reference), float64_epsilon)",
+  "relative_l2": "L2(candidate-reference) / max(L2(reference), float64_epsilon)",
+  "schema_version": 2
+}
