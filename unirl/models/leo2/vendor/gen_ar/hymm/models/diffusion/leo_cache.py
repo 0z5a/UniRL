@@ -14,6 +14,21 @@ TensorStreams = tuple[torch.Tensor | None, ...]
 SyncPlan = tuple[list[dist.ProcessGroup], list[dist.ProcessGroup]]
 
 
+def _unique_tensor_bytes(*stream_groups: TensorStreams | None) -> int:
+    """Count request-local cache tensors once per Python object."""
+    seen: set[int] = set()
+    total = 0
+    for streams in stream_groups:
+        if streams is None:
+            continue
+        for tensor in streams:
+            if tensor is None or id(tensor) in seen:
+                continue
+            seen.add(id(tensor))
+            total += tensor.numel() * tensor.element_size()
+    return total
+
+
 @dataclass(frozen=True)
 class LeoFirstBlockCacheConfig:
     """Configure Leo first-block residual caching."""
@@ -117,6 +132,7 @@ class LeoFirstBlockCacheController:
         self.prediction_warmup_steps = 0
         self.alpha_sum = 0.0
         self.alpha_max = 0.0
+        self._peak_cache_bytes = 0
 
     @property
     def active(self) -> bool:
@@ -135,6 +151,7 @@ class LeoFirstBlockCacheController:
             self.prediction_warmup_steps = 0
             self.alpha_sum = 0.0
             self.alpha_max = 0.0
+            self._peak_cache_bytes = 0
         self._context_depth += 1
         try:
             yield
@@ -200,6 +217,7 @@ class LeoFirstBlockCacheController:
             self._tail_residuals = None
             self._previous_tail_timestep = None
             self._tail_timestep = None
+            self._record_cache_bytes()
             return False
 
         if self.method == "taylor":
@@ -219,6 +237,7 @@ class LeoFirstBlockCacheController:
                 self._previous_head_residuals = self._detach_streams(current_residuals)
                 self._pending_timestep = current_timestep
                 self.prediction_warmup_steps += 1
+                self._record_cache_bytes()
                 return False
             self._pending_timestep = current_timestep
 
@@ -236,6 +255,7 @@ class LeoFirstBlockCacheController:
                 )
                 if not math.isfinite(alpha) or alpha < 0:
                     self._previous_head_residuals = self._detach_streams(current_residuals)
+                    self._record_cache_bytes()
                     return False
                 self._pending_alpha = min(alpha, self.max_extrapolation)
                 self.predicted_steps += 1
@@ -244,6 +264,7 @@ class LeoFirstBlockCacheController:
             self.skipped_steps += 1
             return True
         self._previous_head_residuals = self._detach_streams(current_residuals)
+        self._record_cache_bytes()
         return False
 
     def apply_tail(self, head_outputs: TensorStreams) -> TensorStreams:
@@ -292,6 +313,7 @@ class LeoFirstBlockCacheController:
             self._previous_tail_timestep = self._tail_timestep
             self._tail_timestep = current_timestep
         self._tail_residuals = next_tail
+        self._record_cache_bytes()
 
     def stats(self) -> dict[str, object]:
         """Return counters for the most recently entered cache context."""
@@ -305,7 +327,17 @@ class LeoFirstBlockCacheController:
             "taylor_max_extrapolation": self.max_extrapolation,
             "taylor_alpha_mean": self.alpha_sum / max(self.predicted_steps, 1),
             "taylor_alpha_max": self.alpha_max,
+            "cache_bytes": self._peak_cache_bytes,
         }
+
+    def _record_cache_bytes(self) -> None:
+        """Track the peak logical bytes held by persistent cache tensors."""
+        current = _unique_tensor_bytes(
+            self._previous_head_residuals,
+            self._previous_tail_residuals,
+            self._tail_residuals,
+        )
+        self._peak_cache_bytes = max(self._peak_cache_bytes, current)
 
     @classmethod
     def _uniform_timestep(
@@ -532,6 +564,7 @@ class LeoMagCacheController(LeoFirstBlockCacheController):
         self.skipped_steps = 0
         self.observed_ratios: list[float] = []
         self.observed_timesteps: list[float] = []
+        self._peak_cache_bytes = 0
 
     @contextmanager
     def context(self, name: str = "default") -> Iterator[None]:
@@ -545,6 +578,7 @@ class LeoMagCacheController(LeoFirstBlockCacheController):
             self.observed_ratios = []
             self.observed_timesteps = []
             self._distributed_config_validated = False
+            self._peak_cache_bytes = 0
         self._context_depth += 1
         completed = False
         try:
@@ -682,6 +716,7 @@ class LeoMagCacheController(LeoFirstBlockCacheController):
             self.observed_timesteps.append(self._pending_timestep)
             self._previous_full_residuals = next_residuals
         self._full_residuals = next_residuals
+        self._record_cache_bytes()
         self._pending_timestep = None
         self._pending_sync_plan = None
 
@@ -699,7 +734,13 @@ class LeoMagCacheController(LeoFirstBlockCacheController):
             "magcache_retention_ratio": self.retention_ratio,
             "magcache_ratios": list(ratios),
             "magcache_expected_timesteps": list(timesteps),
+            "cache_bytes": self._peak_cache_bytes,
         }
+
+    def _record_cache_bytes(self) -> None:
+        """Track the peak logical bytes held by persistent cache tensors."""
+        current = _unique_tensor_bytes(self._full_residuals, self._previous_full_residuals)
+        self._peak_cache_bytes = max(self._peak_cache_bytes, current)
 
     def _reset_window(self) -> None:
         """Reset accumulated approximation error after an exact step."""
