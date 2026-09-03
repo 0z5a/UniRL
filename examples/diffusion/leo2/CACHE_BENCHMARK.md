@@ -126,7 +126,8 @@ case results under the new root.
 
 ## MagCache calibration profile
 
-Run `magcache_calibrate` without a replay profile, then build the portable JSON
+Run `magcache_calibrate` without a replay profile using the four disjoint
+prompts in `data/magcache_calibration_4.csv`, then build the portable JSON
 consumed by a `magcache` case:
 
 ```bash
