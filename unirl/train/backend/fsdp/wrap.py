@@ -244,7 +244,7 @@ def _create_device_mesh(fsdp_mode: str) -> Optional[object]:
     # HSDP geometry is a recipe knob instead of a code constant.
     shard_override: Optional[int] = None
     if mode.startswith("hybrid") and mode != "hybrid":
-        suffix = mode[len("hybrid"):]
+        suffix = mode[len("hybrid") :]
         require(
             suffix.isdigit() and int(suffix) > 1,
             f"training.fsdp.fsdp_mode={fsdp_mode!r}: hybrid<N> requires an integer shard degree > 1.",
