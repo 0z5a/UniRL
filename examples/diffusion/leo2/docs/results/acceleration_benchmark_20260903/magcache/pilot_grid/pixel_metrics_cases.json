@@ -1,0 +1,64 @@
+{
+  "cases": [
+    {
+      "baseline_case": "cache_off_shift9",
+      "baseline_root": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039",
+      "cache_method": "magcache",
+      "cache_threshold": null,
+      "case": "magcache_t006_k2_r020_shift9",
+      "flow_shift_video": 9.0,
+      "guidance_scale": 1.0,
+      "mae_max": 0.0420517456514582,
+      "mae_mean": 0.03447706259203735,
+      "max_abs_max": 1.0,
+      "max_abs_mean": 0.9843137254901961,
+      "pair_count": 4,
+      "relative_l1_max": 0.1596148833331664,
+      "relative_l1_mean": 0.09950214893702879,
+      "relative_l2_max": 0.2477552871502378,
+      "relative_l2_mean": 0.15518971644633095,
+      "rmse_max": 0.08065280582038238,
+      "rmse_mean": 0.06325273658975072
+    },
+    {
+      "baseline_case": "cache_off_shift9",
+      "baseline_root": "/root/leo2-output/cache-full-final-848x464x121-20260903-1039",
+      "cache_method": "magcache",
+      "cache_threshold": null,
+      "case": "magcache_t012_k4_r020_shift9",
+      "flow_shift_video": 9.0,
+      "guidance_scale": 1.0,
+      "mae_max": 0.05451672123605945,
+      "mae_mean": 0.04591633046934462,
+      "max_abs_max": 1.0,
+      "max_abs_mean": 0.9745098039215686,
+      "pair_count": 4,
+      "relative_l1_max": 0.200193035023673,
+      "relative_l1_mean": 0.13140710525288293,
+      "relative_l2_max": 0.308067947323757,
+      "relative_l2_mean": 0.19690702740910906,
+      "rmse_max": 0.0956921329250973,
+      "rmse_mean": 0.08020746327047605
+    }
+  ],
+  "decoded_pixel_domain": "RGB24 normalized to [0, 1]",
+  "expected_video": {
+    "fps": 24.0,
+    "frames": 121,
+    "height": 464,
+    "width": 848
+  },
+  "inputs": {
+    "benchmark_root": "/root/leo2-output/accel-magcache-pilot-shift9-20260904-0018",
+    "cases_csv": "/root/leo2-magcache-pilot-cases-20260904.csv",
+    "cases_sha256": "9b33f047419f0dee921571fc6332e675a66dc0ee82e499d7480c276405283993",
+    "prompts_csv": "/root/Unirl-leo2/examples/diffusion/leo2/data/cache_benchmark_pilot_4.csv",
+    "prompts_sha256": "e8bafabaf7ebb2532dca25957894ea19fd2b8c521ebc86794456d18267c94969",
+    "summary_json": "/root/leo2-output/accel-magcache-pilot-shift9-20260904-0018/summary.json"
+  },
+  "kind": "cases",
+  "reference": "explicit baseline_case/reference_root with identical settings, prompt_hash and seed",
+  "relative_l1": "L1(candidate-reference) / max(L1(reference), float64_epsilon)",
+  "relative_l2": "L2(candidate-reference) / max(L2(reference), float64_epsilon)",
+  "schema_version": 2
+}

@@ -51,6 +51,47 @@ paired-speed confidence intervals overlap. VBench and VideoScore2 are run only
 for full-16 survivors and will be added to the consolidated report after the
 MagCache and FasterCache DFR funnels finish.
 
+## MagCache calibration and pilot
+
+The shift-9 profile was calibrated with four prompts disjoint from the
+benchmark prompts. Calibration ran all 50 denoise steps exactly for every
+prompt. The resulting profile has SHA-256
+`1fab27b88c5fd74a96de85c4e9f4cd29809289c2cd7df2cb0e143b1b3bef64b7`.
+
+The pilot reused prompt indices 0, 8, 10 and 14. Pixel RMSE below is the mean
+per-video RMSE against exact inference.
+
+| Threshold / max consecutive reuse | Paired speedup | Reused steps | Latent rel L1 | Latent rel L2 | Pixel MAE | Pixel RMSE |
+|---:|---:|---:|---:|---:|---:|---:|
+| 0.06 / 2 | 1.9476x | 54.0% | 0.17384 | 0.18129 | 0.03448 | 0.06325 |
+| 0.12 / 4 | 2.3560x | 64.0% | 0.23511 | 0.23958 | 0.04592 | 0.08021 |
+
+The 0.12 / 4 case was selected for the full-16 suite. On the pilot prompts it
+matched the static 0.10 cache's quality envelope while increasing paired
+throughput by about 21%.
+
+## MagCache full-16 result
+
+| Metric | Exact off | Static 0.10 | MagCache 0.12 / 4 |
+|---|---:|---:|---:|
+| Generation mean (s) | 198.118 | 100.179 | 82.623 |
+| Paired speedup | 1.0000x | 1.9800x | 2.3996x |
+| Reused denoise steps | 0.00% | 55.50% | 64.00% |
+| Latent relative L1 | 0 | 0.21221 | 0.20629 |
+| Latent relative L2 | 0 | 0.22196 | 0.20911 |
+| Latent cosine | 1 | 0.97293 | 0.97642 |
+| Latent max-abs worst case | 0 | 1.38048 | 1.01727 |
+| Pixel MAE | 0 | 0.03796 | 0.03569 |
+| Pixel mean RMSE | 0 | 0.06329 | 0.05905 |
+| Pixel relative L1 | 0 | 0.10185 | 0.09655 |
+| Pixel relative L2 | 0 | 0.14909 | 0.14043 |
+
+Within this 16-prompt suite, MagCache increased paired throughput by about
+21% over static 0.10 while improving every reported aggregate latent and pixel
+drift metric. Its paired-speedup 95% confidence interval was 2.3776x--2.4217x.
+The rank-max cache residency was 97,607,680 bytes and rank-max peak allocated
+GPU memory was 69,513,028,096 bytes.
+
 ## Artifact roots
 
 - Taylor 0.5/1.0/2.0 pilot:
@@ -59,6 +100,12 @@ MagCache and FasterCache DFR funnels finish.
   `/root/leo2-output/accel-taylor-pilot-m025-shift9-20260903-2306`
 - Taylor 0.5 full-16:
   `/root/leo2-output/accel-taylor-full-m050-shift9-20260903-2316`
+- MagCache calibration:
+  `/root/leo2-output/accel-magcache-calibration-shift9-20260904-0001`
+- MagCache pilot:
+  `/root/leo2-output/accel-magcache-pilot-shift9-20260904-0018`
+- MagCache 0.12 / 4 full-16:
+  `/root/leo2-output/accel-magcache-full-t012-k4-shift9-20260904-0038`
 
 Each snapshot subdirectory retains the cases CSV, `benchmark.env`, case/root
 summary, paired latent metrics and paired/aggregate pixel metrics.

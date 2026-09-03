@@ -1,0 +1,2 @@
+name,method,cache_threshold,flow_shift_video,guidance_scale,baseline_case,reference_root,taylor_max_extrapolation,magcache_profile,magcache_threshold,magcache_max_skip_steps,magcache_retention_ratio,dfr_start_step,dfr_end_step,dfr_interval,dfr_layers
+magcache_calibration_shift9,magcache_calibrate,,9.0,1.0,magcache_calibration_shift9,,,,0.12,4,0.2,,,,
