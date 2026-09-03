@@ -104,6 +104,7 @@ harness_sha256="$(
     examples/diffusion/leo2/scripts/cache_benchmark_cases.py \
     examples/diffusion/leo2/scripts/cache_benchmark.sh \
     examples/diffusion/leo2/scripts/cache_benchmark_entry.py \
+    examples/diffusion/leo2/scripts/build_magcache_profile.py \
     examples/diffusion/leo2/scripts/summarize_cache_benchmark.py \
     | sha256sum | awk '{print $1}'
 )"
@@ -129,8 +130,11 @@ fi
   echo "prompts_sha256=$(sha256sum "${PROMPTS_CSV}" | awk '{print $1}')"
   echo "cases_csv=${CASES_CSV}"
   echo "cases_sha256=$(sha256sum "${CASES_CSV}" | awk '{print $1}')"
+  echo "artifact_manifest=${ARTIFACT_MANIFEST}"
   echo "artifact_manifest_sha256=$(sha256sum "${ARTIFACT_MANIFEST}" | awk '{print $1}')"
+  echo "model_config=${MODEL_CONFIG}"
   echo "model_config_sha256=$(sha256sum "${MODEL_CONFIG}" | awk '{print $1}')"
+  echo "generation_config=${GENERATION_CONFIG}"
   echo "generation_config_sha256=$(sha256sum "${GENERATION_CONFIG}" | awk '{print $1}')"
   echo "checkpoint_dir=${LEO2_CKPT_DIR:-DRY_RUN}"
   echo "assets_base=${LEO2_ASSETS_BASE:-DRY_RUN}"

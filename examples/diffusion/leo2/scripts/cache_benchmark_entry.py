@@ -26,6 +26,7 @@ COUNTER_FIELDS = (
     "tail_compute_steps",
     "tail_reuse_steps",
     "predicted_steps",
+    "prediction_warmup_steps",
     "static_fallback_steps",
     "attention_compute_calls",
     "attention_reuse_calls",
@@ -229,6 +230,68 @@ def _distributed_extrema(values: list[float]) -> tuple[list[float], list[float]]
     )
 
 
+def _numeric_sequence(value: Any, *, field: str) -> list[float]:
+    """Convert one cache diagnostic array to finite Python floats."""
+    if hasattr(value, "detach"):
+        value = value.detach().cpu()
+    if hasattr(value, "tolist"):
+        value = value.tolist()
+    if not isinstance(value, (list, tuple)):
+        raise TypeError(f"Leo2 cache diagnostic {field!r} must be a numeric array.")
+    result = []
+    for index, item in enumerate(value):
+        if isinstance(item, bool) or not isinstance(item, numbers.Real) or not math.isfinite(float(item)):
+            raise ValueError(f"Leo2 cache diagnostic {field}[{index}] is not finite: {item!r}")
+        result.append(float(item))
+    return result
+
+
+def _distributed_require_valid(error: Exception | None, *, field: str) -> None:
+    """Make every rank fail when any rank rejects a diagnostic payload."""
+    import torch
+    import torch.distributed as dist
+
+    if not dist.is_available() or not dist.is_initialized() or dist.get_world_size() == 1:
+        if error is not None:
+            raise error
+        return
+    device = torch.device("cuda", torch.cuda.current_device())
+    valid = torch.tensor(error is None, dtype=torch.int64, device=device)
+    dist.all_reduce(valid, op=dist.ReduceOp.MIN)
+    if not bool(valid.item()):
+        if error is not None:
+            raise error
+        raise RuntimeError(f"Leo2 cache diagnostic {field!r} was invalid on another rank.")
+
+
+def _distributed_identical(values: list[float], *, field: str) -> list[float]:
+    """Require an identically sized and valued numeric array on every rank."""
+    import torch
+    import torch.distributed as dist
+
+    if not dist.is_available() or not dist.is_initialized() or dist.get_world_size() == 1:
+        return values
+    device = torch.device("cuda", torch.cuda.current_device())
+    local_size = torch.tensor(len(values), dtype=torch.int64, device=device)
+    minimum_size = local_size.clone()
+    maximum_size = local_size.clone()
+    dist.all_reduce(minimum_size, op=dist.ReduceOp.MIN)
+    dist.all_reduce(maximum_size, op=dist.ReduceOp.MAX)
+    if int(minimum_size.item()) != int(maximum_size.item()):
+        raise RuntimeError(
+            f"Leo2 cache diagnostic {field!r} length diverged across ranks: "
+            f"min={int(minimum_size.item())}, max={int(maximum_size.item())}"
+        )
+    minimum, maximum = _distributed_extrema(values)
+    if minimum != maximum:
+        mismatch = next(index for index, pair in enumerate(zip(minimum, maximum)) if pair[0] != pair[1])
+        raise RuntimeError(
+            f"Leo2 cache diagnostic {field!r} diverged at index {mismatch}: "
+            f"min={minimum[mismatch]!r}, max={maximum[mismatch]!r}"
+        )
+    return maximum
+
+
 def _json_seed(seed: Any) -> Any:
     """Convert sampler seed containers to JSON-compatible values."""
     if hasattr(seed, "detach"):
@@ -360,6 +423,7 @@ def _normalize_cache_stats(stats: Any, method: str) -> dict[str, int]:
             field="tail_reuse_steps",
         ),
         "predicted_steps": _counter(stats.get("predicted_steps", 0), field="predicted_steps"),
+        "prediction_warmup_steps": _counter(stats.get("prediction_warmup_steps", 0), field="prediction_warmup_steps"),
         "static_fallback_steps": _counter(stats.get("static_fallback_steps", 0), field="static_fallback_steps"),
         "attention_compute_calls": _counter(stats.get("attention_compute_calls", 0), field="attention_compute_calls"),
         "attention_reuse_calls": _counter(stats.get("attention_reuse_calls", 0), field="attention_reuse_calls"),
@@ -368,6 +432,58 @@ def _normalize_cache_stats(stats: Any, method: str) -> dict[str, int]:
         "cache_bytes": _counter(stats.get("cache_bytes", 0), field="cache_bytes"),
     }
     return normalized
+
+
+def _method_diagnostics(stats: Any, *, method: str, expected_steps: int) -> dict[str, float | list[float]]:
+    """Validate and synchronize non-counter diagnostics for one request."""
+    if not isinstance(stats, dict):
+        raise TypeError(f"Leo2 cache_stats() must return a dict, got {type(stats).__name__}.")
+    if method == "taylor":
+        values = []
+        validation_error = None
+        try:
+            for field in ("taylor_alpha_mean", "taylor_alpha_max", "taylor_max_extrapolation"):
+                value = stats.get(field)
+                if (
+                    isinstance(value, bool)
+                    or not isinstance(value, numbers.Real)
+                    or not math.isfinite(float(value))
+                    or value < 0
+                ):
+                    raise ValueError(f"Leo2 Taylor diagnostic {field!r} is invalid: {value!r}")
+                values.append(float(value))
+        except (TypeError, ValueError) as exc:
+            validation_error = exc
+        _distributed_require_valid(validation_error, field="taylor_scalars")
+        values = _distributed_identical(values, field="taylor_scalars")
+        tolerance = 1e-12 * max(1.0, *(abs(value) for value in values))
+        if values[0] > values[1] + tolerance or values[1] > values[2] + tolerance:
+            raise ValueError("Leo2 Taylor alpha diagnostics must satisfy mean <= max <= max_extrapolation.")
+        return {
+            "taylor_alpha_mean": values[0],
+            "taylor_alpha_max": values[1],
+            "taylor_max_extrapolation": values[2],
+        }
+    if method == "magcache_calibrate":
+        ratios: list[float] = []
+        timesteps: list[float] = []
+        validation_error = None
+        try:
+            ratios = _numeric_sequence(stats.get("magcache_ratios"), field="magcache_ratios")
+            timesteps = _numeric_sequence(stats.get("magcache_expected_timesteps"), field="magcache_expected_timesteps")
+            if len(ratios) != expected_steps or len(timesteps) != expected_steps:
+                raise ValueError(
+                    "Leo2 MagCache calibration diagnostics must contain exactly "
+                    f"{expected_steps} ratios and timesteps, got {len(ratios)} and {len(timesteps)}."
+                )
+        except (TypeError, ValueError) as exc:
+            validation_error = exc
+        _distributed_require_valid(validation_error, field="magcache_calibration")
+        return {
+            "magcache_ratios": _distributed_identical(ratios, field="magcache_ratios"),
+            "magcache_expected_timesteps": _distributed_identical(timesteps, field="magcache_expected_timesteps"),
+        }
+    return {}
 
 
 def _validate_cache_stats(stats: dict[str, int], *, method: str, expected_steps: int) -> None:
@@ -573,7 +689,18 @@ def _install_instrumentation(options: BenchmarkOptions) -> None:
             allocated = 0.0
             reserved = 0.0
         elapsed = time.perf_counter() - started
-        stats = _normalize_cache_stats(self.cache_stats(), options.method)
+        raw_stats = self.cache_stats()
+        expected_steps = int(self.generation_config.diff_infer_steps)
+        try:
+            stats = _normalize_cache_stats(raw_stats, options.method)
+            diagnostics = _method_diagnostics(
+                raw_stats,
+                method=options.method,
+                expected_steps=expected_steps,
+            )
+        except (RuntimeError, TypeError, ValueError) as exc:
+            fail(str(exc), type(exc).__name__)
+            raise
         minima, maxima = _distributed_extrema(
             [elapsed, allocated, reserved, *(float(stats[field]) for field in COUNTER_FIELDS)]
         )
@@ -583,7 +710,6 @@ def _install_instrumentation(options: BenchmarkOptions) -> None:
             raise RuntimeError(reason)
         elapsed, allocated, reserved = maxima[:3]
         stats = {field: int(value) for field, value in zip(COUNTER_FIELDS, maxima[3:])}
-        expected_steps = int(self.generation_config.diff_infer_steps)
         try:
             _validate_cache_stats(stats, method=options.method, expected_steps=expected_steps)
         except RuntimeError as exc:
@@ -610,16 +736,20 @@ def _install_instrumentation(options: BenchmarkOptions) -> None:
                 "baseline_case": options.baseline_case,
                 "benchmark_schema_version": 2,
                 "cache_method": options.method,
+                "cache_method_options": method_options,
                 "cache_threshold": options.cache_threshold,
+                "diff_infer_steps": expected_steps,
                 "elapsed_seconds": elapsed,
                 "flow_shift_video": float(self.generation_config.flow_shift_video),
                 "guidance_scale": float(self.generation_config.diff_guidance_scale),
+                "image_size": get_args().image_size,
                 "latent_dtype": str(latent_outputs.videos.dtype),
                 "latent_file": latent_file,
                 "latent_sha256": latent_sha256,
                 "latent_shape": list(latent_outputs.videos.shape),
                 "max_memory_allocated_bytes": int(allocated),
                 "max_memory_reserved_bytes": int(reserved),
+                "num_frames": int(get_args().num_frames),
                 "prompt_hash": prompt_hash,
                 "prompt_index": prompt_index,
                 "request": request_number,
@@ -627,6 +757,7 @@ def _install_instrumentation(options: BenchmarkOptions) -> None:
                 "seed": seed,
                 "status": "ok",
                 **stats,
+                **diagnostics,
             }
             print(REQUEST_MARKER + json.dumps(payload, sort_keys=True), flush=True)
         return output

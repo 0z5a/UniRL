@@ -26,6 +26,7 @@ COUNTER_FIELDS = (
     "tail_compute_steps",
     "tail_reuse_steps",
     "predicted_steps",
+    "prediction_warmup_steps",
     "static_fallback_steps",
     "attention_compute_calls",
     "attention_reuse_calls",
@@ -194,6 +195,16 @@ def _case_summary(case_dir: Path, expected_videos: int) -> dict[str, Any]:
     tail_steps = counters["tail_compute_steps"] + counters["tail_reuse_steps"]
     attention_calls = counters["attention_compute_calls"] + counters["attention_reuse_calls"]
     cfg_calls = counters["cfg_compute_calls"] + counters["cfg_reuse_calls"]
+    predicted_steps = counters["predicted_steps"]
+    taylor_alpha_mean = (
+        sum(
+            float(record.get("taylor_alpha_mean", 0.0)) * int(record.get("predicted_steps", 0)) for record in successful
+        )
+        / predicted_steps
+        if predicted_steps
+        else 0.0
+    )
+    taylor_alpha_max = max((float(record.get("taylor_alpha_max", 0.0)) for record in successful), default=0.0)
     videos = sorted((case_dir / "samples").rglob("*.mp4"))
     video_validation = [_probe_video(path) for path in videos]
     valid_video_count = sum(bool(record["valid"]) for record in video_validation)
@@ -249,6 +260,8 @@ def _case_summary(case_dir: Path, expected_videos: int) -> dict[str, Any]:
         "requests": successful,
         "skip_ratio": counters["tail_reuse_steps"] / tail_steps if tail_steps else 0.0,
         "tail_reuse_ratio": counters["tail_reuse_steps"] / tail_steps if tail_steps else 0.0,
+        "taylor_alpha_mean": taylor_alpha_mean,
+        "taylor_alpha_max": taylor_alpha_max,
         "attention_reuse_ratio": counters["attention_reuse_calls"] / attention_calls if attention_calls else 0.0,
         "cfg_reuse_ratio": counters["cfg_reuse_calls"] / cfg_calls if cfg_calls else 0.0,
         "video_count": len(videos),
@@ -477,6 +490,9 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "tail_reuse_steps",
         "tail_reuse_ratio",
         "predicted_steps",
+        "prediction_warmup_steps",
+        "taylor_alpha_mean",
+        "taylor_alpha_max",
         "static_fallback_steps",
         "attention_compute_calls",
         "attention_reuse_calls",

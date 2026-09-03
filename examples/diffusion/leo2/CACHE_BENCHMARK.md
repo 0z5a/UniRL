@@ -100,6 +100,12 @@ is not forced into that invariant. Reports retain legacy full/skip counters and
 add tail compute/reuse, Taylor prediction/fallback, attention compute/reuse,
 CFG compute/reuse, cache bytes, and peak CUDA allocation/reservation.
 
+Taylor requests also record prediction warm-up count and the mean/maximum
+extrapolation coefficient. A `magcache_calibrate` request records its complete
+50-value magnitude-ratio and scheduler-timestep arrays. Scalar counters and
+fixed-size diagnostics are checked across all ranks independently; a rank count,
+array length, or value mismatch aborts the request before rank zero emits it.
+
 Every MP4 must decode as exactly 848x464, 121 frames and 24 FPS. Speed and final
 latent drift are paired with the explicit baseline by prompt hash and seed.
 Drift includes relative L1/L2, cosine similarity and maximum absolute error.
@@ -117,3 +123,24 @@ both encoded videos. `run_quality_evaluation.sh` evaluates only cases from the
 selected cases CSV. The quality summarizer can merge an external baseline's
 existing `quality_eval/summary/quality_metrics_cases.json` while keeping new
 case results under the new root.
+
+## MagCache calibration profile
+
+Run `magcache_calibrate` without a replay profile, then build the portable JSON
+consumed by a `magcache` case:
+
+```bash
+python examples/diffusion/leo2/scripts/build_magcache_profile.py \
+  --root /path/to/completed-calibration-root \
+  --case magcache_calibrate_shift9 \
+  --output /path/to/new/magcache_shift9_profile.json
+```
+
+The builder refuses to replace an existing output. Before writing, it verifies
+the successful case summary and exit code, the 50-step request accounting,
+unique prompt identities, identical timesteps, positive finite ratios with
+`ratio[0] == 1`, and the recorded Git, checkpoint, prompt, cases, model,
+generation-config and artifact-manifest fingerprints. It aggregates ratios
+independently at every step. Top-level `ratios` is the arithmetic mean and is
+directly loader-compatible; `ratio_statistics` additionally records sample
+standard deviation and nearest-rank p95 together with their definitions.
