@@ -10,12 +10,22 @@ OUTPUT="${ROOT}/quality_eval"
 VBENCH_SOURCE="${VBENCH_SOURCE:-/root/leo2-eval/sources/VBench}"
 VBENCH_PYTHON="${VBENCH_PYTHON:-/root/leo2-eval/envs/vbench/bin/python}"
 VIDEOSCORE_PYTHON="${VIDEOSCORE_PYTHON:-/root/leo2-eval/envs/videoscore2/bin/python}"
+GPU_OFFSET="${LEO2_QUALITY_GPU_OFFSET:-0}"
+
+if [[ ! "${GPU_OFFSET}" =~ ^[0-7]$ ]]; then
+  echo "LEO2_QUALITY_GPU_OFFSET must be an integer in 0..7, got: ${GPU_OFFSET}" >&2
+  exit 2
+fi
 
 mkdir -p "${OUTPUT}/vbench" "${OUTPUT}/videoscore2" "${OUTPUT}/logs"
 mapfile -t CASES < <(
   python "${LEO2_DIR}/scripts/cache_benchmark_cases.py" --emit-records "${CASES_CSV}" \
     | cut -d $'\x1f' -f1
 )
+if ((GPU_OFFSET + ${#CASES[@]} > 8)); then
+  echo "Quality cases exceed GPUs 0..7 after offset ${GPU_OFFSET}" >&2
+  exit 2
+fi
 
 run_vbench_case() {
   local case="$1" gpu="$2"
@@ -74,7 +84,7 @@ run_videoscore_case() {
 
 pids=()
 for index in "${!CASES[@]}"; do
-  run_vbench_case "${CASES[$index]}" "$index" &
+  run_vbench_case "${CASES[$index]}" "$((GPU_OFFSET + index))" &
   pids+=("$!")
 done
 status=0
@@ -87,7 +97,7 @@ done
 
 pids=()
 for index in "${!CASES[@]}"; do
-  run_videoscore_case "${CASES[$index]}" "$index" &
+  run_videoscore_case "${CASES[$index]}" "$((GPU_OFFSET + index))" &
   pids+=("$!")
 done
 status=0

@@ -68,6 +68,9 @@ examples/diffusion/leo2/scripts/run_quality_evaluation.sh \
   --output-dir /root/leo2-output/cache-full-final-848x464x121-20260903-1039/quality_eval/summary
 ```
 
+多个独立的单 case benchmark root 可以分别设置 0～7 的
+`LEO2_QUALITY_GPU_OFFSET`，从而在不同 GPU 上并发评估；默认值仍为 0。
+
 人工 A/B 应隐藏 setting，随机左右顺序，并按 prompt 配对打分。优先复核 pixel
 误差最大的 index 8、10、14，以及自动指标差异与视觉观感矛盾的样本。最终选择应
 同时满足速度收益、相对 cache-off 的成对保真度和独立质量指标，而不是按任一单项
