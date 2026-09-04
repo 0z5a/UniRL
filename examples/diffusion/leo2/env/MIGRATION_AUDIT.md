@@ -7,7 +7,7 @@
 | Leo2 inference source in UniRL | PASS | Native entry, active resources and dependency source are vendored; active paths are package-resolved. |
 | Entire UniRL repository | PARTIAL | The unrelated optional `verl_omni` speed benchmark remains an uninitialized Git submodule. Leo2 does not import it. |
 | Py3.12/Torch2.7 inference runtime | PASS | Fresh install, second relocation, FA2/FA3 and 8-rank DeepEP passed on 8×H20. |
-| Current UniRL code in runtime | PASS | Offline wheel from `bbd4f84` is installed and its 616-file Leo2 digest is checked. |
+| Current UniRL code in runtime | PASS | Offline wheel from `b90d235` is installed and its 616-file Leo2 digest is checked. |
 | Heavy-artifact workflow | PASS for iter0063300 | Link/copy initializer is fail-closed and pinned to `artifacts.yaml`. |
 | Py3.13/Torch2.10 v1.9 ABI | NOT BUILT | Compiled extensions from this release must not be loaded into that image ABI. |
 
