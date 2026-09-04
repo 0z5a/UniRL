@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Dict, List
 
+import numpy as np
 import torch
 
 from unirl.config.require import require
@@ -82,6 +83,26 @@ class Leo2CondStage:
                 captured = self._capture(prompt, height=height, width=width, num_frames=num_frames, seed=seed)
                 model_kwargs = captured.get("model_kwargs")
                 require(model_kwargs is not None, "Leo2CondStage: captured call carries no model_kwargs")
+                image_size = captured.get("image_size")
+                video_duration = captured.get("video_duration")
+                if isinstance(image_size, (list, tuple)):
+                    image_size = tuple(
+                        int(value) if isinstance(value, np.integer) else value for value in image_size
+                    )
+                if isinstance(video_duration, np.integer):
+                    video_duration = int(video_duration)
+                require(
+                    isinstance(image_size, (list, tuple))
+                    and len(image_size) == 2
+                    and all(type(value) is int and value > 0 for value in image_size),
+                    "Leo2CondStage: captured image_size must contain two positive integers; "
+                    f"requested={(height, width)!r}, received={image_size!r}",
+                )
+                require(
+                    type(video_duration) is int and video_duration > 0,
+                    "Leo2CondStage: captured video_duration must be a positive integer; "
+                    f"requested={num_frames!r}, received={video_duration!r}",
+                )
 
                 # __call__ never runs (recorder aborts it), so set the guidance
                 # attributes its prelude would have set before using the pipeline.
@@ -108,8 +129,11 @@ class Leo2CondStage:
                     dict(
                         input_ids=input_ids,
                         model_kwargs=model_kwargs,
-                        image_size=(int(height), int(width)),
-                        video_duration=int(num_frames),
+                        # hymm snaps requests to its supported media buckets.
+                        # Persist that effective geometry so x_T matches the
+                        # visual token mask instead of the unsnapped request.
+                        image_size=(int(image_size[0]), int(image_size[1])),
+                        video_duration=int(video_duration),
                         captured_call=_slim(captured),
                     )
                 )
@@ -132,6 +156,10 @@ def _to_transport_tree(value: Any, *, path: str) -> Any:
     """Copy a value tree into Tensor/builtin-only transport form."""
     if isinstance(value, torch.Tensor) or value is None or type(value) in (bool, int, float, str):
         return value
+    if isinstance(value, np.generic):
+        # hymm stores numpy integer bounds inside rope_media_info slices.
+        # Normalize them so condition blobs remain tensor/builtin-only.
+        return value.item()
     if isinstance(value, slice):
         return slice(
             _to_transport_tree(value.start, path=f"{path}.start"),

@@ -129,6 +129,20 @@ class Worker:
         self, role_name: str, role_cls, rank_info: RankInfo, init_kwargs: dict = None, dist_env: dict = None
     ) -> None:
         """Register a logical worker role on this device."""
+        if dist_env:
+            invalid = {
+                key: value
+                for key, value in dist_env.items()
+                if not isinstance(key, str) or not isinstance(value, str)
+            }
+            if invalid:
+                raise TypeError(
+                    "Worker.add_remote dist_env must map strings to strings; "
+                    f"role={role_name!r}, invalid={invalid!r}"
+                )
+            # Constructors such as checkpoint loaders may need rank identity;
+            # publishing it only in Remote.setup() is too late.
+            os.environ.update(dist_env)
         resolved_kwargs = self._resolve_init_kwargs(init_kwargs or {})
         role = role_cls(**resolved_kwargs)
         role.setup(

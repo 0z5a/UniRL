@@ -49,13 +49,13 @@ _REQUIRED_TENSOR_MODEL_KWARGS = frozenset(
         "cond_text_mask",
         "visual_mask",
         "text_mask",
-        "timesteps_index",
         "und_token_indices",
         "gen_token_indices",
     }
 )
 _NULLABLE_TENSOR_MODEL_KWARGS = frozenset(
     {
+        "timesteps_index",
         "audio_mask",
         "audio_token_indices",
         "cond_vae_images",

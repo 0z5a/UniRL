@@ -57,9 +57,8 @@ class Leo2PipelineConfig:
     ckpt_path: str = ""
     generation_config_path: str = str(_DEFAULT_GENERATION_CONFIG)
     assets_base: str = ""
-    # extra hymm cmd args appended after the yaml (mirrors t2v_smoke.sh minus
-    # sampling params, which UniRL owns). EP must stay 1: UniRL FSDP hosts the
-    # experts locally (non-fused path).
+    # Extra hymm cmd args appended after the yaml (mirrors t2v_smoke.sh minus
+    # sampling params, which UniRL owns).
     extra_hymm_args: List[str] = field(
         default_factory=lambda: [
             "--bot-task",
@@ -103,6 +102,9 @@ class Leo2PipelineConfig:
     # once-per-rollout encode when this is true, then moved back.
     text_encoder_gpu_transient: bool = True
     vae_on_gpu: bool = True
+    context_parallel_size: int = 1
+    expert_parallel_size: int = 1
+    enable_deepep: bool = False
 
     # loading
     skip_load_ckpt: bool = False  # debug only: random weights
@@ -114,6 +116,34 @@ class Leo2PipelineConfig:
 
     def __post_init__(self) -> None:
         """Resolve external artifacts and validate the portable Leo2 layout."""
+        if type(self.context_parallel_size) is not int:
+            raise TypeError(
+                "Leo2 context_parallel_size must be int, "
+                f"got {type(self.context_parallel_size).__name__}: {self.context_parallel_size!r}."
+            )
+        if self.context_parallel_size < 1:
+            raise ValueError(
+                f"Leo2 context_parallel_size must be >= 1, got {self.context_parallel_size}."
+            )
+        if type(self.expert_parallel_size) is not int:
+            raise TypeError(
+                "Leo2 expert_parallel_size must be int, "
+                f"got {type(self.expert_parallel_size).__name__}: {self.expert_parallel_size!r}."
+            )
+        if self.expert_parallel_size < 1:
+            raise ValueError(
+                f"Leo2 expert_parallel_size must be >= 1, got {self.expert_parallel_size}."
+            )
+        if type(self.enable_deepep) is not bool:
+            raise TypeError(
+                "Leo2 enable_deepep must be bool, "
+                f"got {type(self.enable_deepep).__name__}: {self.enable_deepep!r}."
+            )
+        if self.enable_deepep and self.expert_parallel_size == 1:
+            raise ValueError(
+                "Leo2 enable_deepep=true requires expert_parallel_size > 1, "
+                f"got expert_parallel_size={self.expert_parallel_size}."
+            )
         self.ckpt_path = _required_external_path(self.ckpt_path, "LEO2_CKPT_DIR")
         self.assets_base = _required_external_path(self.assets_base, "LEO2_ASSETS_BASE")
         self.hymm_repo_path = str(Path(self.hymm_repo_path).expanduser().resolve())

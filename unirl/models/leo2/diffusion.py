@@ -57,7 +57,15 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
         if not getattr(args, "extend_latent_channels", False):
             return None, None
         cond_latents, cond_mask, _task_type = pipeline.prepare_channel_cond_latents(None, latents)
-        return cond_latents, cond_mask
+        require(
+            isinstance(cond_latents, torch.Tensor) and isinstance(cond_mask, torch.Tensor),
+            "Leo2DiffusionStage: prepare_channel_cond_latents must return Tensor latents/mask; "
+            f"got {type(cond_latents).__name__} and {type(cond_mask).__name__}",
+        )
+        return (
+            cond_latents.to(device=latents.device, dtype=latents.dtype),
+            cond_mask.to(device=latents.device, dtype=latents.dtype),
+        )
 
     def predict_noise(
         self,
@@ -292,6 +300,48 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
             log_probs=torch.stack(log_probs, dim=1),
             prev_sample_means=torch.stack(means, dim=1) if means else None,
         )
+
+    def predict_noise_at_step(
+        self,
+        conditions: Leo2Conditions,
+        *,
+        sample: torch.Tensor,
+        sigma: torch.Tensor,
+        params: DiffusionSamplingParams,
+    ) -> torch.Tensor:
+        """Run one Leo2 velocity prediction for forward-process objectives."""
+        require(
+            conditions.hymm is not None and len(conditions.hymm) == 1,
+            "Leo2DiffusionStage.predict_noise_at_step: expected exactly one hymm "
+            f"condition blob, got {0 if conditions.hymm is None else len(conditions.hymm)}",
+        )
+        require(
+            sample.ndim == 5 and sample.shape[0] == 1,
+            "Leo2DiffusionStage.predict_noise_at_step: expected batch-1 video "
+            f"latents [1,C,T,H,W], got shape={tuple(sample.shape)}",
+        )
+        sigma_values = sigma.reshape(-1)
+        require(
+            sigma_values.numel() == 1,
+            "Leo2DiffusionStage.predict_noise_at_step: expected one sigma for "
+            f"batch-1 input, got shape={tuple(sigma.shape)}",
+        )
+        require(
+            float(params.guidance_scale) == 1.0,
+            "Leo2DiffusionStage.predict_noise_at_step: Leo2 training supports "
+            f"guidance_scale=1.0, got {params.guidance_scale}",
+        )
+
+        blob = conditions.hymm[0]
+        sample = sample.to(device=self.bundle.device, dtype=self.trajectory_dtype)
+        channel_cond = self._prep_channel_cond(blob, sample)
+        with self._autocast():
+            return self.predict_noise(
+                blob,
+                sample=sample,
+                sigma=sigma_values[0],
+                channel_cond=channel_cond,
+            )
 
 
 __all__ = ["Leo2DiffusionStage"]

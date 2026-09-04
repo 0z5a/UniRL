@@ -14,6 +14,7 @@ from unirl.types.segments.latent import LatentSegment
 from unirl.utils.metrics import aggregate_numeric_metrics
 
 from .base import AlgorithmStepResult, BaseAlgorithmConfig, StageAlgorithm
+from .sft import draw_shifted_sigma
 
 
 @dataclass
@@ -25,6 +26,12 @@ class DiffusionNFTConfig(BaseAlgorithmConfig):
     adv_mode: str = "raw"
     use_adaptive_weight: bool = True
     train_timestep_mode: str = "all"
+    num_train_timesteps: int = 1
+    timestep_sampling: str = "uniform"
+    logit_mean: float = 0.0
+    logit_std: float = 1.0
+    timestep_shift: float = 1.0
+    sigma_min: float = 1e-4
     shuffle_train_timesteps: bool = True
     apply_time_shift_in_loss: bool = False
     training_timestep_fraction: float = 0.99
@@ -50,6 +57,12 @@ class DiffusionNFT(StageAlgorithm):
         adv_mode: str = "raw",
         use_adaptive_weight: bool = True,
         train_timestep_mode: str = "all",
+        num_train_timesteps: int = 1,
+        timestep_sampling: str = "uniform",
+        logit_mean: float = 0.0,
+        logit_std: float = 1.0,
+        timestep_shift: float = 1.0,
+        sigma_min: float = 1e-4,
         shuffle_train_timesteps: bool = True,
         apply_time_shift_in_loss: bool = False,
         training_timestep_fraction: float = 0.99,
@@ -68,6 +81,47 @@ class DiffusionNFT(StageAlgorithm):
             raise ValueError(
                 f"DiffusionNFT: train_timestep_mode={train_timestep_mode!r} not supported (use 'all' or 'random')."
             )
+        if type(num_train_timesteps) is not int:
+            raise TypeError(
+                "DiffusionNFT: expected int for num_train_timesteps, "
+                f"got {type(num_train_timesteps).__name__}: {num_train_timesteps!r}"
+            )
+        if num_train_timesteps <= 0:
+            raise ValueError(
+                "DiffusionNFT: num_train_timesteps must be positive, "
+                f"got {num_train_timesteps!r}"
+            )
+        if timestep_sampling not in ("uniform", "logit_normal"):
+            raise ValueError(
+                "DiffusionNFT: timestep_sampling must be 'uniform' or 'logit_normal', "
+                f"got {timestep_sampling!r}"
+            )
+        numeric_fields = {
+            "logit_mean": logit_mean,
+            "logit_std": logit_std,
+            "timestep_shift": timestep_shift,
+            "sigma_min": sigma_min,
+        }
+        invalid_types = {
+            name: f"{type(value).__name__}: {value!r}"
+            for name, value in numeric_fields.items()
+            if isinstance(value, bool) or not isinstance(value, (int, float))
+        }
+        if invalid_types:
+            raise TypeError(
+                "DiffusionNFT: expected finite int or float timestep parameters; "
+                f"received {invalid_types}"
+            )
+        if not math.isfinite(float(logit_mean)):
+            raise ValueError(f"DiffusionNFT: logit_mean must be finite, got {logit_mean!r}")
+        if not math.isfinite(float(logit_std)) or float(logit_std) <= 0.0:
+            raise ValueError(f"DiffusionNFT: logit_std must be finite and positive, got {logit_std!r}")
+        if not math.isfinite(float(timestep_shift)) or float(timestep_shift) <= 0.0:
+            raise ValueError(
+                f"DiffusionNFT: timestep_shift must be finite and positive, got {timestep_shift!r}"
+            )
+        if not math.isfinite(float(sigma_min)) or not 0.0 < float(sigma_min) < 0.5:
+            raise ValueError(f"DiffusionNFT: sigma_min must lie in (0, 0.5), got {sigma_min!r}")
         if apply_time_shift_in_loss:
             raise ValueError("DiffusionNFT: apply_time_shift_in_loss=True is not implemented.")
         if not (0.0 < float(training_timestep_fraction) <= 1.0):
@@ -101,6 +155,12 @@ class DiffusionNFT(StageAlgorithm):
             adv_mode=str(adv_mode),
             use_adaptive_weight=bool(use_adaptive_weight),
             train_timestep_mode=str(train_timestep_mode),
+            num_train_timesteps=num_train_timesteps,
+            timestep_sampling=str(timestep_sampling),
+            logit_mean=float(logit_mean),
+            logit_std=float(logit_std),
+            timestep_shift=float(timestep_shift),
+            sigma_min=float(sigma_min),
             shuffle_train_timesteps=bool(shuffle_train_timesteps),
             apply_time_shift_in_loss=bool(apply_time_shift_in_loss),
             training_timestep_fraction=float(training_timestep_fraction),
@@ -140,7 +200,7 @@ class DiffusionNFT(StageAlgorithm):
                 f"does not match clean-latents batch size ({B})."
             )
 
-        timesteps = self._resolve_timesteps(segment, B, device, compute_dtype)
+        timesteps = self._resolve_timesteps(segment, device, compute_dtype)
         K = int(timesteps.numel())
         if K == 0:
             return AlgorithmStepResult(
@@ -274,7 +334,6 @@ class DiffusionNFT(StageAlgorithm):
     def _resolve_timesteps(
         self,
         segment: LatentSegment,
-        B: int,
         device: torch.device,
         dtype: torch.dtype,
     ) -> torch.Tensor:
@@ -307,7 +366,18 @@ class DiffusionNFT(StageAlgorithm):
             if ts.numel() == 0:
                 ts = torch.rand(1, device=device, dtype=dtype) * frac
         elif mode == "random":
-            ts = torch.rand(B, device=device, dtype=dtype) * frac
+            ts = draw_shifted_sigma(
+                int(self.config.num_train_timesteps),
+                timestep_sampling=self.config.timestep_sampling,
+                logit_mean=float(self.config.logit_mean),
+                logit_std=float(self.config.logit_std),
+                shift=float(self.config.timestep_shift),
+                sigma_min=float(self.config.sigma_min),
+                device=device,
+                generator=None,
+            ).to(dtype=dtype)
+            if frac != 1.0:
+                ts = ts * frac
         else:
             raise ValueError(f"DiffusionNFT: unsupported train_timestep_mode={mode!r}")
 

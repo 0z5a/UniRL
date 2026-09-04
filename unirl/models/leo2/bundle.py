@@ -18,6 +18,11 @@ from unirl.utils.dtypes import parse_torch_dtype
 from .config import Leo2PipelineConfig
 
 _HYMM_BOOTSTRAPPED = False
+_HY_PARALLEL_CONFIG: tuple[int, int, bool] = (1, 1, False)
+
+
+def _is_expert_parameter_name(name: str) -> bool:
+    return ".experts." in f".{name}." and "shared_experts" not in name
 
 
 def ensure_hy_parallel_state() -> bool:
@@ -25,27 +30,64 @@ def ensure_hy_parallel_state() -> bool:
     import torch.distributed as dist
     from hy_parallelism import parallel_states as hy_ps
 
-    if hy_ps.is_parallel_state_initialized():
-        return True
     if not dist.is_initialized():
         return False
     world = dist.get_world_size()
-    dp_shard = min(8, world)
-    hy_ps.init_parallel_state(
-        dp_replicate=world // dp_shard,
-        dp_shard=dp_shard,
-        cp=1,
-        tp=1,
-        pp=1,
-        ep=1,
-        world_size=world,
-    )
+    cp_size, ep_size, enable_deepep = _HY_PARALLEL_CONFIG
+    if world % cp_size:
+        raise ValueError(
+            f"Leo2 context_parallel_size={cp_size} must divide distributed world_size={world}."
+        )
+    if world % ep_size:
+        raise ValueError(
+            f"Leo2 expert_parallel_size={ep_size} must divide distributed world_size={world}."
+        )
+    if not hy_ps.is_parallel_state_initialized():
+        dp_shard = min(8, world)
+        hy_ps.init_parallel_state(
+            dp_replicate=world // dp_shard,
+            dp_shard=dp_shard,
+            cp=cp_size,
+            tp=1,
+            pp=1,
+            ep=ep_size,
+            world_size=world,
+        )
+
+    # hymm's model code reads its own ParallelState facade, while the
+    # collectives are owned by hy_parallelism. Refresh the facade only after
+    # torch.distributed exists so both report the same CP/EP groups.
+    from hymm.core import global_vars as hymm_global_vars
+    from hymm.core.parallel_states import ParallelState
+
+    current = hymm_global_vars.get_parallel_state()
+    if (
+        getattr(current, "backend", "") != "pure_torch"
+        or current.cp_size != cp_size
+        or current.ep_size != ep_size
+    ):
+        hymm_global_vars._GLOBAL_PARALLEL_STATE = None
+        ParallelState.from_pure_torch()
     return True
 
 
 def _bootstrap_hymm(config: Leo2PipelineConfig):
     """Import hymm, parse args from the yaml, set globals. Idempotent."""
-    global _HYMM_BOOTSTRAPPED
+    global _HYMM_BOOTSTRAPPED, _HY_PARALLEL_CONFIG
+
+    requested_parallel_config = (
+        config.context_parallel_size,
+        config.expert_parallel_size,
+        config.enable_deepep,
+    )
+    if _HYMM_BOOTSTRAPPED and requested_parallel_config != _HY_PARALLEL_CONFIG:
+        raise RuntimeError(
+            "Leo2 hymm is already bootstrapped with parallel config "
+            f"cp={_HY_PARALLEL_CONFIG[0]}, ep={_HY_PARALLEL_CONFIG[1]}, "
+            f"deepep={_HY_PARALLEL_CONFIG[2]}; received cp={requested_parallel_config[0]}, "
+            f"ep={requested_parallel_config[1]}, deepep={requested_parallel_config[2]}."
+        )
+    _HY_PARALLEL_CONFIG = requested_parallel_config
 
     repo = os.path.abspath(config.hymm_repo_path)
     config_yaml = os.path.abspath(config.config_yaml)
@@ -83,6 +125,9 @@ def _bootstrap_hymm(config: Leo2PipelineConfig):
     if _HYMM_BOOTSTRAPPED:
         return global_vars.get_args()
 
+    extra_hymm_args = list(config.extra_hymm_args)
+    if config.enable_deepep and "--moe-enable-deepep" not in extra_hymm_args:
+        extra_hymm_args.append("--moe-enable-deepep")
     argv = [
         "--config-path",
         config_yaml,
@@ -92,7 +137,7 @@ def _bootstrap_hymm(config: Leo2PipelineConfig):
         "unirl-leo2",
         "--framework",
         "fsdp",
-        *config.extra_hymm_args,
+        *extra_hymm_args,
     ]
     pre = argparse.ArgumentParser(add_help=False)
     pre.add_argument("--config-path", type=str, required=True)
@@ -123,7 +168,15 @@ def _bootstrap_hymm(config: Leo2PipelineConfig):
 
     from hymm.core.parallel_states import ParallelState
 
-    ParallelState(dp_rank=0, dp_size=1)
+    provisional_ep_rank = int(os.environ.get("RANK", "0")) % config.expert_parallel_size
+    ParallelState(
+        dp_rank=0,
+        dp_size=1,
+        ep_rank=provisional_ep_rank,
+        ep_size=config.expert_parallel_size,
+        cp_rank=0,
+        cp_size=config.context_parallel_size,
+    )
 
     # The bundle may be built before torch.distributed is up (then this is a
     # no-op); predict_noise() re-checks right before the first forward.
@@ -133,7 +186,14 @@ def _bootstrap_hymm(config: Leo2PipelineConfig):
     return args
 
 
-def _dcp_load_into(model: nn.Module, weights_dir: str, *, model_dtype: torch.dtype) -> None:
+def _dcp_load_into(
+    model: nn.Module,
+    weights_dir: str,
+    *,
+    model_dtype: torch.dtype,
+    expert_parallel_size: int = 1,
+    expert_parallel_rank: int = 0,
+) -> None:
     """Fill the (empty) model from the torch-dcp checkpoint, dtype-exact."""
     import torch.distributed.checkpoint as dcp
     from torch.distributed.checkpoint import FileSystemReader
@@ -161,19 +221,41 @@ def _dcp_load_into(model: nn.Module, weights_dir: str, *, model_dtype: torch.dty
             f"unexpected={unexpected[:8]} ({len(unexpected)} total)."
         )
 
+    if expert_parallel_size < 1:
+        raise ValueError(f"expert_parallel_size must be >= 1, got {expert_parallel_size}")
+    if not 0 <= expert_parallel_rank < expert_parallel_size:
+        raise ValueError(
+            "expert_parallel_rank must satisfy 0 <= rank < size, "
+            f"got rank={expert_parallel_rank}, size={expert_parallel_size}"
+        )
+
     invalid = []
     load_state = {}
+    destination_shapes = {key: tuple(tensor.shape) for key, tensor in dest.items()}
+    expert_slices: dict[str, tuple[int, int]] = {}
     for key, tensor in dest.items():
         checkpoint_key = f"model.{key}"
         metadata = saved[checkpoint_key]
         properties = getattr(metadata, "properties", None)
         saved_dtype = getattr(properties, "dtype", None)
         saved_size = getattr(metadata, "size", None)
+        saved_shape = tuple(saved_size) if saved_size is not None else None
+        destination_shape = tuple(tensor.shape) if isinstance(tensor, torch.Tensor) else None
+        is_sharded_expert = expert_parallel_size > 1 and _is_expert_parameter_name(key)
+        shape_matches = saved_shape == destination_shape
+        expert_shape_matches = (
+            is_sharded_expert
+            and saved_shape is not None
+            and destination_shape is not None
+            and len(saved_shape) == len(destination_shape)
+            and saved_shape[1:] == destination_shape[1:]
+            and saved_shape[0] == destination_shape[0] * expert_parallel_size
+        )
         if not isinstance(tensor, torch.Tensor):
             invalid.append(f"{checkpoint_key}: destination is {type(tensor).__name__}, not Tensor")
         elif tensor.is_meta:
             invalid.append(f"{checkpoint_key}: destination is still on meta")
-        elif saved_size is None or tuple(saved_size) != tuple(tensor.shape):
+        elif not shape_matches and not expert_shape_matches:
             invalid.append(f"{checkpoint_key}: shape checkpoint={saved_size}, model={tuple(tensor.shape)}")
         elif saved_dtype is None:
             invalid.append(f"{checkpoint_key}: checkpoint carries no dtype")
@@ -185,10 +267,13 @@ def _dcp_load_into(model: nn.Module, weights_dir: str, *, model_dtype: torch.dty
         ):
             invalid.append(f"{checkpoint_key}: dtype checkpoint={saved_dtype}, model={tensor.dtype}")
         else:
+            if expert_shape_matches:
+                local_experts = destination_shape[0]
+                expert_slices[key] = (expert_parallel_rank * local_experts, local_experts)
             load_state[key] = (
                 tensor
-                if saved_dtype == tensor.dtype
-                else torch.empty(tuple(tensor.shape), dtype=saved_dtype, device=tensor.device)
+                if saved_dtype == tensor.dtype and shape_matches
+                else torch.empty(saved_shape, dtype=saved_dtype, device=tensor.device)
             )
     if invalid:
         raise RuntimeError(
@@ -198,6 +283,8 @@ def _dcp_load_into(model: nn.Module, weights_dir: str, *, model_dtype: torch.dty
         )
 
     dcp.load({"model": load_state}, storage_reader=reader)
+    for key, (start, length) in expert_slices.items():
+        load_state[key] = load_state[key].narrow(0, start, length).contiguous()
     result = model.load_state_dict(load_state, strict=True, assign=True)
     if result.missing_keys or result.unexpected_keys:
         raise RuntimeError(
@@ -209,12 +296,16 @@ def _dcp_load_into(model: nn.Module, weights_dir: str, *, model_dtype: torch.dty
         key
         for key, tensor in loaded.items()
         if tensor.is_meta
-        or tuple(tensor.shape) != tuple(saved[f"model.{key}"].size)
+        or tuple(tensor.shape) != destination_shapes[key]
         or tensor.dtype != saved[f"model.{key}"].properties.dtype
     ]
     if incomplete:
         raise RuntimeError(f"Leo2 native DCP post-load validation failed for: {incomplete[:8]}")
-    print(f"[leo2 bundle] loaded and validated {len(dest)} tensors from {weights_dir}", flush=True)
+    print(
+        f"[leo2 bundle] loaded and validated {len(dest)} tensors from {weights_dir}; "
+        f"ep={expert_parallel_size}, local_expert_tensors={len(expert_slices)}",
+        flush=True,
+    )
 
 
 _BLOCK_CLASSES = ("LeoLayer", "LeoDualLayer", "LeoTripleLayer")
@@ -248,7 +339,8 @@ def _move_non_block_to_device(model: nn.Module, device) -> None:
 def _patch_router_dtype(model: nn.Module) -> None:
     import torch.nn.functional as F
 
-    n = 0
+    router_count = 0
+    final_count = 0
     for name, mod in model.named_modules():
         if name.endswith(".gate.wg") and isinstance(mod, nn.Linear):
 
@@ -258,8 +350,27 @@ def _patch_router_dtype(model: nn.Module) -> None:
                 return F.linear(x, w.to(x.dtype), None if b is None else b.to(x.dtype))
 
             mod.forward = _fwd
-            n += 1
-    print(f"[leo2 bundle] router dtype-follow patch applied to {n} gate.wg modules", flush=True)
+            router_count += 1
+        if type(mod).__name__ == "FinalLayer" and isinstance(getattr(mod, "linear", None), nn.Linear):
+            linear = mod.linear
+
+            def _final_fwd(x, _m=linear):
+                # FinalLayer's LayerNormF32 intentionally emits fp32 while the
+                # uniform-FSDP checkpoint boundary is bf16. Native autocast
+                # performs this cast; hymm's disabled-autocast path does not.
+                return F.linear(
+                    x.to(dtype=_m.weight.dtype),
+                    _m.weight,
+                    _m.bias,
+                )
+
+            linear.forward = _final_fwd
+            final_count += 1
+    print(
+        "[leo2 bundle] dtype-boundary patch applied to "
+        f"{router_count} gate.wg and {final_count} FinalLayer modules",
+        flush=True,
+    )
 
 
 def _make_inference_cache_config(config: Leo2PipelineConfig) -> Any | None:
@@ -371,7 +482,17 @@ class Leo2Bundle(Bundle):
             raise ValueError(f"Leo2's pinned DCP checkpoint requires model_precision='bf16', got {dtype}.")
         model, _model_config = build_model(args, dtype=dtype, device="cpu", initialize_weights=False)
 
-        _dcp_load_into(model, config.ckpt_path, model_dtype=dtype)
+        expert_parallel_rank = int(os.environ.get("RANK", "0")) % config.expert_parallel_size
+        _dcp_load_into(
+            model,
+            config.ckpt_path,
+            model_dtype=dtype,
+            expert_parallel_size=config.expert_parallel_size,
+            expert_parallel_rank=expert_parallel_rank,
+        )
+        for name, parameter in model.named_parameters():
+            if _is_expert_parameter_name(name):
+                parameter._unirl_expert_parallel = config.expert_parallel_size > 1
         model.requires_grad_(False)
         model.eval()
         if config.uniform_bf16:

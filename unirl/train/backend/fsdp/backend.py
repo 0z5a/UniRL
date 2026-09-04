@@ -60,6 +60,22 @@ class FSDPBackend(BaseFSDP2Backend):
 
         model = resolve_trainable_module(bundle, trainable_attr)
         shadow = self._inject_structural(model, lora_cfg, ema_lora_cfg, ema_cfg)
+        expert_parallel_size = int(getattr(fsdp_cfg, "ep_size", 1))
+        ignored_expert_params = {
+            parameter
+            for parameter in model.parameters()
+            if bool(getattr(parameter, "_unirl_expert_parallel", False))
+        }
+        if expert_parallel_size > 1 and not ignored_expert_params:
+            raise ValueError(
+                f"FSDPBackend fsdp_cfg.ep_size={expert_parallel_size} requires the bundle to mark "
+                "local expert parameters with _unirl_expert_parallel; none were found"
+            )
+        if expert_parallel_size == 1 and ignored_expert_params:
+            raise ValueError(
+                "FSDPBackend found expert-parallel parameters, but fsdp_cfg.ep_size=1; "
+                "align the backend EP size with the model bundle"
+            )
 
         fsdp_wrap(
             model,
@@ -75,6 +91,7 @@ class FSDPBackend(BaseFSDP2Backend):
             use_torch_compile=fsdp_cfg.use_torch_compile,
             master_dtype=getattr(fsdp_cfg, "master_dtype", None),
             root_wrap=getattr(fsdp_cfg, "root_wrap", True),
+            ignored_params=ignored_expert_params or None,
         )
 
         load_trainable_weights(

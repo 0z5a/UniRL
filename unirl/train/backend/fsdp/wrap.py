@@ -57,6 +57,7 @@ def fsdp_wrap(
     use_torch_compile: bool = False,
     master_dtype: Optional[str] = None,
     root_wrap: bool = True,
+    ignored_params: Optional[set[nn.Parameter]] = None,
 ) -> None:
     """Apply FSDP2 wrapping to the model.  No handle returned — DTensors"""
     from torch.distributed.fsdp import (
@@ -86,6 +87,24 @@ def fsdp_wrap(
         )
     if cpu_offload:
         fsdp_kwargs["offload_policy"] = CPUOffloadPolicy()
+    if ignored_params:
+        trainable_ignored = [
+            name for name, parameter in model.named_parameters() if parameter in ignored_params and parameter.requires_grad
+        ]
+        require(
+            not trainable_ignored,
+            "fsdp_wrap: ignored_params may contain only frozen parameters; "
+            f"received trainable parameters {trainable_ignored[:8]!r}",
+        )
+        if not torch.cuda.is_available():
+            raise RuntimeError(
+                f"fsdp_wrap: {len(ignored_params)} ignored expert parameters require CUDA placement, "
+                "but torch.cuda.is_available() is false"
+            )
+        target_device = torch.device("cuda", torch.cuda.current_device())
+        for parameter in ignored_params:
+            parameter.data = parameter.data.to(target_device)
+        fsdp_kwargs["ignored_params"] = ignored_params
 
     mesh = _create_device_mesh(fsdp_mode)
     if mesh is not None:

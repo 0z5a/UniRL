@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check eight-rank DeepEP dispatch/combine correctness."""
+"""Check one- or two-node DeepEP dispatch/combine correctness."""
 
 from __future__ import annotations
 
@@ -15,9 +15,13 @@ from deep_ep.version import __version__, __version_suffix__
 def main() -> None:
     rank = int(os.environ["RANK"])
     local_rank = int(os.environ["LOCAL_RANK"])
+    local_world_size = int(os.environ["LOCAL_WORLD_SIZE"])
     world_size = int(os.environ["WORLD_SIZE"])
-    if world_size != 8:
-        raise RuntimeError(f"expected eight ranks, got {world_size}")
+    if local_world_size != 8 or world_size not in (8, 16):
+        raise RuntimeError(
+            "expected 8 local ranks and either 8 or 16 total ranks, "
+            f"got local_world_size={local_world_size}, world_size={world_size}"
+        )
 
     torch.cuda.set_device(local_rank)
     dist.init_process_group("nccl", device_id=torch.device("cuda", local_rank))
@@ -29,13 +33,13 @@ def main() -> None:
         buffer = deep_ep.Buffer(
             group,
             num_nvl_bytes=256 * 1024 * 1024,
-            num_rdma_bytes=0,
+            num_rdma_bytes=(256 * 1024 * 1024 if world_size > local_world_size else 0),
             explicitly_destroy=True,
         )
 
-        tokens = 32
+        tokens = 64
         hidden = 128
-        num_experts = world_size
+        num_experts = 64
         generator = torch.Generator(device="cuda")
         generator.manual_seed(20260903 + rank)
         x = torch.randn(
@@ -55,8 +59,12 @@ def main() -> None:
             is_token_in_rank,
             _,
         ) = buffer.get_dispatch_layout(topk_idx, num_experts)
-        if num_tokens_per_rdma_rank is not None:
+        if world_size == local_world_size and num_tokens_per_rdma_rank is not None:
             raise RuntimeError("expected an intranode layout with no RDMA-rank counts")
+        if world_size > local_world_size and num_tokens_per_rdma_rank is None:
+            raise RuntimeError(
+                f"expected RDMA-rank counts for world_size={world_size}, local_world_size={local_world_size}"
+            )
 
         recv_x, _, _, recv_counts, handle, _ = buffer.dispatch(
             x=x,
@@ -101,11 +109,12 @@ def main() -> None:
         if rank == 0:
             print(
                 {
-                    "status": "DEEPEP_8RANK_ROUNDTRIP_OK",
+                    "status": f"DEEPEP_{world_size}RANK_ROUNDTRIP_OK",
                     "deep_ep": f"{__version__}+{__version_suffix__}",
                     "torch": torch.__version__,
                     "cuda": torch.version.cuda,
                     "world_size": world_size,
+                    "local_world_size": local_world_size,
                     "tokens_per_rank": tokens,
                     "hidden": hidden,
                     "num_experts": num_experts,

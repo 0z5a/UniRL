@@ -87,6 +87,39 @@ class Leo2Pipeline(Pipeline):
             int(sampling_spec.width) // LEO2_VAE_SPATIAL,
         )
 
+    @classmethod
+    def _latent_shape_from_conditions(cls, conditions: Any) -> Tuple[int, ...]:
+        """Return the VAE shape for hymm's effective (possibly snapped) media bucket."""
+        blobs = getattr(conditions, "hymm", None)
+        require(isinstance(blobs, list) and blobs, "Leo2Pipeline: conditions.hymm must be a non-empty list")
+        geometries = {(tuple(blob["image_size"]), int(blob["video_duration"])) for blob in blobs}
+        require(
+            len(geometries) == 1,
+            f"Leo2Pipeline: one forward requires one effective media geometry, got {sorted(geometries)!r}",
+        )
+        (height, width), frames = next(iter(geometries))
+        require(
+            type(height) is int
+            and type(width) is int
+            and height > 0
+            and width > 0
+            and height % LEO2_VAE_SPATIAL == 0
+            and width % LEO2_VAE_SPATIAL == 0,
+            "Leo2Pipeline: effective image_size must contain positive dimensions divisible by "
+            f"{LEO2_VAE_SPATIAL}, got {(height, width)!r}",
+        )
+        require(
+            frames > 0 and (frames - 1) % LEO2_VAE_TEMPORAL == 0,
+            "Leo2Pipeline: effective video_duration must satisfy "
+            f"(frames - 1) % {LEO2_VAE_TEMPORAL} == 0, got {frames!r}",
+        )
+        return (
+            LEO2_VAE_LATENT_CHANNELS,
+            (frames - 1) // LEO2_VAE_TEMPORAL + 1,
+            height // LEO2_VAE_SPATIAL,
+            width // LEO2_VAE_SPATIAL,
+        )
+
     def _debug_hymm_sample(self, prompt: str, params, seed: int) -> None:
         """Dump a native hymm sample when ``LEO2_DEBUG_HYMM_SAMPLE=1``."""
         from .vae import _maybe_dump_frames
@@ -147,7 +180,7 @@ class Leo2Pipeline(Pipeline):
             self._debug_hymm_sample(str(list(texts.texts)[0]), params, base_seed)
 
         recipe = NoiseRecipe.from_sample(sample)
-        shape = self.latent_shape(model_config=None, sampling_spec=params)
+        shape = self._latent_shape_from_conditions(conditions)
         video_noise = recipe.resolve(device=self.bundle.device, latent_shape=shape)
         require(
             video_noise is not None,
