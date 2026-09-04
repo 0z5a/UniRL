@@ -1,0 +1,53 @@
+{
+  "limit": 256,
+  "output": "/root/UniRL/examples/diffusion/leo2/data/vid_prompt_benchmark/vid_prompt_train_first256.csv",
+  "output_sha256": "c8d41ceaa7d0b3878e5694093917b1c8fc0b49eeb8c0a112cbe7ae1fc7fcb206",
+  "schema_version": 1,
+  "seed_base": 42000,
+  "shard_files": [
+    {
+      "path": "/root/UniRL/examples/diffusion/leo2/data/vid_prompt_benchmark/vid_prompt_train_first256.shard00-of-08.csv",
+      "rows": 32,
+      "sha256": "45d7058e775560d85b4fb4aaaa4cae310205280dd7a0cd6dfafd5dc36b44d9e3"
+    },
+    {
+      "path": "/root/UniRL/examples/diffusion/leo2/data/vid_prompt_benchmark/vid_prompt_train_first256.shard01-of-08.csv",
+      "rows": 32,
+      "sha256": "424b4d4bab6404ad365803dff63abf559d94be88bd5361ec55c1afe650c8793b"
+    },
+    {
+      "path": "/root/UniRL/examples/diffusion/leo2/data/vid_prompt_benchmark/vid_prompt_train_first256.shard02-of-08.csv",
+      "rows": 32,
+      "sha256": "edebf7ac2b327223e318103ad42e2a9b19c5d9ae1b024e336dcde5d2c3e6d1c4"
+    },
+    {
+      "path": "/root/UniRL/examples/diffusion/leo2/data/vid_prompt_benchmark/vid_prompt_train_first256.shard03-of-08.csv",
+      "rows": 32,
+      "sha256": "decd12faccf7617f7afa5991372f8050b2bd49eaf744a2b8a73d1141c4a0a1f5"
+    },
+    {
+      "path": "/root/UniRL/examples/diffusion/leo2/data/vid_prompt_benchmark/vid_prompt_train_first256.shard04-of-08.csv",
+      "rows": 32,
+      "sha256": "c816ccb07473b2a3f8ed18798ee4f14ef847db5d42eb93e3ca7ad17a16bf91ef"
+    },
+    {
+      "path": "/root/UniRL/examples/diffusion/leo2/data/vid_prompt_benchmark/vid_prompt_train_first256.shard05-of-08.csv",
+      "rows": 32,
+      "sha256": "23c272a05ac14c14d0136c86f2659590920079fe66607730ef84c1a8786e4a82"
+    },
+    {
+      "path": "/root/UniRL/examples/diffusion/leo2/data/vid_prompt_benchmark/vid_prompt_train_first256.shard06-of-08.csv",
+      "rows": 32,
+      "sha256": "3bcf9e2342cd1b85d1198fcbf7c96a6027c3a2b0b8823d35810fff4bedbb9855"
+    },
+    {
+      "path": "/root/UniRL/examples/diffusion/leo2/data/vid_prompt_benchmark/vid_prompt_train_first256.shard07-of-08.csv",
+      "rows": 32,
+      "sha256": "df541c5b6abcc597d739d59b6707045097c79a9c59573487c91f9e635360de3e"
+    }
+  ],
+  "sharding": "round_robin_by_global_index",
+  "shards": 8,
+  "source": "/root/Flow-Factory/dataset/vid_prompt/train.txt",
+  "source_sha256": "8572f9cc51bce3976ebf2e565bdd4d488e022690919c652fa52c3ef531738c2f"
+}

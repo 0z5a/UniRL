@@ -1,0 +1,29 @@
+{
+  "case_name": "node07_cp2_shard8_ep1",
+  "checkpoint_load_seconds_max": 92.83,
+  "complete": true,
+  "empty_videos": [],
+  "exit_code": 0,
+  "expected": 32,
+  "generation_rank_observations": 64,
+  "generation_rank_seconds_mean": 677.06546875,
+  "gpu_memory_peak_mib": 79565,
+  "gpu_observations": 37664,
+  "gpu_util_gt90_fraction": 0.9915569243840272,
+  "gpu_util_mean_pct": 99.15115229396771,
+  "gpu_util_min_pct": 0,
+  "hostname": "TENCENT64.site",
+  "process_wall_seconds": 5575,
+  "result_rows": 32,
+  "schema_version": 1,
+  "throughput_videos_per_hour_including_load": 20.663677130044842,
+  "topology": {
+    "cp": 2,
+    "dp_shard": 8,
+    "ep": 1,
+    "tp_effective": 1,
+    "tp_requested": 1
+  },
+  "unique_result_indices": 32,
+  "video_count": 32
+}

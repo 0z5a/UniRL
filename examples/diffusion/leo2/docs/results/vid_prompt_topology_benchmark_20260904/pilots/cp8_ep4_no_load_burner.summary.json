@@ -1,0 +1,29 @@
+{
+  "case_name": "cp8_ep4_no_load_burner",
+  "checkpoint_load_seconds_max": null,
+  "complete": false,
+  "empty_videos": [],
+  "exit_code": 1,
+  "expected": 1,
+  "generation_rank_observations": 0,
+  "generation_rank_seconds_mean": null,
+  "gpu_memory_peak_mib": 97275,
+  "gpu_observations": 440,
+  "gpu_util_gt90_fraction": 0.26136363636363635,
+  "gpu_util_mean_pct": 26.79090909090909,
+  "gpu_util_min_pct": 0,
+  "hostname": "TENCENT64.site",
+  "process_wall_seconds": 80,
+  "result_rows": 0,
+  "schema_version": 1,
+  "throughput_videos_per_hour_including_load": 0.0,
+  "topology": {
+    "cp": 8,
+    "dp_shard": 8,
+    "ep": 4,
+    "tp_effective": 1,
+    "tp_requested": 1
+  },
+  "unique_result_indices": 0,
+  "video_count": 0
+}

@@ -1,0 +1,29 @@
+{
+  "case_name": "cp4_ep1",
+  "checkpoint_load_seconds_max": 106.46,
+  "complete": true,
+  "empty_videos": [],
+  "exit_code": 0,
+  "expected": 4,
+  "generation_rank_observations": 16,
+  "generation_rank_seconds_mean": 362.076875,
+  "gpu_memory_peak_mib": 85569,
+  "gpu_observations": 5976,
+  "gpu_util_gt90_fraction": 0.8266398929049531,
+  "gpu_util_mean_pct": 83.00836680053547,
+  "gpu_util_min_pct": 0,
+  "hostname": "TENCENT64.site",
+  "process_wall_seconds": 888,
+  "result_rows": 4,
+  "schema_version": 1,
+  "throughput_videos_per_hour_including_load": 16.216216216216218,
+  "topology": {
+    "cp": 4,
+    "dp_shard": 8,
+    "ep": 1,
+    "tp_effective": 1,
+    "tp_requested": 1
+  },
+  "unique_result_indices": 4,
+  "video_count": 4
+}
