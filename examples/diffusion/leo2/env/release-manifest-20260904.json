@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "release_id": "leo2-inference-py312-torch271-cu129-20260904-overlay",
+  "scope": "relocatable native Leo2 inference runtime plus current offline UniRL source overlay",
+  "dependency_archive": {
+    "name": "leo2-runtime-py312-torch271-cu129-20260903.tar.gz",
+    "bytes": 2502296254,
+    "sha256": "ddc1fd7f587a05799a1f5d81bb530b35c1591f380c540b69409a5adf8a193cf7",
+    "historical_manifest": "runtime-manifest-20260903.json"
+  },
+  "code_overlay": {
+    "name": "unirl-0.1.0-py3-none-any.whl",
+    "bytes": 3604879,
+    "sha256": "f360a1a2269539047b348d44b44e2a6606e9c808dc2163808b26cc8638421951",
+    "git_head": "bbd4f8478be143e3427ae1ab522654aa4a80917d",
+    "git_dirty_at_build": false,
+    "installed_unirl_source_files": 1214,
+    "installed_unirl_tree_sha256": "dd8d64853ffc998b840e198ba8a301cb2f33e69f74eb9913cf5cfba4e5997726",
+    "checkout_unirl_source_files": 1249,
+    "checkout_unirl_tree_sha256": "0d59d8e5044a6492aac7d9e0b3cd559159af43ec95281f66f7ce799de3cb144f",
+    "leo2_source_files": 616,
+    "leo2_tree_sha256": "b1751e2d3bf38e36a3f6266596e0b9cd45d2958a47fe59596595c218a92144d6",
+    "checkout_leo2_source_files": 617,
+    "checkout_leo2_tree_sha256": "a18ac463bae5d799613ec3a21a4516835a2b1a4e9e756723136998203b044e9b",
+    "native_launcher_path": "examples/diffusion/leo2/scripts/native_t2v.sh",
+    "native_launcher_sha256": "b79ab8f499e9a246713bf1fc29a73cf97ab7c6d83ee4749a433cca5db5155b9b",
+    "native_smoke_path": "examples/diffusion/leo2/data/native_smoke.csv",
+    "native_smoke_sha256": "05e04334e0dad8bf34d19c18ed7977296a3874b797a26723beea906d3ea6926b"
+  },
+  "compatibility": {
+    "python": "3.12.12",
+    "torch": "2.7.1",
+    "cuda_runtime": "12.9",
+    "target_gpu": "Hopper sm90",
+    "v1_9_py313_torch210_compatible": false
+  },
+  "artifact_profile": {
+    "name": "leo2-a12b-480p-iter0063300-native-dcp",
+    "manifest": "artifacts.yaml",
+    "sha256": "c0463cd1e0108b08fceb8e4ed2b669c80d2ff9905b431c453d123b5d64faef06",
+    "checkpoint": "iter0063300",
+    "historical_local_checkpoint_source": "/root/zuhao/HYV2.0/ckpts/leo2_moe_a12b_480p/iter_0063300_torch/weights",
+    "historical_local_assets_source": "/root/zuhao/HYV2.0/assets/hymm_ar_assets"
+  },
+  "verification": {
+    "fresh_prefix_install": "PASS",
+    "second_prefix_relocation": "PASS",
+    "filesystem_elf_count": 766,
+    "absolute_symlinks": 0,
+    "broken_or_escaping_symlinks": 0,
+    "fa2_fa3_dense_max_abs": 0.0,
+    "fa2_fa3_varlen_max_abs": 0.0,
+    "deep_ep_8rank_first_max_abs": 0.0,
+    "deep_ep_8rank_cached_max_abs": 0.0,
+    "asset_link_and_doctor": "PASS"
+  },
+  "replicas": [
+    "/apdcephfs_fsgm3/share_305110755/hunyuan/bowenping/envs/leo2",
+    "/apdcephfs_zwfy8/share_305110755/hunyuan/bowenping/envs/leo2"
+  ]
+}
