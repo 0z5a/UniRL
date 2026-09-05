@@ -215,10 +215,11 @@ class BaseTrainer:
         sample: Sample,
         *,
         rollout_id: int,
+        upload_media: bool = True,
     ) -> None:
         """Upload media previews (if due this rollout) then free decoded payloads."""
         wb = self.wandb_logger
-        if wb is not None and wb.should_log_media(rollout_id):
+        if upload_media and wb is not None and wb.should_log_media(rollout_id):
             self._upload_media_previews(sample, rollout_id + 1, prefix="rollout", step_key="rollout/step")
 
         for part in sample.gen_parts():

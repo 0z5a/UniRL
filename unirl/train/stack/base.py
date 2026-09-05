@@ -55,13 +55,14 @@ def _aggregate_update_results(results: List["TrainStepResult"]) -> "TrainStepRes
     )
 
 
-def _align_track_to_model(part: Part, *, device: torch.device) -> None:
-    """Move a track's training inputs onto the model's device — SGLang returns them"""
-    if part.segment is not None:
-        part.segment = part.segment.to_device(device)
-    part.conditions = {k: _move_value(v, device) for k, v in part.conditions.items()}
-    if part.advantages is not None:
-        part.advantages = part.advantages.to(device=device)
+def _align_track_to_model(part: Part, *, device: torch.device) -> Part:
+    """Build a device-local track without pinning GPU tensors in the RPC input tree."""
+    return replace(
+        part,
+        segment=part.segment.to_device(device) if part.segment is not None else None,
+        conditions={k: _move_value(v, device) for k, v in part.conditions.items()},
+        advantages=part.advantages.to(device=device) if part.advantages is not None else None,
+    )
 
 
 class TrainStack(Remote):
@@ -301,7 +302,7 @@ class TrainStack(Remote):
                 f"{type(self).__name__}.eval_track: {type(self.algorithm).__name__} does not "
                 "expose evaluate_loss(conditions=..., segment=...) -> (loss_sum, weight)."
             )
-        self._align_track_inputs(part)
+        part = self._align_track_inputs(part)
         model = self.fsdp_backend.trainable_module()
         was_training = model.training
         model.eval()
@@ -336,7 +337,8 @@ class TrainStack(Remote):
         training_progress: float,
     ) -> TrainStepResult:
         """Driver-callable: arrange → prepare → run updates → on_rollout_end."""
-        window = parts if isinstance(parts, tuple) else (parts,)
+        window = list(parts) if isinstance(parts, tuple) else [parts]
+        del parts
         if not window:
             raise ValueError(f"{type(self).__name__}.train_track: empty accumulation window.")
         if len(window) > 1 and self.num_updates_per_batch > 1:
@@ -347,7 +349,6 @@ class TrainStack(Remote):
             )
         arranged = []
         for part in window:
-            self._align_track_inputs(part)
             arranged.append(
                 self.micro_planner.arrange(
                     part,
@@ -355,12 +356,14 @@ class TrainStack(Remote):
                     micro_batch_size=self.micro_batch_size,
                 )
             )
+        window.clear()
         from unirl.utils.profiling import profile_mode
 
         profiler = self._train_step_profiler() if profile_mode() == "train" else None
         with profiler.record("train_track") if profiler is not None else nullcontext():
             if len(arranged) == 1:
                 part, plans = arranged[0]
+                part = self._align_track_inputs(part)
                 part = self._prepare_for_training(part, plans=plans)
                 result = self._run_updates(part, plans=plans, training_progress=float(training_progress))
             else:
@@ -385,6 +388,7 @@ class TrainStack(Remote):
         results: List[TrainStepResult] = []
         prior_backward = False
         for w, (part, plans) in enumerate(arranged):
+            part = self._align_track_inputs(part)
             part = self._prepare_for_training(part, plans=plans)
             (micros,) = plans  # window parts are single-update (validated in train_track)
             result = self._run_update(
@@ -398,6 +402,7 @@ class TrainStack(Remote):
             )
             prior_backward = prior_backward or result.has_backward
             results.append(result)
+            del part, plans
         # The window is one optimizer step: its grad_norm is the stepping call's.
         return replace(_aggregate_update_results(results), grad_norm=results[-1].grad_norm)
 
@@ -446,10 +451,10 @@ class TrainStack(Remote):
         )
         return replace(aggregated, per_update=per_update)
 
-    def _align_track_inputs(self, part: Part) -> None:
+    def _align_track_inputs(self, part: Part) -> Part:
         """Move the track onto the model's device; see :func:`_align_track_to_model`."""
         device = next(self.fsdp_backend.trainable_module().parameters()).device
-        _align_track_to_model(part, device=device)
+        return _align_track_to_model(part, device=device)
 
     def _current_lr(self) -> float:
         optimizer = self.fsdp_backend.optimizer

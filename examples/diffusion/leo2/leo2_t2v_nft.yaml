@@ -4,6 +4,9 @@
 num_devices: 8
 # One prompt is one reward group; each group forks samples_per_prompt videos.
 batch_size: 48
+# Bound decoded-video and condition transport to four complete prompt groups
+# (64 videos) before reward scoring and media release.
+rollout_chunk_prompts: 4
 num_rollouts: 10000
 adv_use_global_std: true
 

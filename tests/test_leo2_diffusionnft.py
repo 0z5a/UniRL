@@ -18,8 +18,13 @@ from unirl.models.leo2.conditions import Leo2Conditions
 from unirl.models.leo2.diffusion import Leo2DiffusionStage
 from unirl.models.leo2.pipeline import Leo2Pipeline
 from unirl.models.leo2.text_embed import Leo2CondStage, _to_transport_tree
+from unirl.distributed.group.remote import RankInfo
+from unirl.rollout.engine.trainside.engine import TrainsideRolloutEngine
+from unirl.train.stack.base import TrainStack, TrainStepResult
+from unirl.trainer.diffusion import _compute_chunked_advantages, _resolve_rollout_chunk_prompts
 from unirl.types.conditions import TextEmbedCondition
 from unirl.types.primitives import Texts
+from unirl.types.sample import Part, Sample
 from unirl.types.segments.latent import LatentSegment
 
 
@@ -252,6 +257,7 @@ def test_leo2_nft_recipe_matches_requested_contract() -> None:
     assert config.backend.ema_lora_cfg.alpha == 128
     assert config.backend.optimizer_cfg.learning_rate == pytest.approx(3e-4)
     assert config.batch_size == 48
+    assert config.rollout_chunk_prompts == 4
     assert config.sampling.num_inference_steps == 10
     assert config.sampling.guidance_scale == pytest.approx(1.0)
     assert (config.sampling.height, config.sampling.width, config.sampling.num_frames) == (464, 848, 17)
@@ -274,6 +280,112 @@ def test_leo2_nft_recipe_matches_requested_contract() -> None:
     assert config.bundle.config.inference_cache_threshold == pytest.approx(0.1)
     assert config.backend.fsdp_cfg.sp_size == 2
     assert config.backend.fsdp_cfg.ep_size == 8
+
+
+def test_chunked_global_advantages_match_full_batch() -> None:
+    branch = 4
+    rewards = torch.tensor(
+        [0.0, 1.0, 2.0, 3.0, 2.0, 3.0, 4.0, 5.0, 1.0, 4.0, 2.0, 6.0, 8.0, 5.0, 7.0, 9.0]
+    )
+    sample_ids = [f"group-{group}/{sample}" for group in range(4) for sample in range(branch)]
+    full = Part(sample_ids=sample_ids, rewards=rewards)
+    expected = full.compute_advantages(normalize=True, use_global_std=True)
+    chunks = [
+        Part(sample_ids=sample_ids[: 2 * branch], rewards=rewards[: 2 * branch]),
+        Part(sample_ids=sample_ids[2 * branch :], rewards=rewards[2 * branch :]),
+    ]
+
+    actual = _compute_chunked_advantages(
+        chunks,
+        use_global_std=True,
+        min_group_std=0.0,
+    )
+
+    torch.testing.assert_close(
+        torch.cat([part.advantages for part in actual]),
+        expected.advantages,
+    )
+
+
+@pytest.mark.parametrize(
+    ("value", "exception", "message"),
+    [
+        (True, TypeError, "int or None"),
+        (0, ValueError, r"\[1, batch_size=48\]"),
+        (5, ValueError, "must be divisible"),
+        (2, ValueError, "rollout dp_size=4"),
+    ],
+)
+def test_rollout_chunk_prompt_validation_fails_fast(
+    value: object,
+    exception: type[Exception],
+    message: str,
+) -> None:
+    with pytest.raises(exception, match=message):
+        _resolve_rollout_chunk_prompts(
+            value,
+            batch_size=48,
+            samples_per_prompt=16,
+            rollout_dp_size=4,
+            reward_dp_size=8,
+            train_dp_size=4,
+            num_updates_per_batch=1,
+        )
+
+
+def test_trainside_rollout_transports_only_dp_collect_head() -> None:
+    sample = Sample(parts=[])
+
+    non_head = object.__new__(TrainsideRolloutEngine)
+    non_head.rank_info = RankInfo(sp_rank=1, sp_size=2)
+    non_head._generate_locked = MethodType(lambda self, value: value, non_head)
+    assert non_head.generate(sample) is None
+
+    head = object.__new__(TrainsideRolloutEngine)
+    head.rank_info = RankInfo(sp_rank=0, sp_size=2)
+    head._generate_locked = MethodType(lambda self, value: value, head)
+    assert head.generate(sample) is sample
+
+
+def test_train_stack_chunk_window_steps_only_on_final_part() -> None:
+    stack = object.__new__(TrainStack)
+    stack.fsdp_backend = SimpleNamespace(zero_grad=lambda: None)
+    stack._align_track_inputs = MethodType(lambda self, part: part, stack)
+    stack._prepare_for_training = MethodType(lambda self, part, plans: part, stack)
+    step_flags: list[bool] = []
+
+    def run_update(
+        self,
+        part,
+        *,
+        micros,
+        training_progress,
+        zero_grad,
+        do_optimizer_step,
+        loss_weight,
+        prior_backward,
+    ):
+        step_flags.append(do_optimizer_step)
+        return TrainStepResult(
+            loss=1.0,
+            grad_norm=1.0 if do_optimizer_step else 0.0,
+            lr=3e-4,
+            has_backward=True,
+            micros=[],
+            metrics={},
+            optimizer_updates=int(do_optimizer_step),
+        )
+
+    stack._run_update = MethodType(run_update, stack)
+    part = Part(sample_ids=["group/0"], advantages=torch.ones(1))
+    result = stack._run_window(
+        [(part, (((0, 1),),)), (part, (((0, 1),),))],
+        training_progress=0.0,
+    )
+
+    assert step_flags == [False, True]
+    assert result.optimizer_updates == 1
+    assert result.grad_norm == pytest.approx(1.0)
 
 
 def test_leo2_first_block_cache_config_uses_requested_threshold() -> None:

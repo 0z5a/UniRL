@@ -1,4 +1,5 @@
 import dataclasses
+import gc
 import inspect
 import logging
 import os
@@ -17,6 +18,7 @@ from unirl.train.stack import TrainStepResult
 from unirl.trainer.base import BaseTrainer, build_sampling_dict, prepare_input_sample
 from unirl.trainer.eval_suites import EvalRewardSuite, build_eval_suites
 from unirl.trainer.hydra import parse_hydra_cfg, remote_hydra
+from unirl.types.advantages import finite_mean_std
 from unirl.types.primitives import Texts, primitive_modality_key
 from unirl.types.sample import Part, Sample
 from unirl.types.sampling import BaseSamplingParams, total_samples_per_prompt
@@ -98,6 +100,103 @@ def _restore_reward_rows(sample: Sample, scored_rows: Sample) -> Sample:
         component_rewards=scored.component_rewards,
     )
     return sample.replace_frontier(restored)
+
+
+def _resolve_rollout_chunk_prompts(
+    value: Optional[int],
+    *,
+    batch_size: int,
+    samples_per_prompt: int,
+    rollout_dp_size: int,
+    reward_dp_size: int,
+    train_dp_size: int,
+    num_updates_per_batch: int,
+) -> int:
+    """Validate a prompt chunk that remains whole across rollout, reward, and training DP."""
+    if value is None:
+        return batch_size
+    if type(value) is not int:
+        raise TypeError(
+            "rollout_chunk_prompts must be int or None, "
+            f"got {type(value).__name__}: {value!r}"
+        )
+    if value < 1 or value > batch_size:
+        raise ValueError(
+            f"rollout_chunk_prompts must be in [1, batch_size={batch_size}], got {value}"
+        )
+    if batch_size % value:
+        raise ValueError(
+            f"batch_size={batch_size} must be divisible by rollout_chunk_prompts={value}; "
+            "equal chunks are required for exact loss weighting"
+        )
+    _validate_prompt_tree_dp_geometry(
+        batch_size=value,
+        samples_per_prompt=samples_per_prompt,
+        rollout_dp_size=rollout_dp_size,
+        reward_dp_size=reward_dp_size,
+        context="rollout chunk",
+    )
+    generated = value * samples_per_prompt
+    if generated % train_dp_size:
+        raise ValueError(
+            f"rollout_chunk_prompts({value}) * samples_per_prompt({samples_per_prompt}) = "
+            f"{generated} must be divisible by train dp_size={train_dp_size}"
+        )
+    if value < batch_size and num_updates_per_batch != 1:
+        raise ValueError(
+            f"chunked rollout requires stack.num_updates_per_batch == 1, got {num_updates_per_batch}"
+        )
+    return value
+
+
+def _compute_chunked_advantages(
+    parts: Sequence[Part],
+    *,
+    use_global_std: bool,
+    min_group_std: float,
+    eps: float = 1e-8,
+) -> List[Part]:
+    """Compute advantages over complete prompt-group chunks without concatenating heavy tracks."""
+    if not parts:
+        raise ValueError("_compute_chunked_advantages requires at least one Part")
+    seen_groups: Set[str] = set()
+    rewards: List[torch.Tensor] = []
+    for chunk_index, part in enumerate(parts):
+        if part.rewards is None:
+            raise ValueError(f"chunk {chunk_index} has no rewards")
+        group_ids = set(part.group_ids)
+        overlap = seen_groups & group_ids
+        if overlap:
+            raise ValueError(
+                "prompt reward groups must not cross rollout chunks; "
+                f"chunk {chunk_index} repeats groups {sorted(overlap)[:3]}"
+            )
+        seen_groups.update(group_ids)
+        rewards.append(part.rewards.to(torch.float32))
+
+    if not use_global_std:
+        return [
+            part.compute_advantages(
+                normalize=True,
+                use_global_std=False,
+                min_group_std=min_group_std,
+            )
+            for part in parts
+        ]
+
+    _, global_std = finite_mean_std(torch.cat(rewards))
+    output: List[Part] = []
+    for part in parts:
+        centered = part.compute_advantages(normalize=False)
+        if centered.advantages is None:
+            raise RuntimeError("Part.compute_advantages returned no advantages for a rewarded rollout chunk")
+        output.append(
+            dataclasses.replace(
+                centered,
+                advantages=centered.advantages / (global_std + eps),
+            )
+        )
+    return output
 
 
 def _validate_prompt_tree_dp_geometry(
@@ -297,6 +396,7 @@ class DiffusionTrainer(BaseTrainer):
         adv_use_global_std: bool = False,
         adv_min_group_std: float = 0.0,
         accumulate_rollouts: int = 1,
+        rollout_chunk_prompts: Optional[int] = None,
         eval_interval: int = 0,
         eval_num_prompts: int = 64,
         eval_samples_per_prompt: int = 4,
@@ -443,6 +543,20 @@ class DiffusionTrainer(BaseTrainer):
         self._validate_accumulation(stack_cfg)
 
         self._validate_residency_config()
+        self.rollout_chunk_prompts = _resolve_rollout_chunk_prompts(
+            rollout_chunk_prompts,
+            batch_size=int(batch_size),
+            samples_per_prompt=total_samples_per_prompt(self.sampling_params),
+            rollout_dp_size=int(self.rollout.dp_size),
+            reward_dp_size=int(self.reward.dp_size) if self.reward is not None else 1,
+            train_dp_size=int(self.stack.dp_size),
+            num_updates_per_batch=int(stack_cfg.get("num_updates_per_batch", 1)),
+        )
+        if self.rollout_chunk_prompts < int(batch_size) and not self._rollout_is_trainside:
+            raise ValueError(
+                "rollout_chunk_prompts smaller than batch_size is currently supported only by "
+                "the trainside rollout engine; external engines may discard synced weights between chunks"
+            )
         _validate_diffusion_dp_geometry(
             batch_size=int(batch_size),
             samples_per_prompt=total_samples_per_prompt(self.sampling_params),
@@ -764,11 +878,28 @@ class DiffusionTrainer(BaseTrainer):
     ) -> Tuple[Sample, float]:
         """One ``rollout → reward → advantage`` pass; training happens per window."""
         sample = self._generate_for_training(sample, sync_weights=sync_weights)
+        return self._score_and_finalize_generated(
+            sample,
+            rollout_id=rollout_id,
+            compute_advantages=True,
+            upload_media=True,
+        )
+
+    def _score_and_finalize_generated(
+        self,
+        sample: Sample,
+        *,
+        rollout_id: int,
+        compute_advantages: bool,
+        upload_media: bool,
+    ) -> Tuple[Sample, float]:
+        """Score one generated chunk, hydrate small results, then release decoded media."""
         # With no reward configured, ``part.rewards`` stays None and the block below no-ops.
         if self.reward is not None:
             with self._reward_phase():
                 scored_rows = self.reward.score_and_attach(_flatten_reward_rows(sample))
                 sample = _restore_reward_rows(sample, scored_rows)
+                del scored_rows
 
         part = sample.parts[-1]
         mean_reward = 0.0
@@ -777,7 +908,7 @@ class DiffusionTrainer(BaseTrainer):
             if isinstance(part.component_rewards, dict):
                 part.component_rewards = {name: hydrate(value) for name, value in part.component_rewards.items()}
             mean_reward = float(part.rewards.to(torch.float32).mean().item())
-            if self._algo_requires_advantages:
+            if compute_advantages and self._algo_requires_advantages:
                 part = part.compute_advantages(
                     normalize=True,
                     use_global_std=self._adv_use_global_std,
@@ -793,8 +924,72 @@ class DiffusionTrainer(BaseTrainer):
             if any(md for md in root_md):
                 gen_part.metadata = [dict(md) if md else {} for md in root_md]
 
-        self._drop_decoded(sample, rollout_id=rollout_id)
+        self._drop_decoded(sample, rollout_id=rollout_id, upload_media=upload_media)
         return sample, mean_reward
+
+    def _chunked_rollout_and_score(
+        self,
+        inputs: Sample,
+        *,
+        sync_weights: bool,
+        rollout_id: int,
+    ) -> Tuple[List[Part], Sample, float]:
+        """Generate and score bounded complete-group chunks, retaining only train inputs."""
+        chunk_prompts = self.rollout_chunk_prompts
+        if chunk_prompts >= self.batch_size:
+            raise RuntimeError(
+                "_chunked_rollout_and_score requires rollout_chunk_prompts < batch_size, "
+                f"got {chunk_prompts} and {self.batch_size}"
+            )
+
+        num_chunks = self.batch_size // chunk_prompts
+        train_parts: List[Part] = []
+        last_sample: Optional[Sample] = None
+        for chunk_index, start in enumerate(range(0, self.batch_size, chunk_prompts)):
+            chunk_t0 = time.perf_counter()
+            request = self._build_request_sample(
+                inputs.slice(start, start + chunk_prompts),
+                rollout_id,
+            )
+            generated = self._generate_for_training(
+                request,
+                sync_weights=sync_weights and chunk_index == 0,
+            )
+            scored, _ = self._score_and_finalize_generated(
+                generated,
+                rollout_id=rollout_id,
+                compute_advantages=False,
+                upload_media=chunk_index == 0,
+            )
+            train_parts.append(scored.parts[-1])
+            last_sample = scored
+            del request, generated, scored
+            gc.collect()
+            logger.info(
+                "lifecycle rollout %d chunk %d/%d complete %.3fs",
+                rollout_id,
+                chunk_index + 1,
+                num_chunks,
+                time.perf_counter() - chunk_t0,
+            )
+
+        if last_sample is None:
+            raise RuntimeError("chunked rollout produced no samples")
+        if self._algo_requires_advantages:
+            train_parts = _compute_chunked_advantages(
+                train_parts,
+                use_global_std=self._adv_use_global_std,
+                min_group_std=self._adv_min_group_std,
+            )
+        last_sample = last_sample.replace_frontier(train_parts[-1])
+
+        reward_tensors = [part.rewards for part in train_parts if part.rewards is not None]
+        mean_reward = (
+            float(torch.cat(reward_tensors).to(torch.float32).mean().item())
+            if len(reward_tensors) == len(train_parts)
+            else 0.0
+        )
+        return train_parts, last_sample, mean_reward
 
     def train_step(
         self,
@@ -807,17 +1002,31 @@ class DiffusionTrainer(BaseTrainer):
         """One accumulation window: rollouts → one optimizer step → one log point."""
         t0 = time.perf_counter()
         samples: List[Sample] = []
+        train_parts: List[Part] = []
         window_rewards: List[float] = []
         for rollout_id in window_ids:
             inputs = self.data_source.get_samples(self.batch_size)
-            sample = self._build_request_sample(inputs, rollout_id)
             sync_weights = (rollout_id > 0 and rollout_id % weight_sync_interval == 0) or (rollout_id == force_sync_at)
-            sample, mean_reward = self._rollout_and_score(sample, sync_weights=sync_weights, rollout_id=rollout_id)
+            if self.rollout_chunk_prompts < self.batch_size:
+                rollout_parts, sample, mean_reward = self._chunked_rollout_and_score(
+                    inputs,
+                    sync_weights=sync_weights,
+                    rollout_id=rollout_id,
+                )
+                train_parts.extend(rollout_parts)
+            else:
+                request = self._build_request_sample(inputs, rollout_id)
+                sample, mean_reward = self._rollout_and_score(
+                    request,
+                    sync_weights=sync_weights,
+                    rollout_id=rollout_id,
+                )
+                train_parts.append(sample.parts[-1])
             samples.append(sample)
             window_rewards.append(mean_reward)
         final_id = window_ids[-1]
         training_progress = final_id / max(1, num_rollouts - 1)
-        parts = tuple(sample.parts[-1] for sample in samples)
+        parts = tuple(train_parts)
         _track_t0 = time.perf_counter()
         result = self.stack.train_track(
             parts if len(parts) > 1 else parts[0], training_progress=float(training_progress)

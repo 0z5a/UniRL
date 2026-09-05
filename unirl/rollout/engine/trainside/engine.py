@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import threading
 from typing import List, Optional, Sequence, Union
 
@@ -60,9 +61,19 @@ class TrainsideRolloutEngine(BaseRolloutEngine):
         self._shutdown_complete = False
 
     @distributed(dispatch_mode=Dispatch.DP_SCATTER)
-    def generate(self, sample: Sample) -> Sample:
-        """Generate one whole DP shard synchronously."""
-        return self._generate_locked(sample)
+    def generate(self, sample: Sample) -> Optional[Sample]:
+        """Generate one DP shard; only its collect head transports the heavy result."""
+        result = self._generate_locked(sample)
+        rank_info = getattr(self, "rank_info", None)
+        if rank_info is not None and (
+            rank_info.tp_rank != 0
+            or rank_info.pp_rank != rank_info.pp_size - 1
+            or rank_info.sp_rank != 0
+        ):
+            del result
+            gc.collect()
+            return None
+        return result
 
     def _generate_locked(self, sample: Sample) -> Sample:
         with self._generate_lock:
