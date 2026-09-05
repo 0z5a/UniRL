@@ -27,9 +27,12 @@ bundle:
     logprob_precision: fp32
     ckpt_path: ${oc.env:LEO2_CKPT_DIR}
     assets_base: ${oc.env:LEO2_ASSETS_BASE}
-    video_shift: 3.0
-    text_encoder_gpu_transient: true
-    inference_cache_method: none
+    video_shift: 9.0
+    text_encoder_gpu_transient: false
+    condition_cache_size: 1
+    profile_forward: false
+    inference_cache_method: first_block
+    inference_cache_threshold: 0.1
     context_parallel_size: 2
     expert_parallel_size: 8
     enable_deepep: true
@@ -169,7 +172,7 @@ sampling:
   guidance_scale: 1.0
   height: 464
   width: 848
-  num_frames: 121
+  num_frames: 17
   eta: 0.0
   # Reward group size.
   samples_per_prompt: 16

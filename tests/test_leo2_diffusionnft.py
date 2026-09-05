@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import OrderedDict
 from contextlib import nullcontext
 from pathlib import Path
 from types import MethodType, SimpleNamespace
@@ -12,11 +13,13 @@ import torch.nn as nn
 from omegaconf import OmegaConf
 
 from unirl.algorithms.diffusionnft import DiffusionNFT
-from unirl.models.leo2.bundle import _dcp_load_into, _patch_router_dtype
+from unirl.models.leo2.bundle import _dcp_load_into, _make_inference_cache_config, _patch_router_dtype
 from unirl.models.leo2.conditions import Leo2Conditions
 from unirl.models.leo2.diffusion import Leo2DiffusionStage
 from unirl.models.leo2.pipeline import Leo2Pipeline
-from unirl.models.leo2.text_embed import _to_transport_tree
+from unirl.models.leo2.text_embed import Leo2CondStage, _to_transport_tree
+from unirl.types.conditions import TextEmbedCondition
+from unirl.types.primitives import Texts
 from unirl.types.segments.latent import LatentSegment
 
 
@@ -65,6 +68,56 @@ def test_leo2_predict_noise_at_step_forwards_batch_one() -> None:
         "sigma": 0.5,
         "channel_cond": ("cond", "mask"),
     }
+
+
+def test_leo2_rollout_enters_request_scoped_cache_context() -> None:
+    events: list[str] = []
+
+    class FakeModel:
+        def cache_context(self, name: str):
+            class Context:
+                def __enter__(self):
+                    events.append(f"enter:{name}")
+
+                def __exit__(self, exc_type, exc, traceback):
+                    events.append(f"exit:{name}")
+
+            return Context()
+
+        @staticmethod
+        def cache_stats():
+            return {
+                "method": "first_block",
+                "threshold": 0.1,
+                "full_steps": 1,
+                "skipped_steps": 0,
+                "cache_bytes": 0,
+            }
+
+    stage = object.__new__(Leo2DiffusionStage)
+    stage.bundle = SimpleNamespace(device=torch.device("cpu"), model=FakeModel())
+    stage.strategy = SimpleNamespace(
+        denoise=lambda **kwargs: (kwargs["sample"], None, None),
+    )
+    stage.trajectory_dtype = torch.float32
+    stage.logprob_dtype = torch.float32
+    stage._mem_reported = True
+    stage._autocast = MethodType(lambda self: nullcontext(), stage)
+    stage._prep_channel_cond = MethodType(lambda self, blob, sample: (None, None), stage)
+
+    def predict(self, blob, *, sample, sigma, channel_cond):
+        assert events == ["enter:unirl_rollout"]
+        return torch.zeros_like(sample)
+
+    stage.predict_noise = MethodType(predict, stage)
+    stage.generate(
+        SimpleNamespace(hymm=[{}]),
+        params=SimpleNamespace(num_inference_steps=1, eta=0.0),
+        sigmas=torch.tensor([1.0, 0.0]),
+        initial_latents=torch.zeros(1, 48, 2, 3, 4),
+    )
+
+    assert events == ["enter:unirl_rollout", "exit:unirl_rollout"]
 
 
 @pytest.mark.parametrize(
@@ -201,21 +254,88 @@ def test_leo2_nft_recipe_matches_requested_contract() -> None:
     assert config.batch_size == 48
     assert config.sampling.num_inference_steps == 10
     assert config.sampling.guidance_scale == pytest.approx(1.0)
-    assert (config.sampling.height, config.sampling.width, config.sampling.num_frames) == (464, 848, 121)
+    assert (config.sampling.height, config.sampling.width, config.sampling.num_frames) == (464, 848, 17)
     assert config.sampling.samples_per_prompt == 16
     assert config.sampling.scheduler.num_sde_steps == 0
     assert config.algorithm.beta == pytest.approx(1.0)
     assert config.algorithm.train_timestep_mode == "random"
     assert config.algorithm.num_train_timesteps == 2
     assert config.algorithm.timestep_sampling == "logit_normal"
-    assert config.algorithm.timestep_shift == pytest.approx(3.0)
+    assert config.algorithm.timestep_shift == pytest.approx(9.0)
     assert config.algorithm.training_timestep_fraction == pytest.approx(1.0)
     assert config.logging.log_media is True
     assert config.bundle.config.context_parallel_size == 2
     assert config.bundle.config.expert_parallel_size == 8
     assert config.bundle.config.enable_deepep is True
+    assert config.bundle.config.text_encoder_gpu_transient is False
+    assert config.bundle.config.condition_cache_size == 1
+    assert config.bundle.config.profile_forward is False
+    assert config.bundle.config.inference_cache_method == "first_block"
+    assert config.bundle.config.inference_cache_threshold == pytest.approx(0.1)
     assert config.backend.fsdp_cfg.sp_size == 2
     assert config.backend.fsdp_cfg.ep_size == 8
+
+
+def test_leo2_first_block_cache_config_uses_requested_threshold() -> None:
+    config = _make_inference_cache_config(
+        SimpleNamespace(
+            inference_cache_method="first_block",
+            inference_cache_threshold=0.1,
+        )
+    )
+
+    assert type(config).__name__ == "FirstBlockCacheConfig"
+    assert config.threshold == pytest.approx(0.1)
+
+
+def test_leo2_condition_cache_reuses_sibling_prompt_without_sharing_containers() -> None:
+    stage = object.__new__(Leo2CondStage)
+    stage._cache_size = 1
+    stage._cache = OrderedDict()
+    stage.cache_hits = 0
+    stage.cache_misses = 0
+    calls = 0
+    tensor = torch.ones(1, 2)
+
+    def build_uncached(self, texts, *, height, width, num_frames, seeds):
+        nonlocal calls
+        calls += 1
+        return Leo2Conditions(
+            text=TextEmbedCondition(embeds=tensor),
+            hymm=[
+                {
+                    "input_ids": tensor,
+                    "model_kwargs": {
+                        "attention_mask": tensor,
+                        "rope_media_info": [],
+                        "cond_text_states": tensor,
+                        "cond_text_mask": tensor,
+                        "visual_mask": tensor,
+                        "text_mask": tensor,
+                        "timesteps_index": None,
+                        "audio_mask": None,
+                        "und_token_indices": tensor,
+                        "gen_token_indices": tensor,
+                        "audio_token_indices": None,
+                    },
+                    "image_size": (height, width),
+                    "video_duration": num_frames,
+                }
+            ],
+        )
+
+    stage._build_uncached = MethodType(build_uncached, stage)
+    kwargs = dict(height=464, width=848, num_frames=17, seeds=[42])
+    first = stage.build(Texts(texts=["prompt"]), **kwargs)
+    second = stage.build(Texts(texts=["prompt"]), **kwargs)
+    first.hymm[0]["_device"] = "cuda:0"
+
+    assert calls == 1
+    assert stage.cache_misses == 1
+    assert stage.cache_hits == 1
+    assert "_device" not in second.hymm[0]
+    assert first.hymm[0] is not second.hymm[0]
+    assert first.hymm[0]["input_ids"] is second.hymm[0]["input_ids"]
 
 
 def test_diffusion_nft_draws_two_shifted_logit_normal_training_steps() -> None:

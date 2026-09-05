@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-09-05T11:15:02+08:00",
+  "hardware": {
+    "node_count": 1,
+    "gpu_count": 8,
+    "gpu_model": "NVIDIA H20"
+  },
+  "topology": {
+    "context_parallel_size": 2,
+    "data_parallel_size": 4,
+    "expert_parallel_size": 8,
+    "deepep_enabled": true
+  },
+  "workload": {
+    "prompt_groups": 4,
+    "samples_per_prompt": 4,
+    "total_videos": 16,
+    "height": 464,
+    "width": 848,
+    "num_frames": 17,
+    "num_inference_steps": 10,
+    "guidance_scale": 1.0,
+    "flow_shift": 3.0,
+    "num_train_timesteps": 2,
+    "nft_beta": 1.0
+  },
+  "cache_off": {
+    "rollout_seconds": 251.179,
+    "training_seconds": 177.6,
+    "reward_mean": 0.7018,
+    "videos_per_minute": 3.821974,
+    "full_steps": 160,
+    "reused_steps": 0,
+    "cache_bytes_per_rank": 0
+  },
+  "first_block_threshold_0_1": {
+    "rollout_seconds": 257.921,
+    "training_seconds": 181.5,
+    "reward_mean": 0.7018,
+    "videos_per_minute": 3.72207,
+    "full_steps": 160,
+    "reused_steps": 0,
+    "cache_bytes_per_rank": 327421952
+  },
+  "comparison": {
+    "rollout_speedup": 0.97386,
+    "rollout_latency_change_percent": 2.6841,
+    "throughput_change_percent": -2.61393,
+    "cache_reuse_ratio": 0.0,
+    "outcome": "zero-hit overhead"
+  },
+  "production_rollout_bubble_probe": {
+    "baseline_gpu_samples": 960,
+    "baseline_mean_gpu_utilization_percent": 81.76,
+    "baseline_gpu_bubble_percent": 18.24,
+    "optimized_gpu_samples": 640,
+    "optimized_sampling_seconds": 78.867,
+    "optimized_mean_gpu_utilization_percent": 97.92,
+    "optimized_gpu_bubble_percent": 2.08,
+    "optimized_samples_below_50_percent": 0.94,
+    "bubble_reduction_percentage_points": 16.16,
+    "bubble_reduction_relative_percent": 88.5965,
+    "cache_reuse_during_probe": 0
+  },
+  "tests": {
+    "unit_test_file": "tests/test_leo2_diffusionnft.py",
+    "passed": 20,
+    "failed": 0,
+    "distributed_ab_cases_completed": 2
+  },
+  "raw_logs": {
+    "cache_off": "/root/UniRL/outputs/leo2/nft_cache_ab_20260905_1045/none.log",
+    "first_block_threshold_0_1": "/root/UniRL/outputs/leo2/nft_cache_ab_20260905_1045/first_block.log"
+  }
+}

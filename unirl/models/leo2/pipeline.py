@@ -67,6 +67,7 @@ class Leo2Pipeline(Pipeline):
                 autocast_precision=config.autocast_precision,
                 trajectory_precision=config.trajectory_precision,
                 logprob_precision=config.logprob_precision,
+                profile_forward=config.profile_forward,
             ),
             video_decode=Leo2VideoDecodeStage(bundle),
             config=config,

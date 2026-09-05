@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 from contextlib import nullcontext
 from typing import ClassVar, List, Optional, Tuple
@@ -34,12 +35,19 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
         autocast_precision: str = "bf16",
         trajectory_precision: str = "bf16",
         logprob_precision: str = "fp32",
+        profile_forward: bool = False,
     ) -> None:
+        if type(profile_forward) is not bool:
+            raise TypeError(
+                "Leo2DiffusionStage expected bool for profile_forward, "
+                f"got {type(profile_forward).__name__}: {profile_forward!r}"
+            )
         self.bundle = bundle
         self.strategy = strategy
         self.autocast_dtype = parse_torch_dtype(autocast_precision, field_name="autocast_precision")
         self.trajectory_dtype = parse_torch_dtype(trajectory_precision, field_name="trajectory_precision")
         self.logprob_dtype = parse_torch_dtype(logprob_precision, field_name="logprob_precision")
+        self.profile_forward = profile_forward
 
     def trainable_module(self) -> torch.nn.Module:
         return self.bundle.trainable_module()
@@ -117,7 +125,7 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
         )
         _dbg = getattr(self, "_mem_calls", 0)
         self._mem_calls = _dbg + 1
-        _prof = torch.cuda.is_available()
+        _prof = self.profile_forward and torch.cuda.is_available()
         if _prof:
             torch.cuda.synchronize()
             # Peak since the previous forward's reset covers whatever ran in
@@ -213,7 +221,14 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
         if 0 in needed:
             stored_pairs.append((0, x.detach().clone()))
 
-        with self._autocast():
+        model = self.bundle.model
+        cache_context_factory = getattr(model, "cache_context", None)
+        cache_context = (
+            cache_context_factory("unirl_rollout")
+            if callable(cache_context_factory)
+            else nullcontext()
+        )
+        with self._autocast(), cache_context:
             for step_idx in range(num_steps):
                 step_eta = float(params.eta) if step_idx in sde_set else 0.0
                 step_generators = (
@@ -240,6 +255,20 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
                     stored_pairs.append((step_idx + 1, x.detach().clone()))
                 if log_prob is not None:
                     sde_logp_list.append(log_prob.to(dtype=self.logprob_dtype))
+
+        cache_stats_factory = getattr(model, "cache_stats", None)
+        if callable(cache_stats_factory):
+            cache_stats = cache_stats_factory()
+            if cache_stats.get("method", "none") != "none" and int(os.environ.get("RANK", "0")) == 0:
+                print(
+                    "[leo2 cache] "
+                    f"method={cache_stats.get('method')} "
+                    f"threshold={cache_stats.get('threshold')} "
+                    f"full_steps={cache_stats.get('full_steps')} "
+                    f"skipped_steps={cache_stats.get('skipped_steps')} "
+                    f"cache_bytes={cache_stats.get('cache_bytes', 0)}",
+                    flush=True,
+                )
 
         positions = [p for p, _ in stored_pairs]
         return make_video_segment(

@@ -25,6 +25,10 @@ export HF_HOME="${HF_HOME:-${REPO_ROOT}/.cache/huggingface}"
 export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
 export NCCL_IB_GID_INDEX="${NCCL_IB_GID_INDEX:-3}"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+# The runtime has no CUTLASS grouped_gemm package. Select the validated
+# EPGroupGemm fallback directly instead of throwing and logging once per MoE
+# layer on every forward.
+export HY_PARALLELISM_USE_CUTLASS_GROUPED_GEMM="${HY_PARALLELISM_USE_CUTLASS_GROUPED_GEMM:-0}"
 export PYTHONPATH="${REPO_ROOT}:${VENDOR_ROOT}:${VENDOR_ROOT}/deps/hy_parallelism:${VENDOR_ROOT}/deps/IndexKits"
 export TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1
 

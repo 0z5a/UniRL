@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from typing import TYPE_CHECKING, Any, Dict, List
 
 import numpy as np
@@ -37,6 +38,10 @@ class Leo2CondStage:
 
     def __init__(self, bundle: "Leo2Bundle") -> None:
         self.bundle = bundle
+        self._cache_size = int(getattr(bundle.config, "condition_cache_size", 0))
+        self._cache: OrderedDict[tuple[str, int, int, int, int], Leo2Conditions] = OrderedDict()
+        self.cache_hits = 0
+        self.cache_misses = 0
 
     def _capture(self, prompt: str, *, height: int, width: int, num_frames: int, seed: int) -> Dict[str, Any]:
         model = self.bundle.model
@@ -69,8 +74,48 @@ class Leo2CondStage:
             "the capture boundary moved; check leo_hf.generate for the pipeline call site."
         )
 
-    @torch.no_grad()
     def build(self, texts: Texts, *, height: int, width: int, num_frames: int, seeds: List[int]) -> Leo2Conditions:
+        prompts = list(texts.texts)
+        if self._cache_size <= 0 or len(prompts) != 1 or len(seeds) != 1:
+            return self._build_uncached(
+                texts,
+                height=height,
+                width=width,
+                num_frames=num_frames,
+                seeds=seeds,
+            )
+
+        key = (str(prompts[0]), int(height), int(width), int(num_frames), int(seeds[0]))
+        cached = self._cache.get(key)
+        if cached is not None:
+            self._cache.move_to_end(key)
+            self.cache_hits += 1
+            return _clone_conditions(cached)
+
+        result = self._build_uncached(
+            texts,
+            height=height,
+            width=width,
+            num_frames=num_frames,
+            seeds=seeds,
+        )
+        self.cache_misses += 1
+        self._cache[key] = _clone_conditions(result)
+        self._cache.move_to_end(key)
+        while len(self._cache) > self._cache_size:
+            self._cache.popitem(last=False)
+        return result
+
+    @torch.no_grad()
+    def _build_uncached(
+        self,
+        texts: Texts,
+        *,
+        height: int,
+        width: int,
+        num_frames: int,
+        seeds: List[int],
+    ) -> Leo2Conditions:
         prompts: List[str] = list(texts.texts)
         require(len(prompts) > 0, "Leo2CondStage: no prompts")
         require(len(seeds) == len(prompts), f"Leo2CondStage: {len(prompts)} prompts vs {len(seeds)} seeds")
@@ -150,6 +195,40 @@ class Leo2CondStage:
                 "hymm": blobs,
             }
         )
+
+
+def _clone_conditions(conditions: Leo2Conditions) -> Leo2Conditions:
+    """Clone mutable containers while sharing immutable frozen-condition tensors."""
+    text = conditions.text
+    cloned_text = (
+        None
+        if text is None
+        else TextEmbedCondition(
+            embeds=text.embeds,
+            pooled=text.pooled,
+            attn_mask=text.attn_mask,
+        )
+    )
+    return Leo2Conditions(
+        text=cloned_text,
+        hymm=_clone_transport_tree(conditions.hymm),
+    )
+
+
+def _clone_transport_tree(value: Any) -> Any:
+    """Copy builtin containers without duplicating tensor storage."""
+    if isinstance(value, torch.Tensor) or value is None or type(value) in (bool, int, float, str, slice):
+        return value
+    if isinstance(value, list):
+        return [_clone_transport_tree(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_clone_transport_tree(item) for item in value)
+    if isinstance(value, dict):
+        return {key: _clone_transport_tree(item) for key, item in value.items()}
+    raise TypeError(
+        "Leo2 condition cache expected Tensor/builtin transport data, "
+        f"got {type(value).__module__}.{type(value).__qualname__}: {value!r}"
+    )
 
 
 def _to_transport_tree(value: Any, *, path: str) -> Any:

@@ -82,8 +82,8 @@ class Leo2PipelineConfig:
     video_shift: float = 3.0
 
     # --- native inference acceleration ---
-    # This is intentionally inactive in UniRL rollout/replay: only hymm's
-    # request-scoped diffusion pipeline enters the model cache context.
+    # The UniRL rollout stage enters the request-scoped model cache context;
+    # replay/training deliberately remains exact.
     inference_cache_method: str = "none"
     inference_cache_threshold: float = 0.05
     inference_cache_taylor_max_extrapolation: float = 1.0
@@ -101,6 +101,11 @@ class Leo2PipelineConfig:
     # Qwen3.5-9B (18 GB bf16) parked on CPU; moved to GPU transiently for the
     # once-per-rollout encode when this is true, then moved back.
     text_encoder_gpu_transient: bool = True
+    # Reuse frozen text/model conditions for adjacent sibling samples. A size
+    # of one is sufficient for prompt-major group rollouts.
+    condition_cache_size: int = 1
+    # Forward timing forces CUDA synchronization and is benchmark-only.
+    profile_forward: bool = False
     vae_on_gpu: bool = True
     context_parallel_size: int = 1
     expert_parallel_size: int = 1
@@ -143,6 +148,20 @@ class Leo2PipelineConfig:
             raise ValueError(
                 "Leo2 enable_deepep=true requires expert_parallel_size > 1, "
                 f"got expert_parallel_size={self.expert_parallel_size}."
+            )
+        if type(self.condition_cache_size) is not int:
+            raise TypeError(
+                "Leo2 condition_cache_size must be int, "
+                f"got {type(self.condition_cache_size).__name__}: {self.condition_cache_size!r}."
+            )
+        if self.condition_cache_size < 0:
+            raise ValueError(
+                f"Leo2 condition_cache_size must be >= 0, got {self.condition_cache_size}."
+            )
+        if type(self.profile_forward) is not bool:
+            raise TypeError(
+                "Leo2 profile_forward must be bool, "
+                f"got {type(self.profile_forward).__name__}: {self.profile_forward!r}."
             )
         self.ckpt_path = _required_external_path(self.ckpt_path, "LEO2_CKPT_DIR")
         self.assets_base = _required_external_path(self.assets_base, "LEO2_ASSETS_BASE")

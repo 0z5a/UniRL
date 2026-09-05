@@ -556,7 +556,7 @@ class LeoFirstBlockCacheController:
 
     @classmethod
     def _synchronization_plan(cls, leader_block: object) -> SyncPlan | None:
-        """Resolve CP and actual FSDP groups for the supported topology."""
+        """Resolve groups that make one cache decision safe for every forward collective."""
         if not dist.is_available() or not dist.is_initialized():
             return [], []
         if dist.get_world_size() == 1:
@@ -567,7 +567,7 @@ class LeoFirstBlockCacheController:
         if not hy_ps.is_parallel_state_initialized():
             return None
         parallel_state = hy_ps.get_parallel_state()
-        if any(getattr(parallel_state, dim, 1) != 1 for dim in ("ep", "etp", "tp", "pp")):
+        if any(getattr(parallel_state, dim, 1) != 1 for dim in ("etp", "tp", "pp")):
             return None
 
         sum_groups = []
@@ -588,9 +588,23 @@ class LeoFirstBlockCacheController:
             return None
 
         max_groups = []
+        if getattr(parallel_state, "ep", 1) > 1:
+            ep_group = getattr(parallel_state, "ep_group", None)
+            if ep_group is None:
+                ep_mesh = getattr(parallel_state, "ep_mesh", None)
+                if ep_mesh is None:
+                    return None
+                try:
+                    ep_group = ep_mesh.get_group()
+                except (AttributeError, RuntimeError, TypeError, ValueError):
+                    return None
+            max_groups.append(ep_group)
+
         if fsdp_group is not None:
             try:
-                if dist.get_world_size(group=fsdp_group) > 1:
+                if dist.get_world_size(group=fsdp_group) > 1 and all(
+                    fsdp_group is not group for group in max_groups
+                ):
                     max_groups.append(fsdp_group)
             except (RuntimeError, TypeError, ValueError):
                 return None
