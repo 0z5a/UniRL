@@ -82,12 +82,24 @@ def find_video(root: Path, case: str, index: int) -> Path:
 
 def load_prompts(path: Path) -> list[dict[str, str]]:
     """Load and validate the ordered benchmark prompts."""
-    with path.open(newline="") as handle:
+    with path.open(encoding="utf-8", newline="") as handle:
         rows = list(csv.DictReader(handle))
-    for expected, row in enumerate(rows):
-        if int(row["index"]) != expected:
-            raise ValueError(f"prompt indices must be contiguous from zero: {row}")
-    return rows
+    indices = []
+    for line_number, row in enumerate(rows, 2):
+        try:
+            index = int(row["index"])
+            prompt = row["prompt"]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"invalid prompt identity at {path}:{line_number}: {row!r}") from exc
+        if index < 0 or not isinstance(prompt, str) or not prompt.strip():
+            raise ValueError(
+                f"expected non-negative index and non-empty prompt at "
+                f"{path}:{line_number}, got index={index}, prompt={prompt!r}"
+            )
+        indices.append(index)
+    if len(indices) != len(set(indices)):
+        raise ValueError(f"prompt indices must be unique in {path}, got {indices!r}")
+    return sorted(rows, key=lambda row: int(row["index"]))
 
 
 def evaluate_video(
