@@ -23,7 +23,7 @@ from cache_benchmark_cases import CacheBenchmarkCase, load_cases
 
 EXPECTED_WIDTH = 848
 EXPECTED_HEIGHT = 464
-EXPECTED_FRAMES = 193
+EXPECTED_FRAMES = 121
 EXPECTED_FPS = 24.0
 FPS_ABS_TOLERANCE = 1e-6
 VIDEO_NAME = re.compile(r"^(?P<prompt_index>[0-9]+)_0[.]mp4$")
@@ -715,15 +715,26 @@ def _parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    global EXPECTED_FRAMES, EXPECTED_FPS
     args = _parse_args()
     root = args.root.expanduser().resolve()
     if not root.is_dir():
         _die(f"Benchmark root is not a directory: {root}")
     metadata = _read_env(root / "benchmark.env")
-    expected_metadata = {
-        "image_size": "464x848",
-        "num_frames": str(EXPECTED_FRAMES),
-    }
+    try:
+        EXPECTED_FRAMES = int(metadata["num_frames"])
+        EXPECTED_FPS = float(metadata.get("video_fps", "24"))
+    except (KeyError, ValueError) as exc:
+        raise ValueError(
+            f"benchmark.env must contain numeric num_frames/video_fps, got "
+            f"{metadata.get('num_frames')!r}/{metadata.get('video_fps')!r}"
+        ) from exc
+    if EXPECTED_FRAMES <= 0 or not math.isfinite(EXPECTED_FPS) or EXPECTED_FPS <= 0:
+        _die(
+            f"benchmark.env num_frames/video_fps must be positive, got "
+            f"{EXPECTED_FRAMES}/{EXPECTED_FPS}"
+        )
+    expected_metadata = {"image_size": "464x848"}
     for key, expected in expected_metadata.items():
         if metadata.get(key) != expected:
             _die(f"benchmark.env {key} must be {expected!r}, got {metadata.get(key)!r}")
