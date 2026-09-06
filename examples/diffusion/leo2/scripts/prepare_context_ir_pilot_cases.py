@@ -18,8 +18,9 @@ from prepare_context_ir_cache_cases import (
 )
 
 
-def _write(path: Path, row: dict[str, object]) -> None:
+def _write(path: Path, row: dict[str, object], *, steps: int) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    row["diff_infer_steps"] = steps
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=TSV_FIELDS)
         writer.writeheader()
@@ -106,6 +107,8 @@ def rows(steps: int, baseline_root: Path, profile_root: Path) -> dict[str, dict[
         **_dfr_values(steps, layers="24-47"),
         **composite_cfg,
     )
+    for row in result.values():
+        row["diff_infer_steps"] = steps
     return result
 
 
@@ -119,7 +122,7 @@ def main() -> None:
     if not args.baseline_root.is_absolute() or not args.profile_root.is_absolute():
         raise ValueError("baseline and profile roots must be absolute")
     for name, row in rows(args.steps, args.baseline_root, args.profile_root).items():
-        _write(args.output_dir / f"s{args.steps}_{name}.csv", row)
+        _write(args.output_dir / f"s{args.steps}_{name}.csv", row, steps=args.steps)
 
 
 if __name__ == "__main__":

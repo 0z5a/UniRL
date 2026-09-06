@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import csv
 import math
+import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -46,6 +47,7 @@ TSV_FIELDS = (
     "cfg_low_frequency_end_step",
     "cfg_high_frequency_start_step",
     "cfg_high_frequency_end_step",
+    "diff_infer_steps",
 )
 
 
@@ -78,6 +80,7 @@ class CacheBenchmarkCase:
     cfg_low_frequency_end_step: int | None = None
     cfg_high_frequency_start_step: int | None = None
     cfg_high_frequency_end_step: int | None = None
+    diff_infer_steps: int | None = None
     schema_version: int = 2
 
     @property
@@ -194,6 +197,13 @@ def _parse_v2(row: dict[str, str | None], *, source: Path, context: str) -> Cach
     reference_root = _optional_path(
         _text(row, "reference_root"), source=source, field="reference_root", context=context
     )
+    diff_infer_steps = _optional_int(row, "diff_infer_steps", context=context)
+    if diff_infer_steps is None:
+        matches = re.findall(r"(?:^|_)s(6|28|50)(?:_|$)", name)
+        if len(set(matches)) == 1:
+            diff_infer_steps = int(matches[0])
+    if diff_infer_steps == 0:
+        _die(f"diff_infer_steps must be positive in {context}")
 
     common = dict(
         name=name,
@@ -203,6 +213,7 @@ def _parse_v2(row: dict[str, str | None], *, source: Path, context: str) -> Cach
         guidance_scale=guidance,
         baseline_case=baseline_case,
         reference_root=reference_root,
+        diff_infer_steps=diff_infer_steps,
     )
     taylor_fields = ("taylor_max_extrapolation",)
     magcache_fields = (
@@ -279,7 +290,10 @@ def _parse_v2(row: dict[str, str | None], *, source: Path, context: str) -> Cach
             dfr_start_step=start,
             dfr_end_step=end,
             dfr_interval=interval,
-            dfr_layers=_text(row, "dfr_layers") or None,
+            dfr_layers=(
+                _text(row, "dfr_layers")
+                or ("24-47" if method == "fastercache_dfr+cfg_cache" else None)
+            ),
         )
     else:
         _reject_fields(row, dfr_fields, method=method, context=context)

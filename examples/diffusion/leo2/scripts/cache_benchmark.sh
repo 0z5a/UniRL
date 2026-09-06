@@ -55,6 +55,10 @@ if [[ ! "${VIDEO_FPS}" =~ ^[1-9][0-9]*$ ]]; then
   echo "LEO2_VIDEO_FPS must be a positive integer, got: ${VIDEO_FPS}" >&2
   exit 2
 fi
+if [[ "${VIDEO_FPS}" != "24" ]]; then
+  echo "Formal Leo2 acceleration benchmark requires 24 FPS, got: ${VIDEO_FPS}" >&2
+  exit 2
+fi
 NUM_FRAMES=$((VIDEO_DURATION_SECONDS * VIDEO_FPS + 1))
 if [[ "${PILOT}" == "0" ]]; then
   mapfile -t case_rows < <(
@@ -172,7 +176,7 @@ for encoded_case in "${case_rows[@]}"; do
     magcache_retention_ratio dfr_start_step dfr_end_step dfr_interval dfr_layers \
     cfg_start_step cfg_end_step cfg_interval cfg_low_frequency_weight cfg_high_frequency_weight \
     cfg_low_frequency_start_step cfg_low_frequency_end_step \
-    cfg_high_frequency_start_step cfg_high_frequency_end_step \
+    cfg_high_frequency_start_step cfg_high_frequency_end_step diff_infer_steps \
     <<<"${encoded_case}"
   if [[ ! "${case_name}" =~ ^[a-zA-Z0-9._-]+$ ]]; then
     echo "Invalid case name: ${case_name}" >&2
@@ -188,6 +192,10 @@ for encoded_case in "${case_rows[@]}"; do
   fi
   if [[ ! "${guidance_scale}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
     echo "Invalid guidance scale for ${case_name}: ${guidance_scale}" >&2
+    exit 2
+  fi
+  if [[ -n "${diff_infer_steps}" && "${diff_infer_steps}" != "${INFER_STEPS}" ]]; then
+    echo "Case ${case_name} requires ${diff_infer_steps} inference steps, launcher has ${INFER_STEPS}" >&2
     exit 2
   fi
   if [[ -n "${reference_root}" ]]; then
@@ -357,6 +365,7 @@ for encoded_case in "${case_rows[@]}"; do
     echo "cfg_low_frequency_end_step=${cfg_low_frequency_end_step}"
     echo "cfg_high_frequency_start_step=${cfg_high_frequency_start_step}"
     echo "cfg_high_frequency_end_step=${cfg_high_frequency_end_step}"
+    echo "diff_infer_steps=${diff_infer_steps}"
     echo "expected_videos=${EXPECTED_VIDEOS}"
   } >"${case_dir}/case.env"
 

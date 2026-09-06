@@ -1022,7 +1022,13 @@ class LeoCFGCacheController:
         self._output_signature: tuple | None = None
 
     @torch.compiler.disable
-    def begin_step(self, *, guidance_enabled: bool, reference: torch.Tensor) -> bool:
+    def begin_step(
+        self,
+        *,
+        guidance_enabled: bool,
+        reference: torch.Tensor,
+        leader_block: object,
+    ) -> bool:
         """Return whether this step should execute only the conditional branch."""
         self._reuse_step = False
         if not guidance_enabled:
@@ -1034,7 +1040,11 @@ class LeoCFGCacheController:
                 "Leo CFG cache expects a conditional-first batch of size 2, "
                 f"got {type(reference).__name__} shape={getattr(reference, 'shape', None)}"
             )
-        self._validate_distributed_config(reference)
+        sync_plan = LeoFirstBlockCacheController._synchronization_plan(leader_block)
+        if sync_plan is None:
+            raise RuntimeError("Leo CFG cache cannot establish a CP/FSDP-consistent decision group")
+        groups = [*sync_plan[0], *sync_plan[1]]
+        self._validate_distributed_config(reference, groups)
         step = self._step_index
         self._step_index += 1
         candidate = (
@@ -1043,6 +1053,17 @@ class LeoCFGCacheController:
             and self._low_frequency_delta is not None
             and self._high_frequency_delta is not None
         )
+        decision_low = reference.new_tensor((step, int(candidate)), dtype=torch.int64)
+        decision_high = decision_low.clone()
+        LeoFirstBlockCacheController._all_reduce(decision_low, groups, dist.ReduceOp.MIN)
+        LeoFirstBlockCacheController._all_reduce(decision_high, groups, dist.ReduceOp.MAX)
+        if not torch.equal(decision_low, decision_high):
+            raise RuntimeError(
+                "Leo CFG cache step/reuse decision differs across model-sharding ranks: "
+                f"min={decision_low.tolist()}, max={decision_high.tolist()}"
+            )
+        step = int(decision_low[0].item())
+        candidate = bool(decision_low[1].item())
         if candidate:
             self.cfg_reuse_calls += 1
             self._reuse_step = True
@@ -1199,7 +1220,11 @@ class LeoCFGCacheController:
         mask = mask.reshape(*([1] * (value.ndim - 2)), height, width)
         return spectrum * mask, spectrum * ~mask
 
-    def _validate_distributed_config(self, reference: torch.Tensor) -> None:
+    def _validate_distributed_config(
+        self,
+        reference: torch.Tensor,
+        groups: list[dist.ProcessGroup],
+    ) -> None:
         if self._distributed_config_validated or not dist.is_available() or not dist.is_initialized():
             self._distributed_config_validated = True
             return
@@ -1210,13 +1235,17 @@ class LeoCFGCacheController:
                 self.config.interval,
                 self.config.low_frequency_weight,
                 self.config.high_frequency_weight,
+                self.config.low_frequency_start_step,
+                self.config.low_frequency_end_step,
+                self.config.high_frequency_start_step,
+                self.config.high_frequency_end_step,
             ],
             dtype=torch.float64,
         )
         low = values.clone()
         high = values.clone()
-        dist.all_reduce(low, op=dist.ReduceOp.MIN)
-        dist.all_reduce(high, op=dist.ReduceOp.MAX)
+        LeoFirstBlockCacheController._all_reduce(low, groups, dist.ReduceOp.MIN)
+        LeoFirstBlockCacheController._all_reduce(high, groups, dist.ReduceOp.MAX)
         if not torch.equal(low, high):
             raise RuntimeError("Leo CFG cache configuration differs across ranks")
         self._distributed_config_validated = True
@@ -1481,7 +1510,7 @@ class LeoFasterCacheController:
                     "Leo FasterCache expected an even conditional-first CFG batch for "
                     f"stream {stream_index}, got shape={tuple(stream.shape)}"
                 )
-            canonical.append(stream[: int(stream.shape[0]) // 2])
+            canonical.append(stream[: int(stream.shape[0]) // 2].clone())
         return tuple(canonical)
 
     def _drop_histories(self) -> None:

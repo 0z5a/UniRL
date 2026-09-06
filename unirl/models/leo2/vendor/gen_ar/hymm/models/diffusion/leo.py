@@ -1829,6 +1829,7 @@ class LeoModelBase(HunyuanMultimodalState):
             reuse = self._leo_cfg_cache_controller.begin_step(
                 guidance_enabled=guidance_enabled,
                 reference=reference,
+                leader_block=self.layers[0],
             )
         if isinstance(self._leo_cache_controller, LeoFasterCacheController):
             self._leo_cache_controller.set_cfg_mode(

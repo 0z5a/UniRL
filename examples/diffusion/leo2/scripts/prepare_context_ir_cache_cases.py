@@ -54,8 +54,10 @@ def _dfr_values(steps: int, *, layers: str | None = None) -> dict[str, object]:
     return values
 
 
-def _write(path: Path, rows: list[dict[str, object]]) -> None:
+def _write(path: Path, rows: list[dict[str, object]], *, steps: int) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    for row in rows:
+        row["diff_infer_steps"] = steps
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=TSV_FIELDS)
         writer.writeheader()
@@ -118,7 +120,7 @@ def _matrix(steps: int, profile_root: Path) -> list[dict[str, object]]:
                         "fastercache_dfr+cfg_cache",
                         guidance,
                         baseline,
-                        **_dfr_values(steps),
+                        **_dfr_values(steps, layers="24-47"),
                         **_cfg_values(steps),
                     ),
                 ]
@@ -230,13 +232,18 @@ def main() -> None:
     args = parser.parse_args()
 
     for steps in STEPS:
-        _write(args.output_dir / f"context_ir_cache_matrix_s{steps}.csv", _matrix(steps, args.profile_root))
-        _write(args.output_dir / f"context_ir_cfg_grid_s{steps}.csv", _cfg_grid(steps))
-        _write(args.output_dir / f"context_ir_cfg_window_grid_s{steps}.csv", _cfg_window_grid(steps))
-        _write(args.output_dir / f"context_ir_cfg_hifi_s{steps}.csv", _cfg_hifi_case(steps))
+        _write(args.output_dir / f"context_ir_cache_matrix_s{steps}.csv", _matrix(steps, args.profile_root), steps=steps)
+        _write(args.output_dir / f"context_ir_cfg_grid_s{steps}.csv", _cfg_grid(steps), steps=steps)
+        _write(
+            args.output_dir / f"context_ir_cfg_window_grid_s{steps}.csv",
+            _cfg_window_grid(steps),
+            steps=steps,
+        )
+        _write(args.output_dir / f"context_ir_cfg_hifi_s{steps}.csv", _cfg_hifi_case(steps), steps=steps)
         _write(
             args.output_dir / f"context_ir_dfr_cfg_hifi_s{steps}.csv",
             _dfr_cfg_hifi_case(steps),
+            steps=steps,
         )
         _write(
             args.output_dir / f"context_ir_pilot_baselines_s{steps}.csv",
@@ -244,6 +251,7 @@ def main() -> None:
                 _row(f"exact_s{steps}_g1", "off", 1.0, f"exact_s{steps}_g1"),
                 _row(f"exact_s{steps}_g5", "off", 5.0, f"exact_s{steps}_g5"),
             ],
+            steps=steps,
         )
         calibration = [
             _row(
@@ -257,7 +265,11 @@ def main() -> None:
             )
             for guidance, suffix in ((1.0, "g1"), (5.0, "g5"))
         ]
-        _write(args.output_dir / f"context_ir_magcache_calibration_s{steps}.csv", calibration)
+        _write(
+            args.output_dir / f"context_ir_magcache_calibration_s{steps}.csv",
+            calibration,
+            steps=steps,
+        )
 
     smoke = [
         _row("exact_s6_g1", "off", 1.0, "exact_s6_g1"),
@@ -268,11 +280,11 @@ def main() -> None:
             "fastercache_dfr+cfg_cache",
             5.0,
             "exact_s6_g5",
-            **_dfr_values(6),
+            **_dfr_values(6, layers="24-47"),
             **_cfg_values(6),
         ),
     ]
-    _write(args.output_dir / "context_ir_cfg_cache_smoke_s6.csv", smoke)
+    _write(args.output_dir / "context_ir_cfg_cache_smoke_s6.csv", smoke, steps=6)
 
 
 if __name__ == "__main__":

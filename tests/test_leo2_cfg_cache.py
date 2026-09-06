@@ -43,9 +43,9 @@ def test_cfg_cache_reconstructs_conditional_first_exact_delta() -> None:
     unconditional = torch.randn_like(conditional)
 
     with torch.no_grad(), controller.context("test"):
-        assert controller.begin_step(guidance_enabled=True, reference=reference) is False
+        assert controller.begin_step(guidance_enabled=True, reference=reference, leader_block=object()) is False
         controller.record_exact(conditional, unconditional)
-        assert controller.begin_step(guidance_enabled=True, reference=reference) is True
+        assert controller.begin_step(guidance_enabled=True, reference=reference, leader_block=object()) is True
         reconstructed = controller.reconstruct_unconditional(conditional)
 
     torch.testing.assert_close(reconstructed, unconditional, atol=2e-2, rtol=2e-2)
@@ -63,7 +63,9 @@ def test_cfg_cache_six_step_accounting() -> None:
 
     with torch.no_grad(), controller.context("test"):
         for _ in range(6):
-            reuse = controller.begin_step(guidance_enabled=True, reference=reference)
+            reuse = controller.begin_step(
+                guidance_enabled=True, reference=reference, leader_block=object()
+            )
             if reuse:
                 controller.reconstruct_unconditional(conditional)
             else:
@@ -92,11 +94,11 @@ def test_cfg_cache_frequency_weights_accumulate_between_exact_steps() -> None:
     conditional = torch.zeros(1, 1, 1, 4, 4)
     unconditional = torch.ones_like(conditional)
     with torch.no_grad(), controller.context("test"):
-        assert controller.begin_step(guidance_enabled=True, reference=reference) is False
+        assert controller.begin_step(guidance_enabled=True, reference=reference, leader_block=object()) is False
         controller.record_exact(conditional, unconditional)
-        assert controller.begin_step(guidance_enabled=True, reference=reference) is True
+        assert controller.begin_step(guidance_enabled=True, reference=reference, leader_block=object()) is True
         first = controller.reconstruct_unconditional(conditional)
-        assert controller.begin_step(guidance_enabled=True, reference=reference) is True
+        assert controller.begin_step(guidance_enabled=True, reference=reference, leader_block=object()) is True
         second = controller.reconstruct_unconditional(conditional)
     torch.testing.assert_close(first, torch.full_like(first, 2.0))
     torch.testing.assert_close(second, torch.full_like(second, 4.0))
@@ -110,6 +112,7 @@ def test_cfg_cache_guidance_one_is_a_strict_bypass() -> None:
                 controller.begin_step(
                     guidance_enabled=False,
                     reference=torch.zeros(1, 1, 2, 4, 4),
+                    leader_block=object(),
                 )
                 is False
             )
