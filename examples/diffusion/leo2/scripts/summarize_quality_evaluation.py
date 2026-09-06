@@ -94,7 +94,8 @@ def aggregate(args: argparse.Namespace) -> list[dict[str, object]]:
     paired = defaultdict(list)
     for row in paired_rows:
         paired[row["case"]].append(row)
-    pixel_rows = read_csv(args.benchmark_root / "pixel_metrics_pairs.csv")
+    pixel_path = args.benchmark_root / "pixel_metrics_pairs.csv"
+    pixel_rows = read_csv(pixel_path) if pixel_path.is_file() else []
     pixels = defaultdict(list)
     for row in pixel_rows:
         pixels[row["case"]].append(row)
