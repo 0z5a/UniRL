@@ -190,6 +190,22 @@ def _cfg_hifi_case(steps: int) -> list[dict[str, object]]:
     ]
 
 
+def _dfr_cfg_hifi_case(steps: int) -> list[dict[str, object]]:
+    baseline = f"exact_s{steps}_g5"
+    cfg_row = _cfg_hifi_case(steps)[1]
+    return [
+        _row(baseline, "off", 5.0, baseline),
+        _row(
+            f"dfr_cfg_hifi_s{steps}_g5",
+            "fastercache_dfr+cfg_cache",
+            5.0,
+            baseline,
+            **_dfr_values(steps),
+            **{key: value for key, value in cfg_row.items() if key.startswith("cfg_")},
+        ),
+    ]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -212,6 +228,10 @@ def main() -> None:
         _write(args.output_dir / f"context_ir_cfg_grid_s{steps}.csv", _cfg_grid(steps))
         _write(args.output_dir / f"context_ir_cfg_window_grid_s{steps}.csv", _cfg_window_grid(steps))
         _write(args.output_dir / f"context_ir_cfg_hifi_s{steps}.csv", _cfg_hifi_case(steps))
+        _write(
+            args.output_dir / f"context_ir_dfr_cfg_hifi_s{steps}.csv",
+            _dfr_cfg_hifi_case(steps),
+        )
         _write(
             args.output_dir / f"context_ir_pilot_baselines_s{steps}.csv",
             [
