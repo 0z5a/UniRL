@@ -22,7 +22,6 @@ REQUEST_MARKER = "LEO2_CACHE_BENCH_REQUEST_JSON="
 CONFIG_MARKER = "LEO2_CACHE_BENCH_CONFIG_JSON="
 DIGEST = re.compile(r"[0-9a-f]{64}")
 GIT_COMMIT = re.compile(r"[0-9a-f]{40}")
-EXPECTED_STEPS = 50
 HARNESS_FILES = (
     "examples/diffusion/leo2/CACHE_BENCHMARK.md",
     "examples/diffusion/leo2/data/cache_benchmark_16.csv",
@@ -125,8 +124,17 @@ def _harness_digest(repo: Path) -> str:
     return hashlib.sha256("".join(records).encode()).hexdigest()
 
 
-def _load_prompts(path: Path) -> dict[int, tuple[int, str]]:
-    """Load unique seed, index and prompt-hash identities."""
+def _harness_digest_at_revision(repo: Path, revision: str) -> str:
+    """Reproduce the harness digest from the exact recorded Git revision."""
+    records = []
+    for relative in HARNESS_FILES:
+        content = _git_output(repo, "show", f"{revision}:{relative}")
+        records.append(f"{hashlib.sha256(content).hexdigest()}  {relative}\n")
+    return hashlib.sha256("".join(records).encode()).hexdigest()
+
+
+def _load_prompts(path: Path) -> dict[tuple[int, str], int]:
+    """Load unique index/hash identities while allowing bilingual shared seeds."""
     identities = {}
     indices = set()
     hashes = set()
@@ -142,9 +150,9 @@ def _load_prompts(path: Path) -> dict[int, tuple[int, str]]:
             except (KeyError, TypeError, ValueError) as exc:
                 raise ValueError(f"Invalid prompt at {path}:{line_number}") from exc
             prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()
-            if seed in identities or index in indices or prompt_hash in hashes:
+            if index in indices or prompt_hash in hashes:
                 _die(f"Duplicate prompt identity at {path}:{line_number}")
-            identities[seed] = (index, prompt_hash)
+            identities[(seed, prompt_hash)] = index
             indices.add(index)
             hashes.add(prompt_hash)
     if not identities:
@@ -205,8 +213,15 @@ def _validate_provenance(root: Path, case_name: str) -> tuple[dict[str, Any], li
     metadata = _read_env(env_path)
     if metadata.get("benchmark_schema_version") != "2":
         _die(f"MagCache profiles require benchmark schema version 2: {env_path}")
-    if metadata.get("diff_infer_steps") != str(EXPECTED_STEPS):
-        _die(f"MagCache calibration requires exactly {EXPECTED_STEPS} denoising steps")
+    try:
+        expected_steps = int(metadata["diff_infer_steps"])
+    except (KeyError, ValueError) as exc:
+        raise ValueError(
+            f"benchmark.env diff_infer_steps must be a positive integer, "
+            f"got {metadata.get('diff_infer_steps')!r}"
+        ) from exc
+    if expected_steps <= 0:
+        _die(f"benchmark.env diff_infer_steps must be positive, got {expected_steps}")
 
     repo = Path(_required(metadata, "repo_root", source=env_path)).resolve()
     if not repo.is_dir() or repo.is_symlink():
@@ -214,14 +229,33 @@ def _validate_provenance(root: Path, case_name: str) -> tuple[dict[str, Any], li
     git_head = _required(metadata, "git_head", source=env_path)
     if GIT_COMMIT.fullmatch(git_head) is None:
         _die(f"Invalid git_head in {env_path}: {git_head!r}")
-    if _git_output(repo, "rev-parse", "HEAD").decode().strip() != git_head:
-        _die(f"Recorded git_head no longer matches {repo}")
+    current_head = _git_output(repo, "rev-parse", "HEAD").decode().strip()
+    ancestor = subprocess.run(
+        ("git", "-C", str(repo), "merge-base", "--is-ancestor", git_head, current_head),
+        check=False,
+    )
+    if ancestor.returncode != 0:
+        _die(f"Recorded git_head {git_head} is not an ancestor of current HEAD {current_head}")
     expected_diff = _digest(metadata, "git_diff_sha256", source=env_path)
     actual_diff = hashlib.sha256(_git_output(repo, "diff", "--binary", "HEAD", "--")).hexdigest()
-    if actual_diff != expected_diff:
-        _die(f"Recorded Git diff digest no longer matches {repo}")
     expected_harness = _digest(metadata, "benchmark_harness_sha256", source=env_path)
-    actual_harness = _harness_digest(repo)
+    harness_revision = "working-tree"
+    if current_head == git_head and actual_diff == expected_diff:
+        actual_harness = _harness_digest(repo)
+    else:
+        revisions = _git_output(repo, "rev-list", "--reverse", f"{git_head}..{current_head}").decode().splitlines()
+        matching = [
+            revision
+            for revision in revisions
+            if _harness_digest_at_revision(repo, revision) == expected_harness
+        ]
+        if not matching:
+            _die(
+                "Recorded benchmark harness cannot be reproduced from the current "
+                f"descendant history of {git_head}"
+            )
+        harness_revision = matching[0]
+        actual_harness = expected_harness
     if actual_harness != expected_harness:
         _die(f"Recorded benchmark harness digest no longer matches {repo}")
     _digest(metadata, "artifact_manifest_sha256", source=env_path)
@@ -268,7 +302,7 @@ def _validate_provenance(root: Path, case_name: str) -> tuple[dict[str, Any], li
         or summary.get("request_count") != expected_requests
         or summary.get("case") != case_name
         or summary.get("cache_method") != "magcache_calibrate"
-        or summary.get("diff_infer_steps") != EXPECTED_STEPS
+        or summary.get("diff_infer_steps") != expected_steps
     ):
         _die(f"Calibration case summary is incomplete: {summary_path}")
 
@@ -294,8 +328,10 @@ def _validate_provenance(root: Path, case_name: str) -> tuple[dict[str, Any], li
         case_spec.magcache_retention_ratio,
         field="magcache_retention_ratio",
     )
-    if config.get("diff_infer_steps") != EXPECTED_STEPS:
-        _die("Calibration config marker does not contain 50 denoising steps")
+    if config.get("diff_infer_steps") != expected_steps:
+        _die(
+            f"Calibration config marker does not contain {expected_steps} denoising steps"
+        )
     _same_float(config.get("flow_shift_video"), case_spec.flow_shift_video, field="flow_shift_video")
     _same_float(config.get("guidance_scale"), case_spec.guidance_scale, field="guidance_scale")
     if str(config.get("image_size")) != metadata.get("image_size"):
@@ -315,6 +351,7 @@ def _validate_provenance(root: Path, case_name: str) -> tuple[dict[str, Any], li
         "checkpoint_shard_inventory_sha256": inventory,
         "git_diff_sha256": expected_diff,
         "git_head": git_head,
+        "harness_revision": harness_revision,
         "repo_root": str(repo),
         "run_log_sha256": _sha256(case_dir / "run.log"),
         "prompts_csv": str(prompts_path),
@@ -328,23 +365,28 @@ def _validate_provenance(root: Path, case_name: str) -> tuple[dict[str, Any], li
         "artifact_manifest": str(artifact_manifest),
         "artifact_manifest_sha256": metadata["artifact_manifest_sha256"],
     }
-    return config, requests, {"identities": prompts, "source": provenance}
+    return config, requests, {
+        "expected_steps": expected_steps,
+        "identities": prompts,
+        "source": provenance,
+    }
 
 
 def _build_profile(root: Path, case_name: str) -> dict[str, Any]:
     """Validate one calibration case and aggregate its per-step ratios."""
     config, requests, context = _validate_provenance(root, case_name)
     identities = context["identities"]
+    expected_steps = context["expected_steps"]
     ratio_rows = []
     timesteps = None
-    seen = {"seed": set(), "prompt_index": set(), "prompt_hash": set()}
+    seen = {"prompt_index": set(), "prompt_hash": set()}
     prompt_identities = []
     for position, request in enumerate(requests):
         label = f"request[{position}]"
         if request.get("status") != "ok" or request.get("cache_method") != "magcache_calibrate":
             _die(f"{label} is not a successful MagCache calibration request")
-        if request.get("diff_infer_steps") != EXPECTED_STEPS:
-            _die(f"{label} does not report {EXPECTED_STEPS} denoising steps")
+        if request.get("diff_infer_steps") != expected_steps:
+            _die(f"{label} does not report {expected_steps} denoising steps")
         if request.get("cache_method_options") != config["cache_method_options"]:
             _die(f"{label} MagCache options disagree with the config marker")
         for field in ("flow_shift_video", "guidance_scale"):
@@ -355,18 +397,18 @@ def _build_profile(root: Path, case_name: str) -> dict[str, Any]:
             _die(f"{label} num_frames disagrees with the config marker")
         full_steps = int(request.get("full_steps", -1))
         skipped_steps = int(request.get("skipped_steps", -1))
-        if full_steps != EXPECTED_STEPS or skipped_steps != 0:
-            _die(f"{label} must compute all {EXPECTED_STEPS} steps during calibration")
+        if full_steps != expected_steps or skipped_steps != 0:
+            _die(f"{label} must compute all {expected_steps} steps during calibration")
         ratios = _finite_array(
             request.get("magcache_ratios"),
             field=f"{label}.magcache_ratios",
-            length=EXPECTED_STEPS,
+            length=expected_steps,
             positive=True,
         )
         current_timesteps = _finite_array(
             request.get("magcache_expected_timesteps"),
             field=f"{label}.magcache_expected_timesteps",
-            length=EXPECTED_STEPS,
+            length=expected_steps,
             positive=False,
         )
         if ratios[0] != 1.0:
@@ -382,10 +424,10 @@ def _build_profile(root: Path, case_name: str) -> dict[str, Any]:
             _die(f"{label} has an invalid prompt identity")
         if DIGEST.fullmatch(prompt_hash) is None:
             _die(f"{label} has an invalid prompt hash")
-        expected = identities.get(seed)
-        if expected != (prompt_index, prompt_hash):
+        expected = identities.get((seed, prompt_hash))
+        if expected != prompt_index:
             _die(f"{label} identity disagrees with the prompt CSV")
-        for field, value in (("seed", seed), ("prompt_index", prompt_index), ("prompt_hash", prompt_hash)):
+        for field, value in (("prompt_index", prompt_index), ("prompt_hash", prompt_hash)):
             if value in seen[field]:
                 _die(f"Duplicate {field} in calibration requests: {value!r}")
             seen[field].add(value)
@@ -393,8 +435,8 @@ def _build_profile(root: Path, case_name: str) -> dict[str, Any]:
         ratio_rows.append(ratios)
     if timesteps is None:
         _die("Calibration case contains no requests")
-    expected_seeds = set(list(identities)[: len(requests)])
-    if seen["seed"] != expected_seeds:
+    expected_indices = set(list(identities.values())[: len(requests)])
+    if seen["prompt_index"] != expected_indices:
         _die("Calibration requests do not match the prompt CSV's selected rows")
 
     columns = list(zip(*ratio_rows))

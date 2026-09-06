@@ -19,6 +19,7 @@ from cache_benchmark_entry import (  # noqa: E402
     _validate_cache_stats,
 )
 from compute_pixel_metrics import _load_prompts  # noqa: E402
+from build_magcache_profile import _load_prompts as _load_magcache_prompts  # noqa: E402
 
 
 def _case_row(**updates: object) -> dict[str, object]:
@@ -155,3 +156,8 @@ def test_committed_bilingual_manifests_preserve_pair_seed_identity() -> None:
     pixel_prompts = _load_prompts(data_dir / "context_ir_bilingual_pilot_32.csv")
     assert len(pixel_prompts) == 32
     assert len({prompt.seed for prompt in pixel_prompts}) == 16
+    magcache_prompts = _load_magcache_prompts(
+        data_dir / "context_ir_bilingual_pilot_32.csv"
+    )
+    assert len(magcache_prompts) == 32
+    assert len({seed for seed, _ in magcache_prompts}) == 16
