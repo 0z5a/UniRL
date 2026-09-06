@@ -187,7 +187,7 @@ class Handler(BaseHTTPRequestHandler):
         return result
 
     def _prompts(self, params: dict[str, list[str]]) -> dict[str, Any]:
-        allowed = {"language", "query", "page", "page_size"}
+        allowed = {"language", "query", "page", "page_size", "sort"}
         unknown = set(params) - allowed
         if unknown:
             raise ValueError(f"unsupported prompt filter(s): {', '.join(sorted(unknown))}")
@@ -195,6 +195,9 @@ class Handler(BaseHTTPRequestHandler):
         if language not in {"", "en", "zh"}:
             raise ValueError(f"unsupported language: {language!r}")
         query = self._single(params, "query").casefold()
+        sort = self._single(params, "sort") or "index"
+        if sort not in {"index", "worst"}:
+            raise ValueError(f"unsupported prompt sort: {sort!r}")
         try:
             page = int(self._single(params, "page") or "1")
             page_size = int(self._single(params, "page_size") or "24")
@@ -212,6 +215,13 @@ class Handler(BaseHTTPRequestHandler):
                 or query in str(row.get("pair_id", "")).casefold()
             )
         ]
+        rows.sort(
+            key=(
+                (lambda row: (-float(row.get("worst_score") or 0), int(row["index"])))
+                if sort == "worst"
+                else (lambda row: int(row["index"]))
+            )
+        )
         start = (page - 1) * page_size
         return {"total": len(rows), "page": page, "page_size": page_size, "prompts": rows[start : start + page_size]}
 

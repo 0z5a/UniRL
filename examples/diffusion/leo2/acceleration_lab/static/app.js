@@ -4,16 +4,18 @@ const state = {
   prompts: [],
   promptPage: 1,
   promptPages: 1,
+  promptSort: "index",
   activePrompt: null,
 };
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
+const resource = (path) => new URL(path.replace(/^\/+/, ""), new URL(".", document.baseURI)).toString();
 const number = (value, digits = 2) =>
   value === null || value === undefined || value === "" ? "—" : Number(value).toFixed(digits);
 
 async function api(path) {
-  const response = await fetch(path);
+  const response = await fetch(resource(path));
   const payload = await response.json();
   if (!response.ok) throw new Error(payload.error || `${response.status} ${response.statusText}`);
   return payload;
@@ -147,6 +149,7 @@ async function loadPrompts(targetIndex = null) {
     page_size: 24,
     query: $("#promptQuery").value,
     language: $('[name="language"]').value,
+    sort: state.promptSort,
   });
   const payload = await api(`/api/prompts?${params}`);
   state.prompts = payload.prompts;
@@ -179,8 +182,8 @@ async function selectPrompt(prompt) {
     video.muted = $("#muteAll").checked;
     video.loop = $("#loopAll").checked;
     video.playsInline = true;
-    video.src = `/media/${encodeURI(item.path)}`;
-    if (item.poster_path) video.poster = `/media/${encodeURI(item.poster_path)}`;
+    video.src = resource(`media/${encodeURI(item.path)}`);
+    if (item.poster_path) video.poster = resource(`media/${encodeURI(item.poster_path)}`);
     article.append(video);
     const meta = document.createElement("div");
     meta.className = "video-meta";
@@ -218,6 +221,12 @@ $("#filters").addEventListener("submit", async (event) => {
   syncUrl();
 });
 $("#promptQuery").addEventListener("change", () => { state.promptPage = 1; loadPrompts(); });
+$("#worstPrompt").addEventListener("click", (event) => {
+  state.promptSort = state.promptSort === "worst" ? "index" : "worst";
+  event.target.textContent = state.promptSort === "worst" ? "Index order" : "Worst-case order";
+  state.promptPage = 1;
+  loadPrompts();
+});
 $("#prevPrompt").addEventListener("click", () => { if (state.promptPage > 1) { state.promptPage--; loadPrompts(); } });
 $("#nextPrompt").addEventListener("click", () => { if (state.promptPage < state.promptPages) { state.promptPage++; loadPrompts(); } });
 $("#closeDetails").addEventListener("click", () => $("#details").close());
@@ -245,7 +254,7 @@ async function initialize() {
   const figures = $("#figures");
   (state.release.figures || []).forEach((figure) => {
     const node = document.createElement("figure");
-    node.innerHTML = `<img loading="lazy" src="/media/${encodeURI(figure.path)}" alt="${figure.title}"><figcaption>${figure.title}</figcaption>`;
+    node.innerHTML = `<img loading="lazy" src="${resource(`media/${encodeURI(figure.path)}`)}" alt="${figure.title}"><figcaption>${figure.title}</figcaption>`;
     figures.append(node);
   });
   $("#figuresSection").hidden = !figures.children.length;

@@ -99,6 +99,18 @@ def _quality_rows(root: Path) -> dict[str, dict[str, Any]]:
     return {str(row["case"]): row for row in rows}
 
 
+def _paired_rows(root: Path) -> dict[tuple[str, int], dict[str, str]]:
+    path = root / "paired_metrics.csv"
+    if not path.is_file():
+        raise FileNotFoundError(f"paired metrics are missing: {path}")
+    with path.open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    result = {(row["case"], int(row["prompt_index"])): row for row in rows}
+    if len(result) != len(rows):
+        raise ValueError(f"paired metrics contain duplicate case/prompt rows: {path}")
+    return result
+
+
 def _video_by_index(summary: dict[str, Any]) -> dict[int, Path]:
     result = {}
     for item in summary.get("video_validation", []):
@@ -187,6 +199,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
             raise TypeError(f"expected summary list in {root / 'summary.json'}")
         pixel = _pixel_groups(root)
         quality = _quality_rows(root)
+        paired = _paired_rows(root)
         for summary in summaries:
             if summary.get("complete") is not True:
                 raise ValueError(f"refusing to publish incomplete case {summary.get('case')!r} from {root}")
@@ -233,6 +246,11 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
                 video_path = video_paths[index]
                 relative = _relative(video_path, artifact_root)
                 files[relative] = video_path
+                pair = paired.get((summary["case"], index))
+                if pair is None:
+                    raise ValueError(
+                        f"paired metrics lack case={summary['case']!r}, prompt_index={index}"
+                    )
                 prompt["videos"].append(
                     {
                         "case": summary["case"],
@@ -242,12 +260,8 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
                         "guidance": float(summary["guidance_scale"]),
                         "path": relative,
                         "latency_seconds": float(request["elapsed_seconds"]),
-                        "speedup": summary.get("language_metrics", {})
-                        .get(prompt["language"], {})
-                        .get("paired_speedup_mean"),
-                        "latent_relative_l2": summary.get("language_metrics", {})
-                        .get(prompt["language"], {})
-                        .get("latent_rel_l2_mean"),
+                        "speedup": float(pair["speedup"]),
+                        "latent_relative_l2": float(pair["rel_l2"]),
                     }
                 )
     figures = []
@@ -267,6 +281,16 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
         }
         for relative, path in sorted(files.items())
     ]
+    published_prompts = [prompts[index] for index in sorted(prompts) if prompts[index]["videos"]]
+    for prompt in published_prompts:
+        prompt["worst_score"] = max(
+            (
+                float(video["latent_relative_l2"])
+                for video in prompt["videos"]
+                if not video["exact"]
+            ),
+            default=0.0,
+        )
     return {
         "schema_version": 1,
         "release_id": args.release_id,
@@ -293,7 +317,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
         },
         "benchmark_roots": [str(root) for root in roots],
         "metrics": metrics,
-        "prompts": [prompts[index] for index in sorted(prompts) if prompts[index]["videos"]],
+        "prompts": published_prompts,
         "figures": figures,
         "files": file_rows,
     }
