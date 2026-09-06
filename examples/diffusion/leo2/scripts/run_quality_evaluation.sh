@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="${1:-/root/leo2-output/cache-full-final-848x464x121-20260903-1039}"
+ROOT="${1:?Usage: run_quality_evaluation.sh BENCHMARK_ROOT [CASES_CSV]}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 LEO2_DIR="${REPO_ROOT}/examples/diffusion/leo2"
 CASES_CSV="${LEO2_CACHE_BENCH_CASES:-${LEO2_DIR}/data/cache_benchmark_cases.csv}"
@@ -22,10 +22,7 @@ mapfile -t CASES < <(
   python "${LEO2_DIR}/scripts/cache_benchmark_cases.py" --emit-records "${CASES_CSV}" \
     | cut -d $'\x1f' -f1
 )
-if ((GPU_OFFSET + ${#CASES[@]} > 8)); then
-  echo "Quality cases exceed GPUs 0..7 after offset ${GPU_OFFSET}" >&2
-  exit 2
-fi
+MAX_PARALLEL=$((8 - GPU_OFFSET))
 
 run_vbench_case() {
   local case="$1" gpu="$2"
@@ -82,30 +79,27 @@ run_videoscore_case() {
       >"${OUTPUT}/logs/videoscore2_${case}.log" 2>&1
 }
 
-pids=()
-for index in "${!CASES[@]}"; do
-  run_vbench_case "${CASES[$index]}" "$((GPU_OFFSET + index))" &
-  pids+=("$!")
-done
-status=0
-for pid in "${pids[@]}"; do
-  if ! wait "${pid}"; then
-    status=1
-  fi
-done
-((status == 0)) || exit "${status}"
+run_case_waves() {
+  local runner="$1"
+  local wave_start index status
+  local -a pids=()
+  for ((wave_start = 0; wave_start < ${#CASES[@]}; wave_start += MAX_PARALLEL)); do
+    pids=()
+    for ((index = wave_start; index < ${#CASES[@]} && index < wave_start + MAX_PARALLEL; index++)); do
+      "${runner}" "${CASES[$index]}" "$((GPU_OFFSET + index - wave_start))" &
+      pids+=("$!")
+    done
+    status=0
+    for pid in "${pids[@]}"; do
+      if ! wait "${pid}"; then
+        status=1
+      fi
+    done
+    ((status == 0)) || return "${status}"
+  done
+}
 
-pids=()
-for index in "${!CASES[@]}"; do
-  run_videoscore_case "${CASES[$index]}" "$((GPU_OFFSET + index))" &
-  pids+=("$!")
-done
-status=0
-for pid in "${pids[@]}"; do
-  if ! wait "${pid}"; then
-    status=1
-  fi
-done
-((status == 0)) || exit "${status}"
+run_case_waves run_vbench_case
+run_case_waves run_videoscore_case
 
 echo "Quality evaluation completed: ${OUTPUT}"

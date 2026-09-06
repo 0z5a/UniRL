@@ -1,0 +1,83 @@
+{
+  "calibration_selection": {
+    "pair_ids": [
+      "vb-061",
+      "vb-077",
+      "vb-088",
+      "vb-092",
+      "vp-002",
+      "vp-026",
+      "vp-037",
+      "vp-046"
+    ],
+    "policy": "4 length-quantile pairs per source dataset, disjoint from pilot"
+  },
+  "index_policy": "2 * release pair position + language offset (en=0, zh=1)",
+  "outputs": {
+    "context_ir_bilingual_calibration_16.csv": {
+      "path": "/root/UniRL/examples/diffusion/leo2/data/context_ir_bilingual_calibration_16.csv",
+      "rows": 16,
+      "sha256": "d6349cac3b5238c9fc9217be5e40cc0671f1d68b77143a939683a02a85bb83e9"
+    },
+    "context_ir_bilingual_full_200.csv": {
+      "path": "/root/UniRL/examples/diffusion/leo2/data/context_ir_bilingual_full_200.csv",
+      "rows": 200,
+      "sha256": "41323580c060370fe3bae2bc3a1db8f6b4bd2afc5ed5ebbdac0ffdf296ddc267"
+    },
+    "context_ir_bilingual_pilot_32.csv": {
+      "path": "/root/UniRL/examples/diffusion/leo2/data/context_ir_bilingual_pilot_32.csv",
+      "rows": 32,
+      "sha256": "96c828a594b00a80fdbeeeb228b8ae863c9d04d7fae933f1d5c68ded0164982d"
+    },
+    "context_ir_bilingual_smoke_1.csv": {
+      "path": "/root/UniRL/examples/diffusion/leo2/data/context_ir_bilingual_smoke_1.csv",
+      "rows": 1,
+      "sha256": "3e03fd52179ef264f2f12c8b28ce61d27f7beddc39de8c398d4e88bd7e7f844f"
+    }
+  },
+  "pilot_selection": {
+    "pair_ids": [
+      "vb-058",
+      "vb-060",
+      "vb-062",
+      "vb-064",
+      "vb-066",
+      "vb-075",
+      "vb-080",
+      "vb-096",
+      "vp-007",
+      "vp-008",
+      "vp-009",
+      "vp-011",
+      "vp-012",
+      "vp-020",
+      "vp-033",
+      "vp-034"
+    ],
+    "policy": "8 length-quantile pairs per source dataset"
+  },
+  "release": "/apdcephfs_fsgm3/share_305110755/hunyuan/bowenping/context_ir_prompt_data/release/context-ir-video-prompts-bilingual-v1",
+  "release_files": {
+    "pairs.jsonl": {
+      "path": "/apdcephfs_fsgm3/share_305110755/hunyuan/bowenping/context_ir_prompt_data/release/context-ir-video-prompts-bilingual-v1/pairs.jsonl",
+      "sha256": "63aec52997c9689207678d954ed02ae0de9d87658d95f4ce1c4bb089352e0464"
+    },
+    "prompts.en.jsonl": {
+      "path": "/apdcephfs_fsgm3/share_305110755/hunyuan/bowenping/context_ir_prompt_data/release/context-ir-video-prompts-bilingual-v1/prompts.en.jsonl",
+      "sha256": "7bf0784cacfafd954b4abf0d2bc7ad15024366e9aec63225f201f832e3119592"
+    },
+    "prompts.zh.jsonl": {
+      "path": "/apdcephfs_fsgm3/share_305110755/hunyuan/bowenping/context_ir_prompt_data/release/context-ir-video-prompts-bilingual-v1/prompts.zh.jsonl",
+      "sha256": "2e5f1aca5b65f6659d81ee1a7d1a8582f9a35a33045d2a0490ef13de3112a1c4"
+    }
+  },
+  "same_seed_policy": "English and Chinese rows of one pair share the same seed",
+  "schema_version": 1,
+  "seed_base": 52000,
+  "video_contract": {
+    "duration_seconds": 8,
+    "fps": 24,
+    "frame_formula": "duration_seconds * fps + 1",
+    "num_frames": 193
+  }
+}

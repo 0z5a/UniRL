@@ -23,7 +23,7 @@ from cache_benchmark_cases import CacheBenchmarkCase, load_cases
 
 EXPECTED_WIDTH = 848
 EXPECTED_HEIGHT = 464
-EXPECTED_FRAMES = 121
+EXPECTED_FRAMES = 193
 EXPECTED_FPS = 24.0
 FPS_ABS_TOLERANCE = 1e-6
 VIDEO_NAME = re.compile(r"^(?P<prompt_index>[0-9]+)_0[.]mp4$")
@@ -37,6 +37,8 @@ PAIR_FIELDS = (
     "cache_threshold",
     "flow_shift_video",
     "guidance_scale",
+    "language",
+    "pair_id",
     "prompt_index",
     "prompt_hash",
     "seed",
@@ -71,6 +73,10 @@ class PromptSpec:
     prompt_index: int
     seed: int
     prompt_hash: str
+    language: str
+    pair_id: str
+    source_dataset: str
+    source_id: str
 
 
 @dataclass(frozen=True)
@@ -146,13 +152,16 @@ def _load_prompts(path: Path) -> tuple[PromptSpec, ...]:
                     prompt_index=prompt_index,
                     seed=seed,
                     prompt_hash=hashlib.sha256(prompt.encode()).hexdigest(),
+                    language=(row.get("language") or "").strip(),
+                    pair_id=(row.get("pair_id") or "").strip(),
+                    source_dataset=(row.get("source_dataset") or "").strip(),
+                    source_id=(row.get("source_id") or "").strip(),
                 )
             )
     if not prompts:
         _die(f"Prompt CSV is empty: {path}")
     for field, values in (
         ("index", [prompt.prompt_index for prompt in prompts]),
-        ("seed", [prompt.seed for prompt in prompts]),
         ("prompt hash", [prompt.prompt_hash for prompt in prompts]),
     ):
         if len(set(values)) != len(values):
@@ -571,6 +580,14 @@ def _pair_rows(
                 _die(f"{candidate.spec.name}: candidate prompt index mismatch for {key}")
             if _require_int(baseline_request, "prompt_index", baseline.spec.name) != prompt.prompt_index:
                 _die(f"{baseline.spec.name}: baseline prompt index mismatch for {key}")
+            for request, case_name in (
+                (candidate_request, candidate.spec.name),
+                (baseline_request, baseline.spec.name),
+            ):
+                if (request.get("language") or "") != prompt.language:
+                    _die(f"{case_name}: language mismatch for prompt {prompt.prompt_index}")
+                if (request.get("pair_id") or "") != prompt.pair_id:
+                    _die(f"{case_name}: pair_id mismatch for prompt {prompt.prompt_index}")
             candidate_video = candidate.videos[prompt.prompt_index]
             baseline_video = baseline.videos[prompt.prompt_index]
             metrics = _pixel_metrics(baseline_video, candidate_video)
@@ -583,6 +600,8 @@ def _pair_rows(
                     "cache_threshold": candidate.spec.cache_threshold,
                     "flow_shift_video": candidate.spec.flow_shift_video,
                     "guidance_scale": candidate.spec.guidance_scale,
+                    "language": prompt.language,
+                    "pair_id": prompt.pair_id,
                     "prompt_index": prompt.prompt_index,
                     "prompt_hash": prompt.prompt_hash,
                     "seed": prompt.seed,

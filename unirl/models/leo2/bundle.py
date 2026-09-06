@@ -371,11 +371,48 @@ def _make_inference_cache_config(config: Leo2PipelineConfig) -> Any | None:
     method = config.inference_cache_method.strip().lower()
     if method == "none":
         return None
-    if method not in {"first_block", "taylor", "magcache", "fastercache_dfr"}:
+    if method not in {
+        "first_block",
+        "taylor",
+        "magcache",
+        "fastercache_dfr",
+        "cfg_cache",
+        "fastercache_dfr+cfg_cache",
+    }:
         raise ValueError(
-            "Leo2 inference_cache_method must be 'none', 'first_block', 'taylor', or "
-            "'magcache', or 'fastercache_dfr', "
+            "Leo2 inference_cache_method must be 'none', 'first_block', 'taylor', "
+            "'magcache', 'fastercache_dfr', 'cfg_cache', or "
+            "'fastercache_dfr+cfg_cache', "
             f"got {config.inference_cache_method!r}."
+        )
+    if method in {"cfg_cache", "fastercache_dfr+cfg_cache"}:
+        from hymm.models.diffusion.leo_cache import (
+            LeoCFGCacheConfig,
+            LeoCombinedCacheConfig,
+            LeoFasterCacheConfig,
+        )
+
+        cfg_cache = LeoCFGCacheConfig(
+            start_step=config.inference_cache_cfg_start_step,
+            end_step=config.inference_cache_cfg_end_step,
+            interval=config.inference_cache_cfg_interval,
+            low_frequency_weight=config.inference_cache_cfg_low_frequency_weight,
+            high_frequency_weight=config.inference_cache_cfg_high_frequency_weight,
+            low_frequency_start_step=config.inference_cache_cfg_low_frequency_start_step,
+            low_frequency_end_step=config.inference_cache_cfg_low_frequency_end_step,
+            high_frequency_start_step=config.inference_cache_cfg_high_frequency_start_step,
+            high_frequency_end_step=config.inference_cache_cfg_high_frequency_end_step,
+        )
+        if method == "cfg_cache":
+            return cfg_cache
+        return LeoCombinedCacheConfig(
+            feature=LeoFasterCacheConfig(
+                start_step=config.inference_cache_fastercache_start_step,
+                end_step=config.inference_cache_fastercache_end_step,
+                interval=config.inference_cache_fastercache_interval,
+                layers=config.inference_cache_fastercache_layers,
+            ),
+            cfg=cfg_cache,
         )
     if method == "fastercache_dfr":
         from hymm.models.diffusion.leo_cache import LeoFasterCacheConfig

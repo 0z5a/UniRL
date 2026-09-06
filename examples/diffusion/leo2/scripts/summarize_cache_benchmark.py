@@ -17,8 +17,8 @@ REQUEST_MARKER = "LEO2_CACHE_BENCH_REQUEST_JSON="
 CONFIG_MARKER = "LEO2_CACHE_BENCH_CONFIG_JSON="
 EXPECTED_WIDTH = 848
 EXPECTED_HEIGHT = 464
-EXPECTED_FRAMES = 121
-EXPECTED_FPS = 24.0
+LEGACY_EXPECTED_FRAMES = 121
+LEGACY_EXPECTED_FPS = 24.0
 TAIL_METHODS = {"first_block", "taylor", "magcache", "magcache_calibrate"}
 COUNTER_FIELDS = (
     "full_steps",
@@ -103,7 +103,7 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _probe_video(path: Path) -> dict[str, Any]:
+def _probe_video(path: Path, *, expected_frames: int, expected_fps: float) -> dict[str, Any]:
     """Validate one encoded video with the packaged imageio-ffmpeg binary."""
     try:
         reader = imageio_ffmpeg.read_frames(path)
@@ -117,8 +117,8 @@ def _probe_video(path: Path) -> dict[str, Any]:
         valid = (
             width == EXPECTED_WIDTH
             and height == EXPECTED_HEIGHT
-            and frames == EXPECTED_FRAMES
-            and math.isclose(fps, EXPECTED_FPS, rel_tol=0, abs_tol=1e-6)
+            and frames == expected_frames
+            and math.isclose(fps, expected_fps, rel_tol=0, abs_tol=1e-6)
         )
         return {
             "codec": metadata.get("codec"),
@@ -188,6 +188,22 @@ def _case_summary(case_dir: Path, expected_videos: int) -> dict[str, Any]:
     method = _method(config, metadata)
     guidance_scale = _guidance_scale(config, metadata)
     raw_successful = [record for record in records if record.get("status") == "ok"]
+    expected_frames = int(
+        config.get(
+            "num_frames",
+            raw_successful[0].get("num_frames", LEGACY_EXPECTED_FRAMES)
+            if raw_successful
+            else LEGACY_EXPECTED_FRAMES,
+        )
+    )
+    expected_fps = float(
+        config.get(
+            "video_fps",
+            raw_successful[0].get("video_fps", LEGACY_EXPECTED_FPS)
+            if raw_successful
+            else LEGACY_EXPECTED_FPS,
+        )
+    )
     cache_bytes_present = [record.get("cache_bytes") is not None for record in raw_successful]
     if any(cache_bytes_present) and not all(cache_bytes_present):
         raise ValueError(f"Case {case_dir.name} has inconsistent cache_bytes instrumentation.")
@@ -210,7 +226,10 @@ def _case_summary(case_dir: Path, expected_videos: int) -> dict[str, Any]:
     )
     taylor_alpha_max = max((float(record.get("taylor_alpha_max", 0.0)) for record in successful), default=0.0)
     videos = sorted((case_dir / "samples").rglob("*.mp4"))
-    video_validation = [_probe_video(path) for path in videos]
+    video_validation = [
+        _probe_video(path, expected_frames=expected_frames, expected_fps=expected_fps)
+        for path in videos
+    ]
     valid_video_count = sum(bool(record["valid"]) for record in video_validation)
     latent_validation = _validate_latents(case_dir, successful)
     valid_latent_count = sum(bool(record["valid"]) for record in latent_validation)
@@ -244,6 +263,9 @@ def _case_summary(case_dir: Path, expected_videos: int) -> dict[str, Any]:
         "expected_videos": expected_videos,
         "flow_shift_video": config.get("flow_shift_video"),
         "guidance_scale": guidance_scale,
+        "num_frames": expected_frames,
+        "video_fps": expected_fps,
+        "video_duration_seconds": (expected_frames - 1) / expected_fps,
         "generation_mean_seconds": _mean(elapsed),
         "generation_mean_seconds_ci95_high": mean_ci95_high,
         "generation_mean_seconds_ci95_low": mean_ci95_low,
@@ -321,6 +343,7 @@ def _empty_paired_metrics(row: dict[str, Any]) -> None:
             "latent_pair_count": 0,
             "latent_rel_l1_mean": None,
             "latent_rel_l2_mean": None,
+            "language_metrics": {},
             "pairing_error": None,
             "paired_speedup_mean": None,
             "paired_speedup_mean_ci95_high": None,
@@ -383,7 +406,13 @@ def _add_paired_metrics(rows: list[dict[str, Any]], *, root: Path, expected_vide
             continue
         if not baseline["complete"]:
             raise ValueError(f"Baseline case is incomplete: {baseline_root / baseline['case']}")
-        for field in ("flow_shift_video", "guidance_scale", "diff_infer_steps"):
+        for field in (
+            "flow_shift_video",
+            "guidance_scale",
+            "diff_infer_steps",
+            "num_frames",
+            "video_fps",
+        ):
             if not _same_float(row[field], baseline[field]):
                 raise ValueError(
                     f"Candidate {row['case']} and baseline {baseline['case']} disagree on {field}: "
@@ -404,6 +433,12 @@ def _add_paired_metrics(rows: list[dict[str, Any]], *, root: Path, expected_vide
                     f"Prompt index mismatch for paired hash in {row['case']}: "
                     f"{request['prompt_index']} != {reference['prompt_index']}"
                 )
+            for identity_field in ("language", "pair_id"):
+                if (reference.get(identity_field) or "") != (request.get(identity_field) or ""):
+                    raise ValueError(
+                        f"{identity_field} mismatch for paired prompt in {row['case']}: "
+                        f"{request.get(identity_field)!r} != {reference.get(identity_field)!r}"
+                    )
             ratio = float(reference["elapsed_seconds"]) / float(request["elapsed_seconds"])
             ratios.append(ratio)
             if int(request["request"]) > 1 and int(reference["request"]) > 1:
@@ -422,9 +457,13 @@ def _add_paired_metrics(rows: list[dict[str, Any]], *, root: Path, expected_vide
                 "case": row["case"],
                 "flow_shift_video": row["flow_shift_video"],
                 "guidance_scale": row["guidance_scale"],
+                "language": request.get("language") or "",
+                "pair_id": request.get("pair_id") or "",
                 "prompt_hash": request["prompt_hash"],
                 "prompt_index": request["prompt_index"],
                 "seed": request["seed"],
+                "source_dataset": request.get("source_dataset") or "",
+                "source_id": request.get("source_id") or "",
                 "speedup": ratio,
                 **drift,
             }
@@ -444,6 +483,17 @@ def _add_paired_metrics(rows: list[dict[str, Any]], *, root: Path, expected_vide
                 "paired_steady_speedup_mean": _mean(steady_ratios),
                 "pairing_error": None,
                 "zero_threshold_exact": None,
+                "language_metrics": {
+                    language: {
+                        "pair_count": len(items),
+                        "paired_speedup_mean": _mean([item["speedup"] for item in items]),
+                        "latent_rel_l1_mean": _mean([item["rel_l1"] for item in items]),
+                        "latent_rel_l2_mean": _mean([item["rel_l2"] for item in items]),
+                        "latent_cosine_mean": _mean([item["cosine"] for item in items]),
+                    }
+                    for language in ("en", "zh")
+                    if (items := [item for item in drift_rows if item["language"] == language])
+                },
             }
         )
         row["complete"] = row["complete"] and len(drift_rows) == row["expected_videos"]
@@ -472,6 +522,9 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "baseline_case",
         "reference_root",
         "diff_infer_steps",
+        "num_frames",
+        "video_fps",
+        "video_duration_seconds",
         "world_size",
         "request_count",
         "video_count",
@@ -537,9 +590,13 @@ def _write_paired_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "cache_threshold",
         "flow_shift_video",
         "guidance_scale",
+        "language",
+        "pair_id",
         "prompt_index",
         "prompt_hash",
         "seed",
+        "source_dataset",
+        "source_id",
         "candidate_seconds",
         "baseline_seconds",
         "speedup",

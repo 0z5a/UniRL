@@ -35,6 +35,8 @@ else
 fi
 OUTPUT_ROOT="${LEO2_CACHE_BENCH_OUTPUT:-${REPO_ROOT}/outputs/leo2/cache-${MODE}-${TIMESTAMP}}"
 INFER_STEPS="${LEO2_INFER_STEPS:-50}"
+VIDEO_FPS="${LEO2_VIDEO_FPS:-24}"
+VIDEO_DURATION_SECONDS=8
 ARTIFACT_MANIFEST="${REPO_ROOT}/unirl/models/leo2/resources/artifacts.yaml"
 
 if [[ ! -f "${PROMPTS_CSV}" ]]; then
@@ -49,6 +51,11 @@ if [[ "${PILOT}" != "0" && "${PILOT}" != "1" ]]; then
   echo "LEO2_CACHE_BENCH_PILOT must be 0 or 1, got: ${PILOT}" >&2
   exit 2
 fi
+if [[ ! "${VIDEO_FPS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "LEO2_VIDEO_FPS must be a positive integer, got: ${VIDEO_FPS}" >&2
+  exit 2
+fi
+NUM_FRAMES=$((VIDEO_DURATION_SECONDS * VIDEO_FPS + 1))
 if [[ "${PILOT}" == "0" ]]; then
   mapfile -t case_rows < <(
     "${PYTHON_BIN}" "${SCRIPT_DIR}/cache_benchmark_cases.py" --emit-records "${CASES_CSV}"
@@ -79,7 +86,14 @@ export PYTHONPATH="${REPO_ROOT}"
 export TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1
 mkdir -p "${HF_HOME}"
 
-prompt_count="$(awk 'NR > 1 {count += 1} END {print count + 0}' "${PROMPTS_CSV}")"
+prompt_count="$("${PYTHON_BIN}" - "${PROMPTS_CSV}" <<'PY'
+import csv
+import sys
+
+with open(sys.argv[1], encoding="utf-8", newline="") as handle:
+    print(sum(1 for _ in csv.DictReader(handle)))
+PY
+)"
 if [[ "${prompt_count}" -eq 0 ]]; then
   echo "Prompt CSV is empty: ${PROMPTS_CSV}" >&2
   exit 2
@@ -143,7 +157,9 @@ fi
   echo "runtime_python=${PYTHON_BIN}"
   echo "runtime_python_version=$("${PYTHON_BIN}" --version 2>&1)"
   echo "image_size=464x848"
-  echo "num_frames=121"
+  echo "video_duration_seconds=${VIDEO_DURATION_SECONDS}"
+  echo "video_fps=${VIDEO_FPS}"
+  echo "num_frames=${NUM_FRAMES}"
   echo "diff_infer_steps=${INFER_STEPS}"
   echo "expected_videos_per_case=${EXPECTED_VIDEOS}"
 } >"${OUTPUT_ROOT}/benchmark.env"
@@ -154,12 +170,15 @@ for encoded_case in "${case_rows[@]}"; do
     case_name method cache_threshold flow_shift_video guidance_scale baseline_case reference_root \
     taylor_max_extrapolation magcache_profile magcache_threshold magcache_max_skip_steps \
     magcache_retention_ratio dfr_start_step dfr_end_step dfr_interval dfr_layers \
+    cfg_start_step cfg_end_step cfg_interval cfg_low_frequency_weight cfg_high_frequency_weight \
+    cfg_low_frequency_start_step cfg_low_frequency_end_step \
+    cfg_high_frequency_start_step cfg_high_frequency_end_step \
     <<<"${encoded_case}"
   if [[ ! "${case_name}" =~ ^[a-zA-Z0-9._-]+$ ]]; then
     echo "Invalid case name: ${case_name}" >&2
     exit 2
   fi
-  if [[ ! "${method}" =~ ^(off|first_block|taylor|magcache|magcache_calibrate|fastercache_dfr)$ ]]; then
+  if [[ ! "${method}" =~ ^(off|first_block|taylor|magcache|magcache_calibrate|fastercache_dfr|cfg_cache|fastercache_dfr\+cfg_cache)$ ]]; then
     echo "Invalid cache method for ${case_name}: ${method}" >&2
     exit 2
   fi
@@ -211,8 +230,8 @@ for encoded_case in "${case_rows[@]}"; do
     --gate-impl deepseek
     --vae-type 16x16x4-48c-hy-v3_3-release2
     --image-size 464x848
-    --num-frames 121
-    --video-fps 24
+    --num-frames "${NUM_FRAMES}"
+    --video-fps "${VIDEO_FPS}"
     --diff-infer-steps "${INFER_STEPS}"
     --diff-guidance-scale "${guidance_scale}"
     --flow-shift-video "${flow_shift_video}"
@@ -258,6 +277,38 @@ for encoded_case in "${case_rows[@]}"; do
         command+=(--leo2-dfr-layers "${dfr_layers}")
       fi
       ;;
+    cfg_cache)
+      command+=(
+        --leo2-cfg-start-step "${cfg_start_step}"
+        --leo2-cfg-end-step "${cfg_end_step}"
+        --leo2-cfg-interval "${cfg_interval}"
+        --leo2-cfg-low-frequency-weight "${cfg_low_frequency_weight}"
+        --leo2-cfg-high-frequency-weight "${cfg_high_frequency_weight}"
+        --leo2-cfg-low-frequency-start-step "${cfg_low_frequency_start_step}"
+        --leo2-cfg-low-frequency-end-step "${cfg_low_frequency_end_step}"
+        --leo2-cfg-high-frequency-start-step "${cfg_high_frequency_start_step}"
+        --leo2-cfg-high-frequency-end-step "${cfg_high_frequency_end_step}"
+      )
+      ;;
+    fastercache_dfr+cfg_cache)
+      command+=(
+        --leo2-dfr-start-step "${dfr_start_step}"
+        --leo2-dfr-end-step "${dfr_end_step}"
+        --leo2-dfr-interval "${dfr_interval}"
+        --leo2-cfg-start-step "${cfg_start_step}"
+        --leo2-cfg-end-step "${cfg_end_step}"
+        --leo2-cfg-interval "${cfg_interval}"
+        --leo2-cfg-low-frequency-weight "${cfg_low_frequency_weight}"
+        --leo2-cfg-high-frequency-weight "${cfg_high_frequency_weight}"
+        --leo2-cfg-low-frequency-start-step "${cfg_low_frequency_start_step}"
+        --leo2-cfg-low-frequency-end-step "${cfg_low_frequency_end_step}"
+        --leo2-cfg-high-frequency-start-step "${cfg_high_frequency_start_step}"
+        --leo2-cfg-high-frequency-end-step "${cfg_high_frequency_end_step}"
+      )
+      if [[ -n "${dfr_layers}" ]]; then
+        command+=(--leo2-dfr-layers "${dfr_layers}")
+      fi
+      ;;
   esac
   if [[ "${PILOT}" == "1" && "${method}" != "off" && "${method}" != "magcache_calibrate" \
     && "${cache_threshold}" != "0" ]]; then
@@ -297,6 +348,15 @@ for encoded_case in "${case_rows[@]}"; do
     echo "dfr_end_step=${dfr_end_step}"
     echo "dfr_interval=${dfr_interval}"
     echo "dfr_layers=${dfr_layers}"
+    echo "cfg_start_step=${cfg_start_step}"
+    echo "cfg_end_step=${cfg_end_step}"
+    echo "cfg_interval=${cfg_interval}"
+    echo "cfg_low_frequency_weight=${cfg_low_frequency_weight}"
+    echo "cfg_high_frequency_weight=${cfg_high_frequency_weight}"
+    echo "cfg_low_frequency_start_step=${cfg_low_frequency_start_step}"
+    echo "cfg_low_frequency_end_step=${cfg_low_frequency_end_step}"
+    echo "cfg_high_frequency_start_step=${cfg_high_frequency_start_step}"
+    echo "cfg_high_frequency_end_step=${cfg_high_frequency_end_step}"
     echo "expected_videos=${EXPECTED_VIDEOS}"
   } >"${case_dir}/case.env"
 

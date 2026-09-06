@@ -2,7 +2,7 @@ import math
 from argparse import Namespace
 from dataclasses import dataclass
 from typing import Optional, Any, Union
-from contextlib import nullcontext
+from contextlib import ExitStack, contextmanager, nullcontext
 
 import torch
 import torch.nn as nn
@@ -27,6 +27,9 @@ from hy_parallelism.context_parallel.core import (
 )
 
 from .leo_cache import (
+    LeoCFGCacheConfig,
+    LeoCFGCacheController,
+    LeoCombinedCacheConfig,
     LeoFasterCacheConfig,
     LeoFasterCacheController,
     LeoFirstBlockCacheConfig,
@@ -1711,6 +1714,7 @@ class LeoModelBase(HunyuanMultimodalState):
         self.cached_rope = CachedRoPE(config)
         self._cache_config = None
         self._leo_cache_controller = None
+        self._leo_cfg_cache_controller = None
 
         if initialize_weights:
             self._prepare_reset_parameters()
@@ -1744,43 +1748,108 @@ class LeoModelBase(HunyuanMultimodalState):
             raise ValueError("Cache is already enabled; call `disable_cache()` before enabling it again.")
         if config is None:
             config = LeoFirstBlockCacheConfig()
-        if isinstance(config, LeoMagCacheConfig):
-            controller = LeoMagCacheController(config)
-        elif isinstance(config, LeoFasterCacheConfig):
-            controller = LeoFasterCacheController(config, num_layers=len(self.layers))
+        feature_config = config.feature if isinstance(config, LeoCombinedCacheConfig) else config
+        cfg_config = config.cfg if isinstance(config, LeoCombinedCacheConfig) else config
+        controller = None
+        cfg_controller = None
+        if isinstance(feature_config, LeoMagCacheConfig):
+            controller = LeoMagCacheController(feature_config)
+        elif isinstance(feature_config, LeoFasterCacheConfig):
+            controller = LeoFasterCacheController(feature_config, num_layers=len(self.layers))
+        elif isinstance(feature_config, LeoCFGCacheConfig):
+            cfg_controller = LeoCFGCacheController(feature_config)
         else:
-            controller = LeoFirstBlockCacheController(config)
+            controller = LeoFirstBlockCacheController(feature_config)
+        if isinstance(cfg_config, LeoCFGCacheConfig) and cfg_controller is None:
+            cfg_controller = LeoCFGCacheController(cfg_config)
         self._cache_config = config
         self._leo_cache_controller = controller
+        self._leo_cfg_cache_controller = cfg_controller
 
     @property
     def is_cache_enabled(self) -> bool:
         """Return whether a Leo cache configuration is installed."""
-        return self._leo_cache_controller is not None
+        return self._leo_cache_controller is not None or self._leo_cfg_cache_controller is not None
 
     def disable_cache(self) -> None:
         """Disable Leo inference caching and release cached activations."""
         self._reset_stateful_cache()
         self._leo_cache_controller = None
+        self._leo_cfg_cache_controller = None
         self._cache_config = None
 
+    @contextmanager
     def cache_context(self, name: str = "default"):
         """Scope stateful cache data to one complete inference request."""
-        if self._leo_cache_controller is None:
-            return nullcontext()
-        return self._leo_cache_controller.context(name)
+        with ExitStack() as stack:
+            if self._leo_cache_controller is not None:
+                stack.enter_context(self._leo_cache_controller.context(name))
+            if self._leo_cfg_cache_controller is not None:
+                stack.enter_context(self._leo_cfg_cache_controller.context(name))
+            yield
 
     def _reset_stateful_cache(self, recurse: bool = True) -> None:
         """Release request-local Leo cache state."""
         _ = recurse
         if self._leo_cache_controller is not None:
             self._leo_cache_controller.reset()
+        if self._leo_cfg_cache_controller is not None:
+            self._leo_cfg_cache_controller.reset()
 
     def cache_stats(self) -> dict[str, object]:
         """Return cache counters from the latest inference request."""
-        if self._leo_cache_controller is None:
+        if self._leo_cache_controller is None and self._leo_cfg_cache_controller is None:
             return {"method": "none", "threshold": 0.0, "full_steps": 0, "skipped_steps": 0}
-        return self._leo_cache_controller.stats()
+        feature_stats = (
+            self._leo_cache_controller.stats()
+            if self._leo_cache_controller is not None
+            else {"method": "none", "full_steps": 0, "skipped_steps": 0, "cache_bytes": 0}
+        )
+        if self._leo_cfg_cache_controller is None:
+            return feature_stats
+        cfg_stats = self._leo_cfg_cache_controller.stats()
+        if self._leo_cache_controller is None:
+            return {
+                "method": "cfg_cache",
+                "full_steps": 0,
+                "skipped_steps": 0,
+                **cfg_stats,
+            }
+        return {
+            **feature_stats,
+            **{key: value for key, value in cfg_stats.items() if key not in {"method", "cache_bytes"}},
+            "method": f"{feature_stats['method']}+cfg_cache",
+            "cache_bytes": int(feature_stats.get("cache_bytes", 0)) + int(cfg_stats.get("cache_bytes", 0)),
+        }
+
+    def cfg_cache_begin_step(self, *, guidance_enabled: bool, reference: torch.Tensor) -> bool:
+        """Start one CFG-cache step and align DFR history mode with its branch shape."""
+        reuse = False
+        if self._leo_cfg_cache_controller is not None:
+            reuse = self._leo_cfg_cache_controller.begin_step(
+                guidance_enabled=guidance_enabled,
+                reference=reference,
+            )
+        if isinstance(self._leo_cache_controller, LeoFasterCacheController):
+            self._leo_cache_controller.set_cfg_mode(
+                enabled=guidance_enabled and self._leo_cfg_cache_controller is not None,
+                conditional_only=reuse,
+            )
+        return reuse
+
+    def cfg_cache_conditional_inputs(self, model_inputs: dict[str, object]) -> dict[str, object]:
+        if self._leo_cfg_cache_controller is None:
+            raise RuntimeError("Leo CFG cache conditional inputs requested while CFG cache is disabled")
+        return self._leo_cfg_cache_controller.conditional_inputs(model_inputs)
+
+    def cfg_cache_record_exact(self, conditional: torch.Tensor, unconditional: torch.Tensor) -> None:
+        if self._leo_cfg_cache_controller is not None:
+            self._leo_cfg_cache_controller.record_exact(conditional, unconditional)
+
+    def cfg_cache_reconstruct_unconditional(self, conditional: torch.Tensor) -> torch.Tensor:
+        if self._leo_cfg_cache_controller is None:
+            raise RuntimeError("Leo CFG cache reconstruction requested while CFG cache is disabled")
+        return self._leo_cfg_cache_controller.reconstruct_unconditional(conditional)
 
     def get_printable_layers(self):
         if self._config.moe_layer_num_skipped == 0:

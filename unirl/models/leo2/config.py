@@ -96,6 +96,15 @@ class Leo2PipelineConfig:
     inference_cache_fastercache_end_step: int = 46
     inference_cache_fastercache_interval: int = 2
     inference_cache_fastercache_layers: Optional[List[int]] = None
+    inference_cache_cfg_start_step: int = 1
+    inference_cache_cfg_end_step: int = 50
+    inference_cache_cfg_interval: int = 5
+    inference_cache_cfg_low_frequency_weight: float = 1.1
+    inference_cache_cfg_high_frequency_weight: float = 1.1
+    inference_cache_cfg_low_frequency_start_step: int = 1
+    inference_cache_cfg_low_frequency_end_step: int = 50
+    inference_cache_cfg_high_frequency_start_step: int = 1
+    inference_cache_cfg_high_frequency_end_step: int = 50
 
     # --- placement ---
     # Qwen3.5-9B (18 GB bf16) parked on CPU; moved to GPU transiently for the

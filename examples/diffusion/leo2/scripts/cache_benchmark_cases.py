@@ -7,6 +7,7 @@ import csv
 import math
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any
 
 METHODS = {
     "off",
@@ -15,6 +16,8 @@ METHODS = {
     "magcache",
     "magcache_calibrate",
     "fastercache_dfr",
+    "cfg_cache",
+    "fastercache_dfr+cfg_cache",
 }
 FIELD_SEPARATOR = "\x1f"
 TSV_FIELDS = (
@@ -34,6 +37,15 @@ TSV_FIELDS = (
     "dfr_end_step",
     "dfr_interval",
     "dfr_layers",
+    "cfg_start_step",
+    "cfg_end_step",
+    "cfg_interval",
+    "cfg_low_frequency_weight",
+    "cfg_high_frequency_weight",
+    "cfg_low_frequency_start_step",
+    "cfg_low_frequency_end_step",
+    "cfg_high_frequency_start_step",
+    "cfg_high_frequency_end_step",
 )
 
 
@@ -57,6 +69,15 @@ class CacheBenchmarkCase:
     dfr_end_step: int | None = None
     dfr_interval: int | None = None
     dfr_layers: str | None = None
+    cfg_start_step: int | None = None
+    cfg_end_step: int | None = None
+    cfg_interval: int | None = None
+    cfg_low_frequency_weight: float | None = None
+    cfg_high_frequency_weight: float | None = None
+    cfg_low_frequency_start_step: int | None = None
+    cfg_low_frequency_end_step: int | None = None
+    cfg_high_frequency_start_step: int | None = None
+    cfg_high_frequency_end_step: int | None = None
     schema_version: int = 2
 
     @property
@@ -191,21 +212,32 @@ def _parse_v2(row: dict[str, str | None], *, source: Path, context: str) -> Cach
         "magcache_retention_ratio",
     )
     dfr_fields = ("dfr_start_step", "dfr_end_step", "dfr_interval", "dfr_layers")
+    cfg_fields = (
+        "cfg_start_step",
+        "cfg_end_step",
+        "cfg_interval",
+        "cfg_low_frequency_weight",
+        "cfg_high_frequency_weight",
+        "cfg_low_frequency_start_step",
+        "cfg_low_frequency_end_step",
+        "cfg_high_frequency_start_step",
+        "cfg_high_frequency_end_step",
+    )
 
     if method == "off":
         if threshold is not None:
             _die(f"Method 'off' requires an empty/off cache_threshold in {context}")
-        _reject_fields(row, taylor_fields + magcache_fields + dfr_fields, method=method, context=context)
+        _reject_fields(row, taylor_fields + magcache_fields + dfr_fields + cfg_fields, method=method, context=context)
         return CacheBenchmarkCase(**common)
     if method == "first_block":
         if threshold is None:
             _die(f"Method 'first_block' requires cache_threshold in {context}")
-        _reject_fields(row, taylor_fields + magcache_fields + dfr_fields, method=method, context=context)
+        _reject_fields(row, taylor_fields + magcache_fields + dfr_fields + cfg_fields, method=method, context=context)
         return CacheBenchmarkCase(**common)
     if method == "taylor":
         if threshold is None:
             _die(f"Method 'taylor' requires cache_threshold in {context}")
-        _reject_fields(row, magcache_fields + dfr_fields, method=method, context=context)
+        _reject_fields(row, magcache_fields + dfr_fields + cfg_fields, method=method, context=context)
         return CacheBenchmarkCase(
             **common,
             taylor_max_extrapolation=_optional_float(row, "taylor_max_extrapolation", context=context, default=1.0),
@@ -213,7 +245,7 @@ def _parse_v2(row: dict[str, str | None], *, source: Path, context: str) -> Cach
     if method in {"magcache", "magcache_calibrate"}:
         if threshold is not None:
             _die(f"Method {method!r} uses magcache_threshold, not cache_threshold, in {context}")
-        _reject_fields(row, taylor_fields + dfr_fields, method=method, context=context)
+        _reject_fields(row, taylor_fields + dfr_fields + cfg_fields, method=method, context=context)
         magcache_threshold = _optional_float(row, "magcache_threshold", context=context)
         if magcache_threshold is None:
             _die(f"Method {method!r} requires magcache_threshold in {context}")
@@ -231,22 +263,63 @@ def _parse_v2(row: dict[str, str | None], *, source: Path, context: str) -> Cach
         )
 
     if threshold is not None:
-        _die(f"Method 'fastercache_dfr' does not use cache_threshold in {context}")
+        _die(f"Method {method!r} does not use cache_threshold in {context}")
     _reject_fields(row, taylor_fields + magcache_fields, method=method, context=context)
-    start = _optional_int(row, "dfr_start_step", context=context, default=4)
-    end = _optional_int(row, "dfr_end_step", context=context, default=46)
-    interval = _optional_int(row, "dfr_interval", context=context, default=2)
-    if interval == 0:
-        _die(f"dfr_interval must be positive in {context}")
-    if start is not None and end is not None and start >= end:
-        _die(f"dfr_start_step must be less than dfr_end_step in {context}")
-    return CacheBenchmarkCase(
-        **common,
-        dfr_start_step=start,
-        dfr_end_step=end,
-        dfr_interval=interval,
-        dfr_layers=_text(row, "dfr_layers") or None,
-    )
+
+    values: dict[str, Any] = {}
+    if method in {"fastercache_dfr", "fastercache_dfr+cfg_cache"}:
+        start = _optional_int(row, "dfr_start_step", context=context, default=4)
+        end = _optional_int(row, "dfr_end_step", context=context, default=46)
+        interval = _optional_int(row, "dfr_interval", context=context, default=2)
+        if interval == 0:
+            _die(f"dfr_interval must be positive in {context}")
+        if start is not None and end is not None and start >= end:
+            _die(f"dfr_start_step must be less than dfr_end_step in {context}")
+        values.update(
+            dfr_start_step=start,
+            dfr_end_step=end,
+            dfr_interval=interval,
+            dfr_layers=_text(row, "dfr_layers") or None,
+        )
+    else:
+        _reject_fields(row, dfr_fields, method=method, context=context)
+
+    if method in {"cfg_cache", "fastercache_dfr+cfg_cache"}:
+        cfg_start = _optional_int(row, "cfg_start_step", context=context, default=1)
+        cfg_end = _optional_int(row, "cfg_end_step", context=context)
+        cfg_interval = _optional_int(row, "cfg_interval", context=context, default=5)
+        if cfg_end is None:
+            _die(f"Method {method!r} requires cfg_end_step in {context}")
+        if cfg_interval == 0:
+            _die(f"cfg_interval must be positive in {context}")
+        if cfg_start is not None and cfg_start >= cfg_end:
+            _die(f"cfg_start_step must be less than cfg_end_step in {context}")
+        low_start = _optional_int(row, "cfg_low_frequency_start_step", context=context, default=cfg_start)
+        low_end = _optional_int(row, "cfg_low_frequency_end_step", context=context, default=cfg_end)
+        high_start = _optional_int(row, "cfg_high_frequency_start_step", context=context, default=cfg_start)
+        high_end = _optional_int(row, "cfg_high_frequency_end_step", context=context, default=cfg_end)
+        if low_start is None or low_end is None or low_start >= low_end:
+            _die(f"invalid low-frequency CFG step range in {context}")
+        if high_start is None or high_end is None or high_start >= high_end:
+            _die(f"invalid high-frequency CFG step range in {context}")
+        values.update(
+            cfg_start_step=cfg_start,
+            cfg_end_step=cfg_end,
+            cfg_interval=cfg_interval,
+            cfg_low_frequency_weight=_optional_float(
+                row, "cfg_low_frequency_weight", context=context, default=1.1
+            ),
+            cfg_high_frequency_weight=_optional_float(
+                row, "cfg_high_frequency_weight", context=context, default=1.1
+            ),
+            cfg_low_frequency_start_step=low_start,
+            cfg_low_frequency_end_step=low_end,
+            cfg_high_frequency_start_step=high_start,
+            cfg_high_frequency_end_step=high_end,
+        )
+    else:
+        _reject_fields(row, cfg_fields, method=method, context=context)
+    return CacheBenchmarkCase(**common, **values)
 
 
 def load_cases(path: Path) -> tuple[CacheBenchmarkCase, ...]:

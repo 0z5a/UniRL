@@ -20,7 +20,9 @@ from typing import Any
 REQUEST_MARKER = "LEO2_CACHE_BENCH_REQUEST_JSON="
 CONFIG_MARKER = "LEO2_CACHE_BENCH_CONFIG_JSON="
 TAIL_METHODS = {"first_block", "taylor", "magcache", "magcache_calibrate"}
-TOPOLOGY_METHODS = TAIL_METHODS | {"fastercache_dfr"}
+DFR_METHODS = {"fastercache_dfr", "fastercache_dfr+cfg_cache"}
+CFG_METHODS = {"cfg_cache", "fastercache_dfr+cfg_cache"}
+TOPOLOGY_METHODS = TAIL_METHODS | DFR_METHODS
 COUNTER_FIELDS = (
     "full_steps",
     "skipped_steps",
@@ -39,13 +41,23 @@ RANK_IDENTICAL_COUNTER_FIELDS = tuple(field for field in COUNTER_FIELDS if field
 
 
 @dataclass(frozen=True)
+class PromptIdentity:
+    index: int
+    prompt_hash: str
+    language: str
+    pair_id: str
+    source_dataset: str
+    source_id: str
+
+
+@dataclass(frozen=True)
 class BenchmarkOptions:
     """Hold benchmark-only options removed before hymm CLI parsing."""
 
     method: str
     cache_threshold: float | None
     latent_dir: Path
-    prompts_by_seed: dict[int, tuple[int, str]]
+    prompts_by_seed: dict[int, tuple[PromptIdentity, ...]]
     require_cache_hit: bool
     baseline_case: str | None
     reference_root: Path | None
@@ -58,6 +70,15 @@ class BenchmarkOptions:
     dfr_end_step: int
     dfr_interval: int
     dfr_layers: tuple[int, ...] | None
+    cfg_start_step: int
+    cfg_end_step: int
+    cfg_interval: int
+    cfg_low_frequency_weight: float
+    cfg_high_frequency_weight: float
+    cfg_low_frequency_start_step: int
+    cfg_low_frequency_end_step: int
+    cfg_high_frequency_start_step: int
+    cfg_high_frequency_end_step: int
 
 
 def _bootstrap_vendor() -> None:
@@ -121,7 +142,16 @@ def _parse_benchmark_options() -> BenchmarkOptions:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument(
         "--leo2-cache-method",
-        choices=("off", "first_block", "taylor", "magcache", "magcache_calibrate", "fastercache_dfr"),
+        choices=(
+            "off",
+            "first_block",
+            "taylor",
+            "magcache",
+            "magcache_calibrate",
+            "fastercache_dfr",
+            "cfg_cache",
+            "fastercache_dfr+cfg_cache",
+        ),
     )
     parser.add_argument("--leo2-cache-threshold")
     parser.add_argument("--leo2-latent-dir", type=Path, required=True)
@@ -138,6 +168,15 @@ def _parse_benchmark_options() -> BenchmarkOptions:
     parser.add_argument("--leo2-dfr-end-step", type=int, default=46)
     parser.add_argument("--leo2-dfr-interval", type=int, default=2)
     parser.add_argument("--leo2-dfr-layers")
+    parser.add_argument("--leo2-cfg-start-step", type=int, default=1)
+    parser.add_argument("--leo2-cfg-end-step", type=int, required=False)
+    parser.add_argument("--leo2-cfg-interval", type=int, default=5)
+    parser.add_argument("--leo2-cfg-low-frequency-weight", default="1.1")
+    parser.add_argument("--leo2-cfg-high-frequency-weight", default="1.1")
+    parser.add_argument("--leo2-cfg-low-frequency-start-step", type=int)
+    parser.add_argument("--leo2-cfg-low-frequency-end-step", type=int)
+    parser.add_argument("--leo2-cfg-high-frequency-start-step", type=int)
+    parser.add_argument("--leo2-cfg-high-frequency-end-step", type=int)
     args, remaining = parser.parse_known_args()
     sys.argv = [sys.argv[0], *remaining]
     threshold = _parse_threshold(args.leo2_cache_threshold)
@@ -172,8 +211,15 @@ def _parse_benchmark_options() -> BenchmarkOptions:
         raise ValueError("Leo2 DFR start step must be less than its end step.")
     if args.leo2_dfr_interval <= 0:
         raise ValueError("Leo2 DFR interval must be positive.")
+    if method in CFG_METHODS:
+        if args.leo2_cfg_end_step is None:
+            raise ValueError(f"Leo2 cache method {method!r} requires --leo2-cfg-end-step.")
+        if args.leo2_cfg_start_step < 0 or args.leo2_cfg_start_step >= args.leo2_cfg_end_step:
+            raise ValueError("Leo2 CFG start step must be non-negative and less than end step.")
+        if args.leo2_cfg_interval <= 0:
+            raise ValueError("Leo2 CFG interval must be positive.")
 
-    prompts_by_seed: dict[int, tuple[int, str]] = {}
+    prompts_by_seed_lists: dict[int, list[PromptIdentity]] = {}
     prompt_indices = set()
     prompt_hashes = set()
     with args.leo2_prompt_csv.open(encoding="utf-8", newline="") as handle:
@@ -181,17 +227,31 @@ def _parse_benchmark_options() -> BenchmarkOptions:
             seed = int(row["seed"])
             prompt_index = int(row["index"])
             prompt_hash = hashlib.sha256(row["prompt"].encode()).hexdigest()
-            if seed in prompts_by_seed:
-                raise ValueError(f"Duplicate benchmark seed: {seed}")
             if prompt_index in prompt_indices:
                 raise ValueError(f"Duplicate benchmark prompt index: {prompt_index}")
             if prompt_hash in prompt_hashes:
                 raise ValueError(f"Duplicate benchmark prompt content at index {prompt_index}")
-            prompts_by_seed[seed] = (prompt_index, prompt_hash)
+            identity = PromptIdentity(
+                index=prompt_index,
+                prompt_hash=prompt_hash,
+                language=(row.get("language") or "").strip(),
+                pair_id=(row.get("pair_id") or "").strip(),
+                source_dataset=(row.get("source_dataset") or "").strip(),
+                source_id=(row.get("source_id") or "").strip(),
+            )
+            if identity.language and identity.language not in {"en", "zh"}:
+                raise ValueError(
+                    f"Unsupported benchmark language {identity.language!r} at prompt index {prompt_index}"
+                )
+            prompts_by_seed_lists.setdefault(seed, []).append(identity)
             prompt_indices.add(prompt_index)
             prompt_hashes.add(prompt_hash)
-    if not prompts_by_seed:
+    if not prompts_by_seed_lists:
         raise ValueError(f"Benchmark prompt CSV is empty: {args.leo2_prompt_csv}")
+    prompts_by_seed = {
+        seed: tuple(identities)
+        for seed, identities in prompts_by_seed_lists.items()
+    }
     return BenchmarkOptions(
         method=method,
         cache_threshold=threshold,
@@ -211,6 +271,37 @@ def _parse_benchmark_options() -> BenchmarkOptions:
         dfr_end_step=args.leo2_dfr_end_step,
         dfr_interval=args.leo2_dfr_interval,
         dfr_layers=_parse_layers(args.leo2_dfr_layers),
+        cfg_start_step=args.leo2_cfg_start_step,
+        cfg_end_step=args.leo2_cfg_end_step or 0,
+        cfg_interval=args.leo2_cfg_interval,
+        cfg_low_frequency_weight=_non_negative_float(
+            args.leo2_cfg_low_frequency_weight,
+            field="Leo2 CFG low-frequency weight",
+        ),
+        cfg_high_frequency_weight=_non_negative_float(
+            args.leo2_cfg_high_frequency_weight,
+            field="Leo2 CFG high-frequency weight",
+        ),
+        cfg_low_frequency_start_step=(
+            args.leo2_cfg_low_frequency_start_step
+            if args.leo2_cfg_low_frequency_start_step is not None
+            else args.leo2_cfg_start_step
+        ),
+        cfg_low_frequency_end_step=(
+            args.leo2_cfg_low_frequency_end_step
+            if args.leo2_cfg_low_frequency_end_step is not None
+            else (args.leo2_cfg_end_step or 0)
+        ),
+        cfg_high_frequency_start_step=(
+            args.leo2_cfg_high_frequency_start_step
+            if args.leo2_cfg_high_frequency_start_step is not None
+            else args.leo2_cfg_start_step
+        ),
+        cfg_high_frequency_end_step=(
+            args.leo2_cfg_high_frequency_end_step
+            if args.leo2_cfg_high_frequency_end_step is not None
+            else (args.leo2_cfg_end_step or 0)
+        ),
     )
 
 
@@ -332,6 +423,58 @@ def _scalar_seed(seed: Any) -> int:
     return int(value)
 
 
+def _request_prompt_text(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str | None:
+    """Extract one user prompt from `generate_video` arguments for duplicate-seed identity."""
+    prompt = kwargs.get("prompt", args[0] if args else None)
+    if isinstance(prompt, str):
+        return prompt
+    if isinstance(prompt, list) and len(prompt) == 1 and isinstance(prompt[0], str):
+        return prompt[0]
+    message_list = kwargs.get("message_list")
+    if not isinstance(message_list, list):
+        return None
+    messages = message_list[0] if len(message_list) == 1 and isinstance(message_list[0], list) else message_list
+    if not isinstance(messages, list):
+        return None
+    user_contents = [
+        message.get("content")
+        for message in messages
+        if isinstance(message, dict)
+        and message.get("role") == "user"
+        and isinstance(message.get("content"), str)
+    ]
+    return user_contents[-1] if user_contents else None
+
+
+def _resolve_prompt_identity(
+    options: BenchmarkOptions,
+    *,
+    seed: int,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> PromptIdentity:
+    try:
+        candidates = options.prompts_by_seed[seed]
+    except KeyError as exc:
+        raise KeyError(f"Sampler seed {seed} is absent from the benchmark prompt CSV.") from exc
+    if len(candidates) == 1:
+        return candidates[0]
+    prompt = _request_prompt_text(args, kwargs)
+    if prompt is None:
+        raise ValueError(
+            f"Sampler seed {seed} maps to {len(candidates)} bilingual prompts, "
+            "but generate_video exposed no prompt text for identity verification"
+        )
+    prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()
+    matches = [candidate for candidate in candidates if candidate.prompt_hash == prompt_hash]
+    if len(matches) != 1:
+        raise ValueError(
+            f"Sampler seed {seed} and prompt hash {prompt_hash} matched "
+            f"{len(matches)} of {len(candidates)} benchmark rows"
+        )
+    return matches[0]
+
+
 def _package_versions() -> dict[str, str | None]:
     """Record relevant installed distribution versions without importing extensions."""
     versions = {}
@@ -367,6 +510,46 @@ def _build_cache_config(options: BenchmarkOptions) -> tuple[object | None, dict[
 
     if options.method == "off":
         return None, {}
+    if options.method in CFG_METHODS:
+        cfg = leo_cache.LeoCFGCacheConfig(
+            start_step=options.cfg_start_step,
+            end_step=options.cfg_end_step,
+            interval=options.cfg_interval,
+            low_frequency_weight=options.cfg_low_frequency_weight,
+            high_frequency_weight=options.cfg_high_frequency_weight,
+            low_frequency_start_step=options.cfg_low_frequency_start_step,
+            low_frequency_end_step=options.cfg_low_frequency_end_step,
+            high_frequency_start_step=options.cfg_high_frequency_start_step,
+            high_frequency_end_step=options.cfg_high_frequency_end_step,
+        )
+        cfg_options = {
+            "start_step": options.cfg_start_step,
+            "end_step": options.cfg_end_step,
+            "interval": options.cfg_interval,
+            "low_frequency_weight": options.cfg_low_frequency_weight,
+            "high_frequency_weight": options.cfg_high_frequency_weight,
+            "low_frequency_start_step": options.cfg_low_frequency_start_step,
+            "low_frequency_end_step": options.cfg_low_frequency_end_step,
+            "high_frequency_start_step": options.cfg_high_frequency_start_step,
+            "high_frequency_end_step": options.cfg_high_frequency_end_step,
+        }
+        if options.method == "cfg_cache":
+            return cfg, cfg_options
+        feature = leo_cache.LeoFasterCacheConfig(
+            start_step=options.dfr_start_step,
+            end_step=options.dfr_end_step,
+            interval=options.dfr_interval,
+            layers=options.dfr_layers,
+        )
+        return leo_cache.LeoCombinedCacheConfig(feature=feature, cfg=cfg), {
+            "feature": {
+                "start_step": options.dfr_start_step,
+                "end_step": options.dfr_end_step,
+                "interval": options.dfr_interval,
+                "layers": list(options.dfr_layers) if options.dfr_layers is not None else None,
+            },
+            "cfg": cfg_options,
+        }
     if options.method == "first_block":
         config = leo_cache.LeoFirstBlockCacheConfig(threshold=options.cache_threshold)
         return config, {"threshold": options.cache_threshold}
@@ -520,6 +703,7 @@ def _validate_cache_stats(
     *,
     method: str,
     expected_steps: int,
+    guidance_scale: float,
     dfr_plan: tuple[int, int, int, int] | None = None,
 ) -> None:
     """Apply accounting invariants appropriate to each cache family."""
@@ -541,7 +725,7 @@ def _validate_cache_stats(
                 raise RuntimeError("Taylor unexpectedly reported static fallback steps.")
         elif any(stats[field] for field in ("predicted_steps", "prediction_warmup_steps", "static_fallback_steps")):
             raise RuntimeError(f"Cache method {method!r} unexpectedly reported Taylor-only counters.")
-    elif method == "fastercache_dfr":
+    elif method in DFR_METHODS:
         forbidden = (
             "tail_compute_steps",
             "tail_reuse_steps",
@@ -556,30 +740,66 @@ def _validate_cache_stats(
         start_step, end_step, interval, selected_layer_count = dfr_plan
         if selected_layer_count < 1:
             raise RuntimeError("FasterCache DFR benchmark selected no layers.")
-        expected_reuse_steps = _expected_dfr_reuse_steps(
-            expected_steps=expected_steps,
-            start_step=start_step,
-            end_step=end_step,
-            interval=interval,
+        if method == "fastercache_dfr":
+            expected_reuse_steps = _expected_dfr_reuse_steps(
+                expected_steps=expected_steps,
+                start_step=start_step,
+                end_step=end_step,
+                interval=interval,
+            )
+            expected_full_steps = expected_steps - expected_reuse_steps
+            if stats["full_steps"] != expected_full_steps or stats["skipped_steps"] != expected_reuse_steps:
+                raise RuntimeError(
+                    "FasterCache DFR exact/reuse accounting mismatch: "
+                    f"got {stats['full_steps']}/{stats['skipped_steps']}, "
+                    f"expected {expected_full_steps}/{expected_reuse_steps}."
+                )
+            expected_compute_calls = expected_full_steps * selected_layer_count
+            expected_reuse_calls = expected_reuse_steps * selected_layer_count
+            if (
+                stats["attention_compute_calls"] != expected_compute_calls
+                or stats["attention_reuse_calls"] != expected_reuse_calls
+            ):
+                raise RuntimeError(
+                    "FasterCache DFR managed-attention accounting mismatch: "
+                    f"got {stats['attention_compute_calls']}/{stats['attention_reuse_calls']}, "
+                    f"expected {expected_compute_calls}/{expected_reuse_calls}."
+                )
+        else:
+            if stats["full_steps"] + stats["skipped_steps"] != expected_steps:
+                raise RuntimeError(
+                    "Combined DFR+CFG cache did not account for every denoising step: "
+                    f"{stats['full_steps']} + {stats['skipped_steps']} != {expected_steps}"
+                )
+            if stats["attention_compute_calls"] + stats["attention_reuse_calls"] != (
+                expected_steps * selected_layer_count
+            ):
+                raise RuntimeError("Combined DFR+CFG attention calls do not match steps × selected layers")
+    elif method == "cfg_cache":
+        forbidden = (
+            "full_steps",
+            "skipped_steps",
+            "tail_compute_steps",
+            "tail_reuse_steps",
+            "attention_compute_calls",
+            "attention_reuse_calls",
         )
-        expected_full_steps = expected_steps - expected_reuse_steps
-        if stats["full_steps"] != expected_full_steps or stats["skipped_steps"] != expected_reuse_steps:
+        if any(stats[field] for field in forbidden):
+            raise RuntimeError(f"CFG-only cache unexpectedly reported feature-cache counters: {stats}")
+    else:
+        raise ValueError(f"Unsupported cache benchmark method for validation: {method!r}")
+
+    cfg_calls = stats["cfg_compute_calls"] + stats["cfg_reuse_calls"]
+    if guidance_scale <= 1.0:
+        if cfg_calls:
+            raise RuntimeError(f"Guidance-disabled request unexpectedly reported CFG-cache activity: {stats}")
+    elif method in CFG_METHODS:
+        if cfg_calls != expected_steps:
             raise RuntimeError(
-                "FasterCache DFR exact/reuse accounting mismatch: "
-                f"got {stats['full_steps']}/{stats['skipped_steps']}, "
-                f"expected {expected_full_steps}/{expected_reuse_steps}."
+                f"CFG cache accounted for {cfg_calls}/{expected_steps} denoising steps"
             )
-        expected_compute_calls = expected_full_steps * selected_layer_count
-        expected_reuse_calls = expected_reuse_steps * selected_layer_count
-        if (
-            stats["attention_compute_calls"] != expected_compute_calls
-            or stats["attention_reuse_calls"] != expected_reuse_calls
-        ):
-            raise RuntimeError(
-                "FasterCache DFR managed-attention accounting mismatch: "
-                f"got {stats['attention_compute_calls']}/{stats['attention_reuse_calls']}, "
-                f"expected {expected_compute_calls}/{expected_reuse_calls}."
-            )
+    elif cfg_calls:
+        raise RuntimeError(f"Non-CFG-cache method unexpectedly reported CFG counters: {stats}")
 
 
 def _save_latent(
@@ -640,7 +860,7 @@ def _install_instrumentation(options: BenchmarkOptions) -> None:
             self.model.disable_cache()
         if cache_config is not None:
             self.model.enable_cache(cache_config)
-        if options.method == "fastercache_dfr":
+        if options.method in DFR_METHODS:
             controller = self.model._leo_cache_controller
             dfr_plan = (
                 controller.start_step,
@@ -651,7 +871,7 @@ def _install_instrumentation(options: BenchmarkOptions) -> None:
         sync_plan = None
         if options.method in TOPOLOGY_METHODS:
             leader_index = 0
-            if options.method == "fastercache_dfr":
+            if options.method in DFR_METHODS:
                 leader_index = self.model._leo_cache_controller.selected_layers[0]
             sync_plan = LeoFirstBlockCacheController._synchronization_plan(self.model.layers[leader_index])
         if options.method in TOPOLOGY_METHODS and sync_plan is None:
@@ -706,6 +926,8 @@ def _install_instrumentation(options: BenchmarkOptions) -> None:
                 "image_size": get_args().image_size,
                 "inter_request_barrier": True,
                 "num_frames": int(get_args().num_frames),
+                "video_fps": int(get_args().video_fps),
+                "video_duration_seconds": (int(get_args().num_frames) - 1) / int(get_args().video_fps),
                 "parallelism": {
                     name: int(getattr(parallel_state, name))
                     for name in ("dp_replicate", "dp_shard", "tp", "etp", "pp", "ep", "cp")
@@ -733,10 +955,9 @@ def _install_instrumentation(options: BenchmarkOptions) -> None:
         nonlocal request_number
         request_number += 1
         seed = _scalar_seed(kwargs.get("seed"))
-        try:
-            prompt_index, prompt_hash = options.prompts_by_seed[seed]
-        except KeyError as exc:
-            raise KeyError(f"Sampler seed {seed} is absent from the benchmark prompt CSV.") from exc
+        identity = _resolve_prompt_identity(options, seed=seed, args=args, kwargs=kwargs)
+        prompt_index = identity.index
+        prompt_hash = identity.prompt_hash
 
         def fail(reason: str, error_type: str = "RuntimeError") -> None:
             if not dist.is_initialized() or dist.get_rank() == 0:
@@ -745,6 +966,8 @@ def _install_instrumentation(options: BenchmarkOptions) -> None:
                     "error_type": error_type,
                     "prompt_hash": prompt_hash,
                     "prompt_index": prompt_index,
+                    "language": identity.language,
+                    "pair_id": identity.pair_id,
                     "request": request_number,
                     "seed": seed,
                     "status": "error",
@@ -811,6 +1034,7 @@ def _install_instrumentation(options: BenchmarkOptions) -> None:
                 stats,
                 method=options.method,
                 expected_steps=expected_steps,
+                guidance_scale=float(self.generation_config.diff_guidance_scale),
                 dfr_plan=dfr_plan,
             )
         except RuntimeError as exc:
@@ -851,8 +1075,14 @@ def _install_instrumentation(options: BenchmarkOptions) -> None:
                 "max_memory_allocated_bytes": int(allocated),
                 "max_memory_reserved_bytes": int(reserved),
                 "num_frames": int(get_args().num_frames),
+                "video_fps": int(get_args().video_fps),
+                "video_duration_seconds": (int(get_args().num_frames) - 1) / int(get_args().video_fps),
                 "prompt_hash": prompt_hash,
                 "prompt_index": prompt_index,
+                "language": identity.language,
+                "pair_id": identity.pair_id,
+                "source_dataset": identity.source_dataset,
+                "source_id": identity.source_id,
                 "request": request_number,
                 "reference_root": str(options.reference_root) if options.reference_root else None,
                 "seed": seed,

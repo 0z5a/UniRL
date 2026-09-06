@@ -85,6 +85,7 @@ METRICS = (
     Metric("paired_speedup_ci95_high", "Paired speedup mean 95% CI upper bound", "x", "speedup"),
     Metric("tail_reuse_ratio", "Whole-tail residual reuse ratio", "ratio", "ratio"),
     Metric("attention_reuse_ratio", "Managed-attention reuse ratio", "ratio", "ratio"),
+    Metric("cfg_reuse_ratio", "Unconditional CFG-output reuse ratio", "ratio", "ratio"),
     Metric("cache_residency_mib", "Rank-maximum method cache residency", "MiB", "memory"),
     Metric("peak_allocated_gib", "Rank-maximum peak CUDA allocation", "GiB", "memory"),
     Metric("latent_relative_l1", "Mean per-video relative latent L1", "ratio"),
@@ -810,6 +811,14 @@ def _validate_summary_aggregates(
             attention_reuse,
             f"{context}.attention_reuse_ratio",
         )
+    cfg_total = totals.get("cfg_compute_calls", 0) + totals.get("cfg_reuse_calls", 0)
+    cfg_reuse = totals.get("cfg_reuse_calls", 0) / cfg_total if cfg_total else 0.0
+    if summary.get("cfg_reuse_ratio") not in (None, ""):
+        _require_same(
+            _number(summary, "cfg_reuse_ratio", context),
+            cfg_reuse,
+            f"{context}.cfg_reuse_ratio",
+        )
 
     peak = max(_integer(request, "max_memory_allocated_bytes", context) for request in requests)
     if _integer(summary, "max_memory_allocated_bytes", context) != peak:
@@ -953,11 +962,16 @@ def _validate_quality(
     attention_reuse = (
         _number(summary, "attention_reuse_ratio", context) if summary.get("attention_reuse_ratio") is not None else 0.0
     )
+    cfg_reuse = _number(summary, "cfg_reuse_ratio", context) if summary.get("cfg_reuse_ratio") is not None else 0.0
     if mean_seconds <= 0 or steady_seconds <= 0 or speedup <= 0:
         _die(f"{context}: latency and speedup values must be positive")
     if not speedup_low <= speedup <= speedup_high:
         _die(f"{context}: paired speedup mean is outside its confidence interval")
-    if not 0.0 <= tail_reuse <= 1.0 or not 0.0 <= attention_reuse <= 1.0:
+    if (
+        not 0.0 <= tail_reuse <= 1.0
+        or not 0.0 <= attention_reuse <= 1.0
+        or not 0.0 <= cfg_reuse <= 1.0
+    ):
         _die(f"{context}: reuse ratios must be in [0, 1]")
     if peak_bytes < 0 or (cache_bytes not in (None, "") and _number({"value": cache_bytes}, "value", context) < 0):
         _die(f"{context}: memory byte counts must be non-negative")
@@ -979,6 +993,7 @@ def _validate_quality(
         "paired_speedup_ci95_high": speedup_high,
         "tail_reuse_ratio": tail_reuse,
         "attention_reuse_ratio": attention_reuse,
+        "cfg_reuse_ratio": cfg_reuse,
         "cache_residency_mib": _number({"value": cache_bytes}, "value", context) / 2**20
         if cache_bytes not in (None, "")
         else None,

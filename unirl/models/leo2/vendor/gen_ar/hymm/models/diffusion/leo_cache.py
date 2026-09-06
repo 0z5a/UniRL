@@ -137,6 +137,77 @@ class LeoFasterCacheConfig:
         object.__setattr__(self, "layers", layers)
 
 
+@dataclass(frozen=True)
+class LeoCFGCacheConfig:
+    """Configure FasterCache-style conditional/unconditional output reuse."""
+
+    start_step: int = 1
+    end_step: int = 50
+    interval: int = 5
+    low_frequency_weight: float = 1.1
+    high_frequency_weight: float = 1.1
+    low_frequency_start_step: int = 1
+    low_frequency_end_step: int = 50
+    high_frequency_start_step: int = 1
+    high_frequency_end_step: int = 50
+
+    def __post_init__(self) -> None:
+        for name in (
+            "start_step",
+            "end_step",
+            "interval",
+            "low_frequency_start_step",
+            "low_frequency_end_step",
+            "high_frequency_start_step",
+            "high_frequency_end_step",
+        ):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise TypeError(f"Leo CFG cache {name} must be an integer, got {type(value).__name__}: {value!r}")
+        if self.start_step < 0 or self.end_step <= self.start_step:
+            raise ValueError(
+                "Leo CFG cache requires 0 <= start_step < end_step, "
+                f"got start_step={self.start_step}, end_step={self.end_step}"
+            )
+        if self.interval < 1:
+            raise ValueError(f"Leo CFG cache interval must be positive, got {self.interval}")
+        for prefix in ("low_frequency", "high_frequency"):
+            start = getattr(self, f"{prefix}_start_step")
+            end = getattr(self, f"{prefix}_end_step")
+            if start < 0 or end <= start:
+                raise ValueError(
+                    f"Leo CFG cache requires 0 <= {prefix}_start_step < {prefix}_end_step, "
+                    f"got {start} and {end}"
+                )
+            weight = getattr(self, f"{prefix}_weight")
+            if isinstance(weight, bool) or not isinstance(weight, (int, float)):
+                raise TypeError(
+                    f"Leo CFG cache {prefix}_weight must be numeric, "
+                    f"got {type(weight).__name__}: {weight!r}"
+                )
+            if not math.isfinite(weight) or weight < 0:
+                raise ValueError(f"Leo CFG cache {prefix}_weight must be finite and non-negative, got {weight!r}")
+
+
+@dataclass(frozen=True)
+class LeoCombinedCacheConfig:
+    """Combine FasterCache DFR attention reuse with CFG output reuse."""
+
+    feature: LeoFasterCacheConfig
+    cfg: LeoCFGCacheConfig
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.feature, LeoFasterCacheConfig):
+            raise TypeError(
+                "Leo combined cache feature must be LeoFasterCacheConfig, "
+                f"got {type(self.feature).__name__}"
+            )
+        if not isinstance(self.cfg, LeoCFGCacheConfig):
+            raise TypeError(
+                f"Leo combined cache cfg must be LeoCFGCacheConfig, got {type(self.cfg).__name__}"
+            )
+
+
 class LeoFirstBlockCacheController:
     """Track request-local Leo block residuals without registering model state."""
 
@@ -906,6 +977,244 @@ class LeoMagCacheController(LeoFirstBlockCacheController):
         return ratio_value
 
 
+class LeoCFGCacheController:
+    """Approximate Leo's conditional-first CFG output from cached frequency deltas."""
+
+    method = "cfg_cache"
+
+    def __init__(self, config: LeoCFGCacheConfig):
+        if not isinstance(config, LeoCFGCacheConfig):
+            raise TypeError(f"LeoCFGCacheController requires LeoCFGCacheConfig, got {type(config).__name__}")
+        self.config = config
+        self._context_depth = 0
+        self._distributed_config_validated = False
+        self.cfg_compute_calls = 0
+        self.cfg_reuse_calls = 0
+        self._peak_cache_bytes = 0
+        self.reset()
+
+    @property
+    def active(self) -> bool:
+        return self._context_depth > 0 and not torch.is_grad_enabled()
+
+    @contextmanager
+    def context(self, name: str = "default") -> Iterator[None]:
+        _ = name
+        if self._context_depth == 0:
+            self.reset()
+            self._distributed_config_validated = False
+            self.cfg_compute_calls = 0
+            self.cfg_reuse_calls = 0
+            self._peak_cache_bytes = 0
+        self._context_depth += 1
+        try:
+            yield
+        finally:
+            self._context_depth -= 1
+            if self._context_depth == 0:
+                self.reset()
+
+    def reset(self) -> None:
+        self._step_index = 0
+        self._reuse_step = False
+        self._low_frequency_delta: torch.Tensor | None = None
+        self._high_frequency_delta: torch.Tensor | None = None
+        self._output_signature: tuple | None = None
+
+    @torch.compiler.disable
+    def begin_step(self, *, guidance_enabled: bool, reference: torch.Tensor) -> bool:
+        """Return whether this step should execute only the conditional branch."""
+        self._reuse_step = False
+        if not guidance_enabled:
+            return False
+        if not self.active:
+            raise RuntimeError("Leo CFG cache begin_step called outside an active cache context")
+        if not isinstance(reference, torch.Tensor) or reference.ndim < 1 or int(reference.shape[0]) != 2:
+            raise ValueError(
+                "Leo CFG cache expects a conditional-first batch of size 2, "
+                f"got {type(reference).__name__} shape={getattr(reference, 'shape', None)}"
+            )
+        self._validate_distributed_config(reference)
+        step = self._step_index
+        self._step_index += 1
+        candidate = (
+            self.config.start_step <= step < self.config.end_step
+            and step % self.config.interval != 0
+            and self._low_frequency_delta is not None
+            and self._high_frequency_delta is not None
+        )
+        if candidate:
+            self.cfg_reuse_calls += 1
+            self._reuse_step = True
+        else:
+            self.cfg_compute_calls += 1
+        return self._reuse_step
+
+    @classmethod
+    def conditional_inputs(cls, model_inputs: dict[str, object]) -> dict[str, object]:
+        """Select branch zero from Leo's `[conditional, unconditional]` model input tree."""
+        if not isinstance(model_inputs, dict):
+            raise TypeError(f"Leo CFG cache model_inputs must be dict, got {type(model_inputs).__name__}")
+        selected = {
+            key: cls._select_conditional(value, path=f"model_inputs.{key}")
+            for key, value in model_inputs.items()
+        }
+        required = ("latents", "timesteps", "cond_text_states")
+        for key in required:
+            value = selected.get(key)
+            if not isinstance(value, torch.Tensor) or value.ndim < 1 or int(value.shape[0]) != 1:
+                raise ValueError(
+                    f"Leo CFG cache expected {key} to become a batch-1 Tensor, "
+                    f"got {type(value).__name__} shape={getattr(value, 'shape', None)}"
+                )
+        return selected
+
+    @classmethod
+    def _select_conditional(cls, value: object, *, path: str) -> object:
+        if isinstance(value, torch.Tensor):
+            return value[:1] if value.ndim > 0 and int(value.shape[0]) == 2 else value
+        if isinstance(value, dict):
+            return {
+                key: cls._select_conditional(item, path=f"{path}.{key}")
+                for key, item in value.items()
+            }
+        if isinstance(value, list):
+            if len(value) == 2:
+                return [value[0]]
+            return [
+                cls._select_conditional(item, path=f"{path}[{index}]")
+                for index, item in enumerate(value)
+            ]
+        if isinstance(value, tuple):
+            if len(value) == 2:
+                return (value[0],)
+            return tuple(
+                cls._select_conditional(item, path=f"{path}[{index}]")
+                for index, item in enumerate(value)
+            )
+        return value
+
+    @torch.compiler.disable
+    def record_exact(self, conditional: torch.Tensor, unconditional: torch.Tensor) -> None:
+        """Store frequency-domain `(unconditional - conditional)` deltas."""
+        self._validate_outputs(conditional, unconditional, operation="record")
+        low_cond, high_cond = self._split_frequency(conditional.float())
+        low_uncond, high_uncond = self._split_frequency(unconditional.float())
+        self._low_frequency_delta = (low_uncond - low_cond).detach()
+        self._high_frequency_delta = (high_uncond - high_cond).detach()
+        self._output_signature = self._signature(conditional)
+        cache_bytes = (
+            self._low_frequency_delta.numel() * self._low_frequency_delta.element_size()
+            + self._high_frequency_delta.numel() * self._high_frequency_delta.element_size()
+        )
+        self._peak_cache_bytes = max(self._peak_cache_bytes, cache_bytes)
+
+    @torch.compiler.disable
+    def reconstruct_unconditional(self, conditional: torch.Tensor) -> torch.Tensor:
+        """Reconstruct the unconditional output for a conditional-only step."""
+        if not self._reuse_step:
+            raise RuntimeError("Leo CFG cache reconstruction requested for a full-compute step")
+        if self._low_frequency_delta is None or self._high_frequency_delta is None:
+            raise RuntimeError("Leo CFG cache has no frequency deltas to reuse")
+        if self._signature(conditional) != self._output_signature:
+            raise ValueError(
+                "Leo CFG cache conditional output signature changed: "
+                f"expected {self._output_signature}, got {self._signature(conditional)}"
+            )
+        low_delta = self._low_frequency_delta
+        high_delta = self._high_frequency_delta
+        step = self._step_index - 1
+        if self.config.low_frequency_start_step <= step < self.config.low_frequency_end_step:
+            low_delta = low_delta * self.config.low_frequency_weight
+        if self.config.high_frequency_start_step <= step < self.config.high_frequency_end_step:
+            high_delta = high_delta * self.config.high_frequency_weight
+        low_cond, high_cond = self._split_frequency(conditional.float())
+        spectrum = low_cond + low_delta + high_cond + high_delta
+        reconstructed = torch.fft.ifft2(
+            torch.fft.ifftshift(spectrum, dim=(-2, -1)),
+            dim=(-2, -1),
+        ).real
+        return reconstructed.to(dtype=conditional.dtype)
+
+    def stats(self) -> dict[str, object]:
+        return {
+            "method": self.method,
+            "cfg_start_step": self.config.start_step,
+            "cfg_end_step": self.config.end_step,
+            "cfg_interval": self.config.interval,
+            "cfg_low_frequency_weight": self.config.low_frequency_weight,
+            "cfg_high_frequency_weight": self.config.high_frequency_weight,
+            "cfg_compute_calls": self.cfg_compute_calls,
+            "cfg_reuse_calls": self.cfg_reuse_calls,
+            "cache_bytes": self._peak_cache_bytes,
+        }
+
+    @staticmethod
+    def _signature(value: torch.Tensor) -> tuple:
+        return tuple(value.shape), value.dtype, value.device
+
+    @classmethod
+    def _validate_outputs(
+        cls,
+        conditional: torch.Tensor,
+        unconditional: torch.Tensor,
+        *,
+        operation: str,
+    ) -> None:
+        if not isinstance(conditional, torch.Tensor) or not isinstance(unconditional, torch.Tensor):
+            raise TypeError(
+                f"Leo CFG cache {operation} expects Tensor outputs, got "
+                f"{type(conditional).__name__} and {type(unconditional).__name__}"
+            )
+        if conditional.shape != unconditional.shape or conditional.dtype != unconditional.dtype:
+            raise ValueError(
+                f"Leo CFG cache cannot {operation} outputs with shape/dtype "
+                f"{tuple(conditional.shape)}/{conditional.dtype} and "
+                f"{tuple(unconditional.shape)}/{unconditional.dtype}"
+            )
+        if conditional.ndim != 5 or int(conditional.shape[0]) != 1:
+            raise ValueError(
+                "Leo CFG cache expects branch outputs shaped [1,C,T,H,W], "
+                f"got {tuple(conditional.shape)}"
+            )
+
+    @staticmethod
+    def _split_frequency(value: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        spectrum = torch.fft.fftshift(torch.fft.fft2(value, dim=(-2, -1)), dim=(-2, -1))
+        height, width = value.shape[-2:]
+        radius = min(height, width) // 5
+        y_grid, x_grid = torch.meshgrid(
+            torch.arange(height, device=value.device),
+            torch.arange(width, device=value.device),
+            indexing="ij",
+        )
+        mask = (x_grid - width // 2).square() + (y_grid - height // 2).square() <= radius**2
+        mask = mask.reshape(*([1] * (value.ndim - 2)), height, width)
+        return spectrum * mask, spectrum * ~mask
+
+    def _validate_distributed_config(self, reference: torch.Tensor) -> None:
+        if self._distributed_config_validated or not dist.is_available() or not dist.is_initialized():
+            self._distributed_config_validated = True
+            return
+        values = reference.new_tensor(
+            [
+                self.config.start_step,
+                self.config.end_step,
+                self.config.interval,
+                self.config.low_frequency_weight,
+                self.config.high_frequency_weight,
+            ],
+            dtype=torch.float64,
+        )
+        low = values.clone()
+        high = values.clone()
+        dist.all_reduce(low, op=dist.ReduceOp.MIN)
+        dist.all_reduce(high, op=dist.ReduceOp.MAX)
+        if not torch.equal(low, high):
+            raise RuntimeError("Leo CFG cache configuration differs across ranks")
+        self._distributed_config_validated = True
+
+
 class LeoFasterCacheController:
     """Track request-local exact attention outputs for FasterCache-style DFR."""
 
@@ -968,10 +1277,24 @@ class LeoFasterCacheController:
         self._step_index = 0
         self._reuse_step = False
         self._cacheable_step = False
+        self._cfg_enabled = False
+        self._cfg_conditional_only = False
         self._weight = 0.0
         self._expected_signature = None
         self._histories: dict[int, list[TensorStreams]] = {}
         self._history_input_signatures: dict[int, tuple] = {}
+
+    def set_cfg_mode(self, *, enabled: bool, conditional_only: bool) -> None:
+        """Describe whether this model call is full CFG or conditional-only CFG."""
+        if not isinstance(enabled, bool) or not isinstance(conditional_only, bool):
+            raise TypeError(
+                "Leo FasterCache CFG mode expects bool values, "
+                f"got enabled={enabled!r}, conditional_only={conditional_only!r}"
+            )
+        if conditional_only and not enabled:
+            raise ValueError("Leo FasterCache conditional_only=True requires enabled=True")
+        self._cfg_enabled = enabled
+        self._cfg_conditional_only = conditional_only
 
     @torch.compiler.disable
     def begin_step(
@@ -991,7 +1314,8 @@ class LeoFasterCacheController:
 
         step = self._step_index
         self._step_index += 1
-        self._expected_signature = LeoFirstBlockCacheController._stream_signature(streams)
+        canonical_streams = self._canonical_cfg_streams(streams)
+        self._expected_signature = LeoFirstBlockCacheController._stream_signature(canonical_streams)
         reference = next((stream for stream in streams if stream is not None), None)
         if reference is None:
             self.full_steps += 1
@@ -1009,6 +1333,7 @@ class LeoFasterCacheController:
         candidate = (
             self.start_step <= step < self.end_step
             and (step - self.start_step) % self.interval != 0
+            and (not self._cfg_enabled or self._cfg_conditional_only)
         )
         decision_low = torch.tensor((step, int(candidate)), device=reference.device, dtype=torch.int64)
         decision_high = decision_low.clone()
@@ -1069,7 +1394,7 @@ class LeoFasterCacheController:
         self.attention_compute_calls += 1
         if not self._cacheable_step or self._reuse_step:
             return
-        snapshot = LeoFirstBlockCacheController._detach_streams(outputs)
+        snapshot = LeoFirstBlockCacheController._detach_streams(self._canonical_cfg_streams(outputs))
         if not self._output_matches_input_layout(snapshot):
             self._histories.pop(layer_idx, None)
             self._history_input_signatures.pop(layer_idx, None)
@@ -1130,6 +1455,23 @@ class LeoFasterCacheController:
             if output is not None and (tuple(output.shape), output.device) != (expected[0], expected[2]):
                 return False
         return True
+
+    def _canonical_cfg_streams(self, streams: TensorStreams) -> TensorStreams:
+        """Store conditional-only histories for composite CFG-cache requests."""
+        if not self._cfg_enabled or self._cfg_conditional_only:
+            return streams
+        canonical = []
+        for stream_index, stream in enumerate(streams):
+            if stream is None:
+                canonical.append(None)
+                continue
+            if stream.ndim < 1 or int(stream.shape[0]) % 2:
+                raise ValueError(
+                    "Leo FasterCache expected an even conditional-first CFG batch for "
+                    f"stream {stream_index}, got shape={tuple(stream.shape)}"
+                )
+            canonical.append(stream[: int(stream.shape[0]) // 2])
+        return tuple(canonical)
 
     def _drop_histories(self) -> None:
         """Release all cached tensors and their input signatures."""

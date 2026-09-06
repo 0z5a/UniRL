@@ -853,6 +853,20 @@ class Leo2Pipeline(DiffusionPipeline):
                     audio_timesteps=audio_t_expand,
                     **model_kwargs,
                 )
+                cfg_cache_reuse = False
+                cfg_cache_begin_step = getattr(self.model, "cfg_cache_begin_step", None)
+                if callable(cfg_cache_begin_step):
+                    if (
+                        getattr(self.model, "_leo_cfg_cache_controller", None) is not None
+                        and audio_latents is not None
+                    ):
+                        raise RuntimeError("Leo CFG output cache currently supports video-only inference")
+                    cfg_cache_reuse = cfg_cache_begin_step(
+                        guidance_enabled=self.do_classifier_free_guidance,
+                        reference=latent_model_input,
+                    )
+                    if cfg_cache_reuse:
+                        model_inputs = self.model.cfg_cache_conditional_inputs(model_inputs)
 
                 with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=True):
                     model_output = self.model(**model_inputs)
@@ -870,7 +884,22 @@ class Leo2Pipeline(DiffusionPipeline):
                 # perform guidance
                 if self.do_classifier_free_guidance:
                     if pred is not None:
-                        pred_cond, pred_uncond = pred.chunk(2)
+                        if cfg_cache_reuse:
+                            if int(pred.shape[0]) != 1:
+                                raise RuntimeError(
+                                    "Leo CFG cache conditional-only forward must return batch 1, "
+                                    f"got prediction shape={tuple(pred.shape)}"
+                                )
+                            pred_cond = pred
+                            pred_uncond = self.model.cfg_cache_reconstruct_unconditional(pred_cond)
+                        else:
+                            if int(pred.shape[0]) != 2:
+                                raise RuntimeError(
+                                    "Leo conditional-first CFG forward must return batch 2, "
+                                    f"got prediction shape={tuple(pred.shape)}"
+                                )
+                            pred_cond, pred_uncond = pred.chunk(2)
+                            self.model.cfg_cache_record_exact(pred_cond, pred_uncond)
                         pred = self.cfg_operator(pred_cond, pred_uncond, self.guidance_scale, step=i)
                     if audio_pred is not None:
                         audio_pred_cond, audio_pred_uncond = audio_pred.chunk(2)

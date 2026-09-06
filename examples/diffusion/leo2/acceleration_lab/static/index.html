@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Leo2 Acceleration Lab</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <a href="/" class="back">Lab Hub</a>
+    <div>
+      <p class="eyebrow">VIDEO SYSTEMS / LEO2</p>
+      <h1>Acceleration Lab</h1>
+      <p id="contract">Loading verified release…</p>
+    </div>
+    <div class="release"><span id="health">Checking</span><strong id="releaseId">—</strong></div>
+  </header>
+
+  <main>
+    <aside>
+      <form id="filters">
+        <h2>Experiment slice</h2>
+        <label>Steps<select name="steps"><option value="">All</option></select></label>
+        <label>Guidance<select name="guidance"><option value="">All</option></select></label>
+        <label>Language<select name="language"><option value="">All</option><option value="en">English</option><option value="zh">中文</option></select></label>
+        <label>Method<select name="method"><option value="">All methods</option></select></label>
+        <button type="submit">Apply filters</button>
+      </form>
+      <section class="prompt-nav">
+        <h2>Same-seed prompts</h2>
+        <input id="promptQuery" type="search" placeholder="Search prompt or pair ID">
+        <div id="promptList"></div>
+        <div class="pager"><button id="prevPrompt">Prev</button><span id="pageLabel"></span><button id="nextPrompt">Next</button></div>
+      </section>
+    </aside>
+
+    <section class="workspace">
+      <section class="summary">
+        <div><span>Best paired speedup</span><strong id="bestSpeedup">—</strong></div>
+        <div><span>Lowest peak memory</span><strong id="bestMemory">—</strong></div>
+        <div><span>Published cases</span><strong id="caseCount">—</strong></div>
+        <div><span>Video contract</span><strong id="duration">—</strong></div>
+      </section>
+
+      <section class="panel chart-panel">
+        <div class="section-head"><div><p class="eyebrow">SPEED / QUALITY</p><h2>Pareto view</h2></div><p>Upper-left is preferred: higher speedup, lower latent drift.</p></div>
+        <svg id="pareto" viewBox="0 0 900 310" role="img" aria-label="Paired speedup versus latent drift"></svg>
+      </section>
+
+      <section class="panel">
+        <div class="section-head"><div><p class="eyebrow">MEASUREMENTS</p><h2>Metrics table</h2></div><button id="downloadCsv">Download CSV</button></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Method</th><th>Steps</th><th>CFG</th><th>Language</th><th>Latency</th><th>Speedup</th><th>Latent L2</th><th>CFG reuse</th><th>Peak GiB</th></tr></thead>
+            <tbody id="metricsBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel video-section">
+        <div class="section-head">
+          <div><p class="eyebrow">SAME PROMPT / SAME SEED</p><h2 id="promptTitle">Select a prompt</h2><p id="promptText"></p></div>
+          <div class="sync-controls"><button id="playAll">Play all</button><button id="pauseAll">Pause</button><label><input id="loopAll" type="checkbox" checked> Loop</label><label><input id="muteAll" type="checkbox" checked> Mute</label></div>
+        </div>
+        <input id="seekAll" type="range" min="0" max="1000" value="0" aria-label="Synchronized video position">
+        <div id="videoWall" class="video-wall"></div>
+      </section>
+
+      <section id="figuresSection" class="panel" hidden>
+        <div class="section-head"><div><p class="eyebrow">RELEASE FIGURES</p><h2>Published analysis</h2></div></div>
+        <div id="figures" class="figures"></div>
+      </section>
+    </section>
+  </main>
+  <dialog id="details"><button id="closeDetails">Close</button><pre id="detailsText"></pre></dialog>
+  <script src="app.js"></script>
+</body>
+</html>

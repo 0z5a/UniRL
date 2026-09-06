@@ -113,6 +113,7 @@ def aggregate(args: argparse.Namespace) -> list[dict[str, object]]:
             "cache_method": case.method,
             "flow_shift_video": case.flow_shift_video,
             "guidance_scale": case.guidance_scale,
+            "diff_infer_steps": int(summary["diff_infer_steps"]),
             "cache_threshold": case.cache_threshold,
             "cache_disabled": not cache_enabled,
             "quality_source_root": str(args.benchmark_root),
@@ -168,7 +169,11 @@ def aggregate(args: argparse.Namespace) -> list[dict[str, object]]:
         baseline_row = dict(matches[0])
         if not math.isclose(float(baseline_row["flow_shift_video"]), case.flow_shift_video):
             raise ValueError(f"external quality baseline shift mismatch: {path}")
-        baseline_row.setdefault("guidance_scale", case.guidance_scale)
+        if not math.isclose(float(baseline_row.get("guidance_scale", 1.0)), case.guidance_scale):
+            raise ValueError(f"external quality baseline guidance mismatch: {path}")
+        expected_steps = int(summaries[case.name]["diff_infer_steps"])
+        if int(baseline_row.get("diff_infer_steps", expected_steps)) != expected_steps:
+            raise ValueError(f"external quality baseline step-count mismatch: {path}")
         baseline_row.setdefault("cache_method", "first_block" if baseline_row.get("cache_disabled") is False else "off")
         baseline_row["quality_source_root"] = str(baseline_root)
         results.append(baseline_row)

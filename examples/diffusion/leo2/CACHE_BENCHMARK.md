@@ -1,11 +1,13 @@
 # Leo2 cache benchmark
 
 This harness compares request-scoped Leo2 acceleration methods with an explicit
-reference case. Full runs use the same 16 prompts and seeds, one sample at a
-time, on eight ranks with FSDP shard size 8, CP size 8, and EP/ETP/TP/PP size 1.
+reference case. Current runs use paired English/Chinese Context-IR prompts, one
+sample at a time, on eight ranks with FSDP shard size 8, CP size 8, and
+EP/ETP/TP/PP size 1.
 The native media size is 848x464 (`--image-size 464x848`), every video contains
-121 frames at 24 FPS, and the committed matrix fixes 50 denoising steps, flow
-shift 9, and guidance scale 1.0.
+193 frames at Leo2's normal 24 FPS (`(193 - 1) / 24 = 8` seconds). The
+committed matrices fix flow shift 9 and independently cover 6, 28 and 50
+denoising steps at guidance scales 1.0 and 5.0.
 
 Each request starts with a distributed barrier before timing. Rank zero encodes
 the preceding MP4 outside `generate_video`; the barrier prevents other ranks
@@ -27,6 +29,8 @@ Schema v2 adds `method`, `guidance_scale`, `baseline_case` and
 - `magcache_calibrate`: the MagCache fields, with an optional input profile.
 - `fastercache_dfr`: `dfr_start_step`, `dfr_end_step`, `dfr_interval`, and
   optional `dfr_layers`, using syntax such as `0-7;16;31-47`.
+- `cfg_cache`: the `cfg_*` window, interval, and low/high-frequency weights.
+- `fastercache_dfr+cfg_cache`: both sets of DFR and CFG fields.
 
 Unused method-specific fields must be empty. Original three-column
 `name,cache_threshold,flow_shift_video` matrices remain accepted: they infer
@@ -96,8 +100,9 @@ Git, diff, input and artifact fingerprints in `benchmark.env`, plus
 Request latency is CUDA-synchronized and reduced with MAX across ranks. Cache
 decision counters must have identical MIN and MAX. `cache_bytes` is rank-local
 under CP because padding can differ, so it follows peak CUDA memory and reports
-MAX. Whole-tail methods validate exactly 50 total tail compute/reuse steps.
-FasterCache DFR validates 50 total exact/reuse steps against its window and
+MAX. Whole-tail methods validate exactly the requested total tail
+compute/reuse steps. FasterCache DFR validates the requested total exact/reuse
+steps against its window and
 interval, including the first-candidate warm-up fallback when `start_step=0`.
 Its managed-attention compute/reuse calls must equal those step counts times the
 selected-layer count. Reports retain legacy full/skip counters and add tail
@@ -106,12 +111,13 @@ compute/reuse, cache bytes, and peak CUDA allocation/reservation.
 
 Taylor requests also record prediction warm-up count and the mean/maximum
 extrapolation coefficient. A `magcache_calibrate` request records its complete
-50-value magnitude-ratio and scheduler-timestep arrays. Scalar counters and
+step-indexed magnitude-ratio and scheduler-timestep arrays. Scalar counters and
 fixed-size diagnostics are checked across all ranks independently; a rank count,
 array length, or value mismatch aborts the request before rank zero emits it.
 
-Every MP4 must decode as exactly 848x464, 121 frames and 24 FPS. Speed and final
-latent drift are paired with the explicit baseline by prompt hash and seed.
+Every MP4 must decode as exactly 848x464, 193 frames and 24 FPS. Speed and final
+latent drift are paired with the explicit baseline by prompt hash, seed, steps,
+guidance, language and pair ID.
 Drift includes relative L1/L2, cosine similarity and maximum absolute error.
 
 Compute decoded RGB metrics after a successful run:
