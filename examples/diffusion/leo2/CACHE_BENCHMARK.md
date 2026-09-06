@@ -18,7 +18,9 @@ model load, MP4 encoding or filesystem writes.
 ## Case schema
 
 Schema v2 adds `method`, `guidance_scale`, `baseline_case` and
-`reference_root`. Supported methods and their specific columns are:
+`reference_root`. New matrices also bind `diff_infer_steps`; legacy generated
+rows infer 6/28/50 from the `_sN_` case name, and the launcher rejects a
+mismatched `LEO2_INFER_STEPS`. Supported methods and their specific columns are:
 
 - `off`: no method-specific values.
 - `first_block`: `cache_threshold`.
@@ -31,6 +33,8 @@ Schema v2 adds `method`, `guidance_scale`, `baseline_case` and
   optional `dfr_layers`, using syntax such as `0-7;16;31-47`.
 - `cfg_cache`: the `cfg_*` window, interval, and low/high-frequency weights.
 - `fastercache_dfr+cfg_cache`: both sets of DFR and CFG fields.
+  Formal 193-frame composite cases use layers 24–47 to keep peak memory within
+  8×H20; an omitted layer list is normalized to that bound.
 
 Unused method-specific fields must be empty. Original three-column
 `name,cache_threshold,flow_shift_video` matrices remain accepted: they infer
@@ -89,6 +93,8 @@ LEO2_CACHE_BENCH_OUTPUT=/tmp/leo2-cache-dry-run \
 The launcher uses an output-local Hugging Face cache and leaves the validated
 IB/RDMA path enabled by default. Override those settings only through
 `LEO2_CACHE_BENCH_HF_HOME` or `LEO2_CACHE_BENCH_NCCL_IB_DISABLE`.
+Formal runs require 24 FPS and batch size one. The CFG-output controller rejects
+larger base batches rather than guessing the cond/uncond split.
 
 ## Validation and outputs
 
