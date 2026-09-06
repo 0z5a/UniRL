@@ -186,6 +186,13 @@ def main() -> None:
         _write(args.output_dir / f"context_ir_cache_matrix_s{steps}.csv", _matrix(steps, args.profile_root))
         _write(args.output_dir / f"context_ir_cfg_grid_s{steps}.csv", _cfg_grid(steps))
         _write(args.output_dir / f"context_ir_cfg_window_grid_s{steps}.csv", _cfg_window_grid(steps))
+        _write(
+            args.output_dir / f"context_ir_pilot_baselines_s{steps}.csv",
+            [
+                _row(f"exact_s{steps}_g1", "off", 1.0, f"exact_s{steps}_g1"),
+                _row(f"exact_s{steps}_g5", "off", 5.0, f"exact_s{steps}_g5"),
+            ],
+        )
         calibration = [
             _row(
                 f"magcache_calibrate_s{steps}_{suffix}",
