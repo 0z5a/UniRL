@@ -11,6 +11,7 @@ from cache_benchmark_cases import TSV_FIELDS
 
 STEPS = (6, 28, 50)
 DFR_WINDOWS = {6: (1, 5), 28: (6, 27), 50: (10, 49)}
+CFG_HIFI_WINDOWS = {6: (3, 5), 28: (20, 27), 50: (35, 49)}
 
 
 def _row(name: str, method: str, guidance: float, baseline: str, **values: object) -> dict[str, object]:
@@ -165,6 +166,30 @@ def _cfg_window_grid(steps: int) -> list[dict[str, object]]:
     return rows
 
 
+def _cfg_hifi_case(steps: int) -> list[dict[str, object]]:
+    baseline = f"exact_s{steps}_g5"
+    start, end = CFG_HIFI_WINDOWS[steps]
+    values = _cfg_values(steps, interval=2, weight=1.0)
+    values.update(
+        cfg_start_step=start,
+        cfg_end_step=end,
+        cfg_low_frequency_start_step=start,
+        cfg_low_frequency_end_step=end,
+        cfg_high_frequency_start_step=start,
+        cfg_high_frequency_end_step=end,
+    )
+    return [
+        _row(baseline, "off", 5.0, baseline),
+        _row(
+            f"cfg_hifi_i2_w100_s{steps}_g5",
+            "cfg_cache",
+            5.0,
+            baseline,
+            **values,
+        ),
+    ]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -186,6 +211,7 @@ def main() -> None:
         _write(args.output_dir / f"context_ir_cache_matrix_s{steps}.csv", _matrix(steps, args.profile_root))
         _write(args.output_dir / f"context_ir_cfg_grid_s{steps}.csv", _cfg_grid(steps))
         _write(args.output_dir / f"context_ir_cfg_window_grid_s{steps}.csv", _cfg_window_grid(steps))
+        _write(args.output_dir / f"context_ir_cfg_hifi_s{steps}.csv", _cfg_hifi_case(steps))
         _write(
             args.output_dir / f"context_ir_pilot_baselines_s{steps}.csv",
             [
