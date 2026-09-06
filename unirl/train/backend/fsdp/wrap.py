@@ -281,8 +281,8 @@ def _create_device_mesh(fsdp_mode: str) -> Optional[object]:
 
     import torch.distributed as dist
 
-    if not (dist.is_available() and dist.is_initialized()):
-        return None
+    if not dist.is_initialized():
+        dist.init_process_group()
 
     world_size = dist.get_world_size()
     # A world that the shard degree cannot split (including single-rank

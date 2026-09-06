@@ -1,0 +1,48 @@
+# @package _global_
+defaults:
+  - leo2_t2v_flowgrpo_cached
+  - _self_
+
+layout: separate
+train_fraction: 0.5
+rollout_cp: 2
+rollout_ep: 8
+
+bundle:
+  config:
+    load_video_vae: false
+
+rollout:
+  _target_: unirl.models.leo2.rollout.Leo2RolloutEngine
+  bundle_config:
+    _target_: unirl.models.leo2.config.Leo2PipelineConfig
+    model_precision: bf16
+    autocast_precision: bf16
+    trajectory_precision: bf16
+    logprob_precision: fp32
+    ckpt_path: ${oc.env:LEO2_CKPT_DIR}
+    assets_base: ${oc.env:LEO2_ASSETS_BASE}
+    preprocessing_cache_mode: readonly
+    preprocessing_cache_dir: ${oc.env:LEO2_PREPROCESS_CACHE}
+    vae_on_gpu: false
+    video_shift: ${bundle.config.video_shift}
+    context_parallel_size: ${rollout_cp}
+    expert_parallel_size: ${rollout_ep}
+    enable_deepep: true
+  fsdp_cfg:
+    _target_: unirl.train.configs.FSDPConfig
+    param_dtype: bf16
+    master_dtype: bf16
+    fsdp_mode: hybrid8
+    reshard_after_forward: true
+    activation_checkpointing: false
+    sp_size: ${rollout_cp}
+    ep_size: ${rollout_ep}
+  lora_cfg: ${backend.lora_cfg}
+  strategy: ${pipeline.strategy}
+
+sync:
+  _target_: unirl.distributed.weight_sync.lora.RemoteLoraWeightSync
+  verify: true
+  adapter_name: default
+  param_prefix: ""

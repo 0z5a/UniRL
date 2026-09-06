@@ -1,9 +1,19 @@
 # Leo2 (HunyuanVideo 2.0, MoE-A12B) × UniRL trainside FlowGRPO
 
+Offline prompt/target preprocessing, cached SFT, and frozen-component offload are documented in
+[the model package README](../../../unirl/models/leo2/README.md).
+The [64-GPU preprocessing and topology report](docs/results/preprocessing_topology_20260906/BENCHMARK_REPORT.md)
+records the current cluster validation and FlowGRPO launch settings.
+
 Text-to-video GRPO on the 75B three-stream MMDiT (`hunyuan_multimoda_gen_ar`,
 branch `dev_video`) with UniRL's in-process (trainside) rollout engine: one
 FSDP2-sharded copy of the model per DP rank does rollout, log-prob replay and
 the LoRA update — no separate inference engine, no weight sync.
+
+The cached 121-frame recipe is [leo2_t2v_flowgrpo_cached.yaml](leo2_t2v_flowgrpo_cached.yaml).
+[leo2_t2v_flowgrpo_separate.yaml](leo2_t2v_flowgrpo_separate.yaml) instead assigns independent GPU slabs to native
+Leo2 rollout and FSDP training, with separate CP/EP settings and verified LoRA synchronization.
+See the topology report for its current GPU validation status and measured communication costs.
 
 ## Layout
 

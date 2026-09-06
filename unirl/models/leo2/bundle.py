@@ -35,13 +35,9 @@ def ensure_hy_parallel_state() -> bool:
     world = dist.get_world_size()
     cp_size, ep_size, enable_deepep = _HY_PARALLEL_CONFIG
     if world % cp_size:
-        raise ValueError(
-            f"Leo2 context_parallel_size={cp_size} must divide distributed world_size={world}."
-        )
+        raise ValueError(f"Leo2 context_parallel_size={cp_size} must divide distributed world_size={world}.")
     if world % ep_size:
-        raise ValueError(
-            f"Leo2 expert_parallel_size={ep_size} must divide distributed world_size={world}."
-        )
+        raise ValueError(f"Leo2 expert_parallel_size={ep_size} must divide distributed world_size={world}.")
     if not hy_ps.is_parallel_state_initialized():
         dp_shard = min(8, world)
         hy_ps.init_parallel_state(
@@ -61,11 +57,7 @@ def ensure_hy_parallel_state() -> bool:
     from hymm.core.parallel_states import ParallelState
 
     current = hymm_global_vars.get_parallel_state()
-    if (
-        getattr(current, "backend", "") != "pure_torch"
-        or current.cp_size != cp_size
-        or current.ep_size != ep_size
-    ):
+    if getattr(current, "backend", "") != "pure_torch" or current.cp_size != cp_size or current.ep_size != ep_size:
         hymm_global_vars._GLOBAL_PARALLEL_STATE = None
         ParallelState.from_pure_torch()
     return True
@@ -367,8 +359,7 @@ def _patch_router_dtype(model: nn.Module) -> None:
             linear.forward = _final_fwd
             final_count += 1
     print(
-        "[leo2 bundle] dtype-boundary patch applied to "
-        f"{router_count} gate.wg and {final_count} FinalLayer modules",
+        f"[leo2 bundle] dtype-boundary patch applied to {router_count} gate.wg and {final_count} FinalLayer modules",
         flush=True,
     )
 
@@ -455,6 +446,11 @@ class Leo2Bundle(Bundle):
 
     @classmethod
     def from_config(cls, config: Leo2PipelineConfig) -> "Leo2Bundle":
+        cached = config.preprocessing_cache_mode == "readonly"
+        if cached:
+            from .preprocessing_cache import Leo2PreprocessingCache
+
+            Leo2PreprocessingCache(config)
         if config.skip_load_ckpt:
             raise ValueError(
                 "Leo2Bundle does not support skip_load_ckpt: build_model uses initialize_weights=False, "
@@ -516,23 +512,23 @@ class Leo2Bundle(Bundle):
         # tokenizer + frozen aux models + the hymm pipeline object
         from hymm.core.extra_model_provider import build_text_encoder, build_tkwrapper, build_vae
 
-        model.tokenizer = build_tkwrapper()
-        if getattr(args, "use_vae", False):
+        if not cached:
+            model.tokenizer = build_tkwrapper()
+        if config.load_video_vae and getattr(args, "use_vae", False):
             vae = build_vae(dp_rank=0, only_encoder=False)
+            vae.requires_grad_(False).eval()
+            if not config.vae_on_gpu:
+                vae.to("cpu")
             model.model_dict["vae"] = vae
-        text_encoder = build_text_encoder()
-        model.model_dict["text_encoder"] = text_encoder
-        # Transient mode parks the 18GB conditioner on CPU and shuttles it to
-        # GPU per encode; resident mode keeps it on the device (the shuttle
-        # costs ~10-20 s per rollout and the peak is unchanged: the encoder is
-        # on GPU during conditioning either way, never during the DiT forward).
-        try:
+        if not cached:
+            text_encoder = build_text_encoder()
+            text_encoder.requires_grad_(False).eval()
+            model.model_dict["text_encoder"] = text_encoder
             text_encoder.to("cpu" if config.text_encoder_gpu_transient else device)
-        except Exception:
-            pass
 
         model.load_generation_config(config.generation_config_path)
-        model.build_diffusion_pipeline()
+        if not cached:
+            model.build_diffusion_pipeline()
         if inference_cache_config is not None:
             model.enable_cache(inference_cache_config)
 

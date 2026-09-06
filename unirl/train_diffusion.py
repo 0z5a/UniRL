@@ -43,6 +43,7 @@ def main(cfg: DictConfig) -> None:
         sync_cfg=cfg.get("sync"),
         logging_cfg=cfg.get("logging"),
         layout=cfg.get("layout", "colocate"),
+        rollout_isolated_workers=cfg.get("rollout_isolated_workers", False),
         train_fraction=cfg.get("train_fraction", 0.5),
         reward_fraction=cfg.get("reward_fraction", 0.0),
         enable_fsdp_offload=cfg.get("enable_fsdp_offload", False),

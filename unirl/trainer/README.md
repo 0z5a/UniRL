@@ -318,6 +318,8 @@ without driver-authored x_T. `media_log_interval` does not apply
 
 ## Gotchas
 
+- `rollout_isolated_workers=true` uses another worker slot on the same physical GPUs for a dedicated sampler with independent process-global model topology. It requires `layout=colocate`, `workers_per_device>=2`, a multi-slot transport such as `gpu_store`, `RemoteLoraWeightSync`, and both train offload and rollout sleep. The engine must actually release its weights on sleep. Construction offloads training before building rollout, then sleeps rollout before restoring training. At generation, LoRA extraction precedes train offload; rollout wakes only after training releases its weights. This remains synchronous and does not introduce stale-policy overlap.
+
 - **Multi-update means disjoint optimizer mini-batches, not repeated full-batch
   epochs.** See [Multiple optimizer updates per rollout](#multiple-optimizer-updates-per-rollout)
   for the algorithm and divisibility constraints.

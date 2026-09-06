@@ -69,6 +69,13 @@ segment, expand advantages per token), keeping `supports_multi_update = False`.
 
 ## Gotchas
 
+- **FlowGRPO and DiffusionNFT backpropagate one timestep at a time.** Each of the
+  `K` timestep losses uses `loss_scale / K`; the train stack owns the optimizer
+  step after microbatch accumulation. FlowGRPO keeps only detached `[B, K]`
+  log-probs for aggregate diagnostics, so activation memory does not grow with
+  `K`. Its replay anchor uses the same single-timestep calls; stage-level
+  `batch_replay_steps` does not batch timesteps in this algorithm. A strict parity
+  failure aborts the update; earlier timestep gradients must not be stepped.
 - **`old_logp_source: rollout` with a replay-only engine** — a separate-worker
   SGLang rollout emits no per-step `sde_logp`, so the `rollout` source raises in
   `prepare_segment`. Use `replay` (the cost is one extra `torch.no_grad` replay).

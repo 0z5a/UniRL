@@ -20,6 +20,9 @@ from unirl.models.leo2.pipeline import Leo2Pipeline
 from unirl.models.leo2.text_embed import Leo2CondStage, _to_transport_tree
 from unirl.distributed.group.remote import RankInfo
 from unirl.rollout.engine.trainside.engine import TrainsideRolloutEngine
+from unirl.train.backend.base_backend import BaseFSDP2Backend
+from unirl.train.configs import EmaLoraConfig
+from unirl.train.ema import EMA, Shadow, make_decay_fn
 from unirl.train.stack.base import TrainStack, TrainStepResult
 from unirl.trainer.diffusion import _compute_chunked_advantages, _resolve_rollout_chunk_prompts
 from unirl.types.conditions import TextEmbedCondition
@@ -255,13 +258,19 @@ def test_leo2_nft_recipe_matches_requested_contract() -> None:
     assert config.algorithm._target_ == "unirl.algorithms.diffusionnft.DiffusionNFT"
     assert config.backend.ema_lora_cfg.rank == 64
     assert config.backend.ema_lora_cfg.alpha == 128
+    assert config.backend.ema_lora_cfg.ema_decay_schedule == "piecewise_linear"
+    assert config.backend.ema_lora_cfg.flat_steps == 0
+    assert config.backend.ema_lora_cfg.ramp_rate == pytest.approx(0.001)
+    assert config.backend.ema_lora_cfg.ema_decay == pytest.approx(0.5)
+    assert config.backend.ema_lora_cfg.ema_update_interval == 1
+    assert config.backend.ema_lora_cfg.ema_device == "cuda"
     assert config.backend.optimizer_cfg.learning_rate == pytest.approx(3e-4)
-    assert config.batch_size == 48
+    assert config.batch_size == 16
     assert config.rollout_chunk_prompts == 4
     assert config.sampling.num_inference_steps == 10
     assert config.sampling.guidance_scale == pytest.approx(1.0)
     assert (config.sampling.height, config.sampling.width, config.sampling.num_frames) == (464, 848, 17)
-    assert config.sampling.samples_per_prompt == 16
+    assert config.sampling.samples_per_prompt == 8
     assert config.sampling.scheduler.num_sde_steps == 0
     assert config.algorithm.beta == pytest.approx(1.0)
     assert config.algorithm.train_timestep_mode == "random"
@@ -280,6 +289,54 @@ def test_leo2_nft_recipe_matches_requested_contract() -> None:
     assert config.bundle.config.inference_cache_threshold == pytest.approx(0.1)
     assert config.backend.fsdp_cfg.sp_size == 2
     assert config.backend.fsdp_cfg.ep_size == 8
+
+
+def test_ema_piecewise_linear_matches_flow_factory_schedule() -> None:
+    decay = make_decay_fn(
+        EmaLoraConfig(
+            ema_decay_schedule="piecewise_linear",
+            flat_steps=0,
+            ramp_rate=0.001,
+            ema_decay=0.5,
+        )
+    )
+
+    assert decay(0) == pytest.approx(0.0)
+    assert decay(1) == pytest.approx(0.001)
+    assert decay(499) == pytest.approx(0.499)
+    assert decay(500) == pytest.approx(0.5)
+    assert decay(1000) == pytest.approx(0.5)
+
+
+def test_ema_update_interval_uses_zero_based_flow_factory_steps() -> None:
+    live = torch.tensor([2.0])
+    shadow = torch.tensor([0.0])
+    ema = EMA(
+        shadow=Shadow(
+            iter_pairs=lambda: iter([(live, shadow)]),
+            swap_in=lambda: None,
+            swap_out=lambda: None,
+        ),
+        decay_fn=lambda step: 0.5,
+        timing="rollout_end",
+        update_interval=2,
+    )
+
+    ema.on_rollout_end(0)
+    torch.testing.assert_close(shadow, torch.tensor([0.0]))
+    ema.on_rollout_end(1)
+    torch.testing.assert_close(shadow, torch.tensor([1.0]))
+
+
+def test_rollout_end_ema_uses_last_committed_optimizer_index() -> None:
+    observed: list[int] = []
+    backend = object.__new__(BaseFSDP2Backend)
+    backend.ema = SimpleNamespace(on_rollout_end=observed.append)
+    backend._optimizer_step_count = 1
+
+    backend.on_rollout_end()
+
+    assert observed == [0]
 
 
 def test_chunked_global_advantages_match_full_batch() -> None:

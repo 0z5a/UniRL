@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
@@ -43,18 +44,38 @@ class EMA:
     shadow: Shadow
     decay_fn: Callable[[int], float]
     timing: str
+    update_interval: int = 1
     name: str = "ema"
 
+    def __post_init__(self) -> None:
+        if type(self.update_interval) is not int:
+            raise TypeError(
+                f"EMA update_interval must be int, got {type(self.update_interval).__name__}: "
+                f"{self.update_interval!r}"
+            )
+        if self.update_interval < 0:
+            raise ValueError(f"EMA update_interval must be >= 0, got {self.update_interval}")
+        if self.timing not in {"optimizer_step", "rollout_end"}:
+            raise ValueError(
+                "EMA timing must be 'optimizer_step' or 'rollout_end', "
+                f"got {self.timing!r}"
+            )
+
+    def _should_update(self, t: int) -> bool:
+        return self.update_interval > 0 and (t + 1) % self.update_interval == 0
+
     def step(self, t: int) -> None:
-        if self.timing == "optimizer_step":
+        if self.timing == "optimizer_step" and self._should_update(t):
             self._run(self.decay_fn(t))
 
     def on_rollout_end(self, t: int) -> None:
-        if self.timing == "rollout_end":
+        if self.timing == "rollout_end" and self._should_update(t):
             self._run(self.decay_fn(t))
 
     @torch.no_grad()
     def _run(self, decay: float) -> None:
+        if not math.isfinite(decay) or not 0.0 <= decay <= 1.0:
+            raise ValueError(f"EMA decay must be finite and in [0, 1], got {decay!r}")
         if decay <= 0.0:
             for live, shd in self.shadow.iter_pairs():
                 local_view(shd).copy_(local_view(live))
@@ -87,17 +108,39 @@ def make_decay_fn(cfg: EmaLoraConfig | EmaFullConfig) -> Callable[[int], float]:
         target = float(cfg.target_decay)
         return lambda t: min((1 + t) / (10 + t), target)
 
-    decay_type = str(cfg.ema_decay_type)
+    decay_type_value = cfg.ema_decay_schedule if cfg.ema_decay_schedule is not None else cfg.ema_decay_type
+    if not isinstance(decay_type_value, str):
+        raise TypeError(
+            "EMA decay schedule must be str, "
+            f"got {type(decay_type_value).__name__}: {decay_type_value!r}"
+        )
+    decay_type = decay_type_value.strip().lower()
     ema_decay = float(cfg.ema_decay)
-    flat_steps = int(cfg.ema_flat_steps)
-    uprate = float(cfg.ema_uprate)
+    flat_steps = int(cfg.flat_steps if cfg.flat_steps is not None else cfg.ema_flat_steps)
+    uprate = float(cfg.ramp_rate if cfg.ramp_rate is not None else cfg.ema_uprate)
     uphold = float(cfg.ema_uphold)
+
+    if not math.isfinite(ema_decay) or not 0.0 <= ema_decay <= 1.0:
+        raise ValueError(f"EMA ema_decay must be finite and in [0, 1], got {cfg.ema_decay!r}")
+    if flat_steps < 0:
+        raise ValueError(f"EMA flat_steps must be >= 0, got {flat_steps}")
+    if not math.isfinite(uprate) or uprate < 0.0:
+        raise ValueError(f"EMA ramp_rate must be finite and >= 0, got {uprate!r}")
+    if not math.isfinite(uphold) or not 0.0 <= uphold <= 1.0:
+        raise ValueError(f"EMA ema_uphold must be finite and in [0, 1], got {uphold!r}")
 
     if decay_type == "linear":
         return lambda t: float(min(t * uprate, uphold))
     if decay_type == "warmup":
         return lambda t: 0.0 if t < flat_steps else float(min((t - flat_steps) * uprate, uphold))
-    return lambda t: ema_decay
+    if decay_type == "piecewise_linear":
+        return lambda t: 0.0 if t < flat_steps else float(min((t - flat_steps) * uprate, ema_decay))
+    if decay_type == "constant":
+        return lambda t: ema_decay
+    raise ValueError(
+        "EMA decay schedule must be one of 'constant', 'linear', 'warmup', or "
+        f"'piecewise_linear', got {decay_type_value!r}"
+    )
 
 
 def inject_nft(

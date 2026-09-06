@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
 import torch
@@ -14,6 +15,51 @@ if TYPE_CHECKING:
 
 
 _DUMP_COUNT = 0
+
+
+@contextmanager
+def video_vae_ctx(bundle: "Leo2Bundle"):
+    """Host the frozen VAE only during codec work when vae_on_gpu is false."""
+    vae = bundle.model.model_dict.get("vae")
+    if vae is None:
+        raise RuntimeError("Leo2 VAE is not loaded; enable load_video_vae for video encoding or decoded rollouts.")
+    transient = not bundle.config.vae_on_gpu
+    try:
+        vae.to(bundle.device)
+        yield vae
+    finally:
+        if transient:
+            if callable(getattr(vae, "clear_cache", None)):
+                vae.clear_cache()
+            vae.to("cpu")
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+
+@torch.no_grad()
+def encode_target_video(bundle: "Leo2Bundle", uri: str, blob: dict, *, max_decode_frames: int) -> torch.Tensor:
+    """Encode a deterministically sampled and resized target video into normalized model-space x0."""
+    from hymm.models.autoencoders import normalize_vae_latents
+
+    from unirl.utils.video import load_video
+
+    frames_count = blob["video_duration"]
+    if max_decode_frames < frames_count:
+        raise ValueError(f"max_decode_frames={max_decode_frames} must cover effective num_frames={frames_count}.")
+    pixels = load_video(uri, max_frames=max_decode_frames)
+    indices = torch.linspace(0, pixels.shape[0] - 1, frames_count).round().long()
+    pixels = torch.nn.functional.interpolate(
+        pixels[indices],
+        size=tuple(blob["image_size"]),
+        mode="bicubic",
+        align_corners=False,
+    ).clamp(0, 1)
+    pixels = (pixels.permute(1, 0, 2, 3).unsqueeze(0) * 2 - 1).to(bundle.device)
+    with video_vae_ctx(bundle) as vae:
+        # Match the native pipeline's default codec precision (autocast disabled).
+        latent = vae.encode(pixels).latent_dist.mode()
+        latent = normalize_vae_latents(vae, latent.float())
+        return latent.detach().cpu()
 
 
 def _maybe_dump_frames(visuals: torch.Tensor, tag: str = "decode", max_dumps: int = 6) -> None:
@@ -49,17 +95,16 @@ class Leo2VideoDecodeStage:
         from hymm.models.autoencoders import denormalize_vae_latents
 
         pipeline = self.bundle.model.diffusion_pipeline
-        vae = pipeline.vae
-        latents = latents.to(device=self.bundle.device, dtype=torch.float32)
-        latents = denormalize_vae_latents(vae, latents)
-
-        vae_dtype = pipeline.vae_autocast_dtype
-        with torch.autocast(
-            device_type="cuda",
-            dtype=vae_dtype,
-            enabled=vae_dtype is not None and vae_dtype != torch.float32,
-        ):
-            visuals = vae.decode(latents, return_dict=False)[0]  # [B, C, T, H, W] in [-1, 1]
+        vae_dtype = getattr(pipeline, "vae_autocast_dtype", None)
+        with video_vae_ctx(self.bundle) as vae:
+            latents = latents.to(device=self.bundle.device, dtype=torch.float32)
+            latents = denormalize_vae_latents(vae, latents)
+            with torch.autocast(
+                device_type="cuda",
+                dtype=vae_dtype,
+                enabled=vae_dtype is not None and vae_dtype != torch.float32,
+            ):
+                visuals = vae.decode(latents, return_dict=False)[0]
         return (visuals.float() / 2 + 0.5).clamp(0, 1)
 
     @torch.no_grad()

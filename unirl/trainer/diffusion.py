@@ -388,6 +388,7 @@ class DiffusionTrainer(BaseTrainer):
         sync_cfg: Optional[DictConfig] = None,
         logging_cfg: Optional[DictConfig] = None,
         layout: str = "colocate",
+        rollout_isolated_workers: bool = False,
         train_fraction: float = 0.5,
         reward_fraction: float = 0.0,
         enable_fsdp_offload: bool = False,
@@ -406,10 +407,23 @@ class DiffusionTrainer(BaseTrainer):
         eval_rewards_cfg: Optional[Any] = None,
         task_config: Optional[Dict[str, Any]] = None,
     ) -> None:
+        if rollout_isolated_workers and (
+            layout != "colocate"
+            or int(cfg.get("workers_per_device", 1)) < 2
+            or not enable_fsdp_offload
+            or not rollout_sleep_after_generate
+            or sync_cfg is None
+            or not str(sync_cfg.get("_target_", "")).endswith("RemoteLoraWeightSync")
+        ):
+            raise ValueError(
+                "Isolated colocated rollout requires workers_per_device>=2, enable_fsdp_offload, "
+                "rollout_sleep_after_generate and RemoteLoraWeightSync; see trainer/README.md."
+            )
         super().__init__(cfg=cfg, logging_cfg=logging_cfg)
         reject_retired_eval_keys(cfg)
         self.batch_size = batch_size
         self._layout = str(layout)
+        self._rollout_isolated_workers = bool(rollout_isolated_workers)
         self._train_fraction = float(train_fraction)
         self._enable_fsdp_offload = bool(enable_fsdp_offload)
         # Independent from generate-time offload: when enabled, a reward that
@@ -527,9 +541,18 @@ class DiffusionTrainer(BaseTrainer):
         else:
             with placement(self.pool, fraction=1.0 - reward_fraction, shared_workers=True):
                 self._build_train_side(**train_cfgs)
-                self.rollout = self._build_rollout(rollout_cfg, allow_pipeline=True)
-                if sync_cfg is not None:
-                    self.weight_sync = remote_hydra(sync_cfg, backend=self.backend, rollout=self.rollout)
+                if self._rollout_isolated_workers:
+                    self.backend.offload()
+                    with placement(self.pool, shared_workers=False):
+                        self.rollout = self._build_rollout(rollout_cfg, allow_pipeline=False)
+                    self.rollout.sleep()
+                    self.backend.onload()
+                    self.weight_sync = remote_hydra(sync_cfg, backend=self.backend)
+                    self._connect_separate(sync_cfg)
+                else:
+                    self.rollout = self._build_rollout(rollout_cfg, allow_pipeline=True)
+                    if sync_cfg is not None:
+                        self.weight_sync = remote_hydra(sync_cfg, backend=self.backend, rollout=self.rollout)
 
         if reward_separate:
             with placement(self.pool, fraction=reward_fraction, shared_workers=True):
@@ -687,8 +710,8 @@ class DiffusionTrainer(BaseTrainer):
         if "pipeline" in inspect.signature(rollout_parsed["role_cls"]).parameters:
             if not allow_pipeline:
                 raise ValueError(
-                    "layout='separate' requires a dedicated-rollout engine "
-                    "(vllm/sglang); the trainside direct-sampling engine needs "
+                    "Isolated rollout placement requires a dedicated-rollout engine; "
+                    "the trainside direct-sampling engine needs "
                     "the pipeline as a local sibling and cannot live on a "
                     "separate slab."
                 )
@@ -822,13 +845,16 @@ class DiffusionTrainer(BaseTrainer):
                 self.weight_sync.extract()
                 train_offload_attempted = True
                 self.backend.offload()
+            elif self._rollout_isolated_workers and should_offload_train:
+                train_offload_attempted = True
+                self.backend.offload()
             self.rollout.wake_up()
             if sync_weights and self.weight_sync is not None:
                 if staged_sync:
                     self.weight_sync.push()
                 else:
                     self.weight_sync.sync()
-            if should_offload_train and not staged_sync:
+            if should_offload_train and not train_offload_attempted:
                 train_offload_attempted = True
                 self.backend.offload()
             if should_swap_ema:

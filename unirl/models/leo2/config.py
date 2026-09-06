@@ -104,6 +104,9 @@ class Leo2PipelineConfig:
     # Reuse frozen text/model conditions for adjacent sibling samples. A size
     # of one is sufficient for prompt-major group rollouts.
     condition_cache_size: int = 1
+    preprocessing_cache_dir: Optional[str] = None
+    preprocessing_cache_mode: str = "off"
+    load_video_vae: bool = True
     # Forward timing forces CUDA synchronization and is benchmark-only.
     profile_forward: bool = False
     vae_on_gpu: bool = True
@@ -121,28 +124,31 @@ class Leo2PipelineConfig:
 
     def __post_init__(self) -> None:
         """Resolve external artifacts and validate the portable Leo2 layout."""
+        if self.preprocessing_cache_mode not in ("off", "readonly"):
+            raise ValueError("Leo2 preprocessing_cache_mode must be 'off' or 'readonly'.")
+        if self.preprocessing_cache_mode == "readonly" and not self.preprocessing_cache_dir:
+            raise ValueError("Leo2 readonly preprocessing requires preprocessing_cache_dir.")
+        if type(self.load_video_vae) is not bool or type(self.vae_on_gpu) is not bool:
+            raise TypeError("Leo2 load_video_vae and vae_on_gpu must be bool.")
+        if not self.load_video_vae and self.preprocessing_cache_mode != "readonly":
+            raise ValueError("Leo2 load_video_vae=false requires readonly preprocessing for cached SFT.")
         if type(self.context_parallel_size) is not int:
             raise TypeError(
                 "Leo2 context_parallel_size must be int, "
                 f"got {type(self.context_parallel_size).__name__}: {self.context_parallel_size!r}."
             )
         if self.context_parallel_size < 1:
-            raise ValueError(
-                f"Leo2 context_parallel_size must be >= 1, got {self.context_parallel_size}."
-            )
+            raise ValueError(f"Leo2 context_parallel_size must be >= 1, got {self.context_parallel_size}.")
         if type(self.expert_parallel_size) is not int:
             raise TypeError(
                 "Leo2 expert_parallel_size must be int, "
                 f"got {type(self.expert_parallel_size).__name__}: {self.expert_parallel_size!r}."
             )
         if self.expert_parallel_size < 1:
-            raise ValueError(
-                f"Leo2 expert_parallel_size must be >= 1, got {self.expert_parallel_size}."
-            )
+            raise ValueError(f"Leo2 expert_parallel_size must be >= 1, got {self.expert_parallel_size}.")
         if type(self.enable_deepep) is not bool:
             raise TypeError(
-                "Leo2 enable_deepep must be bool, "
-                f"got {type(self.enable_deepep).__name__}: {self.enable_deepep!r}."
+                f"Leo2 enable_deepep must be bool, got {type(self.enable_deepep).__name__}: {self.enable_deepep!r}."
             )
         if self.enable_deepep and self.expert_parallel_size == 1:
             raise ValueError(
@@ -155,9 +161,7 @@ class Leo2PipelineConfig:
                 f"got {type(self.condition_cache_size).__name__}: {self.condition_cache_size!r}."
             )
         if self.condition_cache_size < 0:
-            raise ValueError(
-                f"Leo2 condition_cache_size must be >= 0, got {self.condition_cache_size}."
-            )
+            raise ValueError(f"Leo2 condition_cache_size must be >= 0, got {self.condition_cache_size}.")
         if type(self.profile_forward) is not bool:
             raise TypeError(
                 "Leo2 profile_forward must be bool, "

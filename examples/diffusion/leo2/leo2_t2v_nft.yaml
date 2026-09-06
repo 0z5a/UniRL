@@ -3,9 +3,9 @@
 
 num_devices: 8
 # One prompt is one reward group; each group forks samples_per_prompt videos.
-batch_size: 48
+batch_size: 16
 # Bound decoded-video and condition transport to four complete prompt groups
-# (64 videos) before reward scoring and media release.
+# (32 videos) before reward scoring and media release.
 rollout_chunk_prompts: 4
 num_rollouts: 10000
 adv_use_global_std: true
@@ -88,11 +88,12 @@ backend:
     task_type: FEATURE_EXTRACTION
     default_adapter: default
     shadow_adapter: old
-    ema_decay: 0.001
-    ema_decay_type: warmup
-    ema_flat_steps: 0
-    ema_uprate: 0.001
-    ema_uphold: 0.5
+    ema_decay_schedule: piecewise_linear
+    flat_steps: 0
+    ramp_rate: 0.001
+    ema_decay: 0.5
+    ema_update_interval: 1
+    ema_device: cuda
     timing: rollout_end
     # Generation branch only: video/text attention plus shared and text MLPs.
     # Routed experts, router and audio modules remain frozen.
@@ -178,7 +179,7 @@ sampling:
   num_frames: 17
   eta: 0.0
   # Reward group size.
-  samples_per_prompt: 16
+  samples_per_prompt: 8
   seed: 42
   init_same_noise: false
   autocast_precision: bf16

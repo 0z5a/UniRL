@@ -20,7 +20,6 @@ from .base import (
     _grpo_clip_loss,
     _reference_kl_loss,
     _reference_replay_means,
-    _require_replay_anchor_for_batched_replay,
     _resolve_clip_range_from_schedule,
     _resolve_reference_model,
     _transition_sigma,
@@ -97,7 +96,6 @@ class FlowGRPO(StageAlgorithm):
             self.old_logp_source in ("rollout", "replay"),
             f"FlowGRPO: old_logp_source must be 'rollout' or 'replay'; got {old_logp_source!r}",
         )
-        _require_replay_anchor_for_batched_replay(self.stage, self.old_logp_source, algo="FlowGRPO")
         self.conditions_cls = conditions_cls
 
     def prepare_segment(
@@ -122,9 +120,12 @@ class FlowGRPO(StageAlgorithm):
                 )
             return
         typed_conds = typed_conditions(conditions, self.conditions_cls)
+        anchors = []
         with torch.no_grad():
-            result = self.stage.replay(typed_conds, segment=segment, params=self.params, step_indices=target_steps)
-        segment.sde_logp = result.log_probs.detach().cpu()
+            for step_index in target_steps:
+                result = self.stage.replay(typed_conds, segment=segment, params=self.params, step_indices=[step_index])
+                anchors.append(result.log_probs.detach().cpu())
+        segment.sde_logp = torch.cat(anchors, dim=1)
 
     def compute_loss_and_backward(
         self,
@@ -141,6 +142,61 @@ class FlowGRPO(StageAlgorithm):
 
         typed_conds = typed_conditions(conditions, self.conditions_cls)
 
+        step_results = []
+        new_logps = []
+        old_logps = []
+        for step_index in target_steps:
+            result, new_logp, old_logp = self._compute_step_and_backward(
+                typed_conds=typed_conds,
+                segment=segment,
+                advantages=advantages,
+                training_progress=training_progress,
+                loss_scale=float(loss_scale) / len(target_steps),
+                step_index=step_index,
+            )
+            step_results.append(result)
+            new_logps.append(new_logp)
+            old_logps.append(old_logp)
+
+        metrics: Dict[str, Any] = {}
+        for result in step_results:
+            for key, value in result.metrics.items():
+                if "_step_" in key:
+                    metrics[key] = value
+                elif key.endswith("_max"):
+                    metrics[key] = max(metrics.get(key, value), value)
+                elif key.endswith("_min"):
+                    metrics[key] = min(metrics.get(key, value), value)
+                else:
+                    metrics[key] = metrics.get(key, 0.0) + value / len(target_steps)
+        new_logp = torch.cat(new_logps, dim=1)
+        old_logp = torch.cat(old_logps, dim=1)
+        _, ratio_metrics = _grpo_clip_loss(
+            new_logp=new_logp,
+            old_logp=old_logp,
+            advantages=advantages.detach().to(new_logp).reshape(-1, 1).expand_as(new_logp),
+            clip_range=metrics["clip_range"],
+        )
+        metrics.update({key: float(value.item()) for key, value in ratio_metrics.items()})
+        return AlgorithmStepResult(
+            loss=sum(result.loss for result in step_results) / len(target_steps),
+            metrics=metrics,
+            num_steps_or_tokens=len(target_steps),
+            has_backward=True,
+        )
+
+    def _compute_step_and_backward(
+        self,
+        *,
+        typed_conds: Any,
+        segment: "LatentSegment",
+        advantages: torch.Tensor,
+        training_progress: float,
+        loss_scale: float,
+        step_index: int,
+    ) -> tuple[AlgorithmStepResult, torch.Tensor, torch.Tensor]:
+        """Backpropagate one transition and return only detached log-probs and scalar diagnostics."""
+        target_steps = [step_index]
         replay_result = self.stage.replay(
             typed_conds,
             segment=segment,
@@ -293,12 +349,13 @@ class FlowGRPO(StageAlgorithm):
 
         (loss * loss_scale).backward()
 
-        return AlgorithmStepResult(
+        result = AlgorithmStepResult(
             loss=float(loss.detach().item()),
             metrics=metrics,
-            num_steps_or_tokens=len(target_steps),
+            num_steps_or_tokens=1,
             has_backward=True,
         )
+        return result, new_logp.detach(), old_logp.detach()
 
     def _resolve_target_steps(self, segment: "LatentSegment") -> List[int]:
         """All SDE-recorded step indices on the segment."""

@@ -13,6 +13,7 @@ from unirl.types.conditions import TextEmbedCondition
 from unirl.types.primitives import Texts
 
 from .conditions import LEO2_MODEL_KWARGS, Leo2Conditions
+from .preprocessing_cache import Leo2PreprocessingCache, map_tensors
 
 if TYPE_CHECKING:
     from .bundle import Leo2Bundle
@@ -42,6 +43,11 @@ class Leo2CondStage:
         self._cache: OrderedDict[tuple[str, int, int, int, int], Leo2Conditions] = OrderedDict()
         self.cache_hits = 0
         self.cache_misses = 0
+        self.disk_cache = (
+            Leo2PreprocessingCache(bundle.config)
+            if getattr(bundle.config, "preprocessing_cache_mode", "off") == "readonly"
+            else None
+        )
 
     def _capture(self, prompt: str, *, height: int, width: int, num_frames: int, seed: int) -> Dict[str, Any]:
         model = self.bundle.model
@@ -76,6 +82,16 @@ class Leo2CondStage:
 
     def build(self, texts: Texts, *, height: int, width: int, num_frames: int, seeds: List[int]) -> Leo2Conditions:
         prompts = list(texts.texts)
+        require(
+            len(prompts) > 0 and len(prompts) == len(seeds), "Leo2CondStage: prompts/seeds must be nonempty and aligned"
+        )
+        if self.disk_cache is not None:
+            blobs = []
+            for prompt in prompts:
+                key = self.disk_cache.condition_key(prompt, height=height, width=width, num_frames=num_frames)
+                blobs.extend(self.disk_cache.read_condition(key).hymm)
+            self.cache_hits += len(prompts)
+            return Leo2Conditions.from_dict({"hymm": blobs})
         if self._cache_size <= 0 or len(prompts) != 1 or len(seeds) != 1:
             return self._build_uncached(
                 texts,
@@ -100,7 +116,7 @@ class Leo2CondStage:
             seeds=seeds,
         )
         self.cache_misses += 1
-        self._cache[key] = _clone_conditions(result)
+        self._cache[key] = Leo2Conditions.from_dict(map_tensors(result.to_dict(), "cpu"))
         self._cache.move_to_end(key)
         while len(self._cache) > self._cache_size:
             self._cache.popitem(last=False)
@@ -131,9 +147,7 @@ class Leo2CondStage:
                 image_size = captured.get("image_size")
                 video_duration = captured.get("video_duration")
                 if isinstance(image_size, (list, tuple)):
-                    image_size = tuple(
-                        int(value) if isinstance(value, np.integer) else value for value in image_size
-                    )
+                    image_size = tuple(int(value) if isinstance(value, np.integer) else value for value in image_size)
                 if isinstance(video_duration, np.integer):
                     video_duration = int(video_duration)
                 require(

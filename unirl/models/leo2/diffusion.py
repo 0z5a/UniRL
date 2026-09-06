@@ -60,20 +60,11 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
     # ------------------------------------------------------------------ step
     def _prep_channel_cond(self, blob, latents: torch.Tensor):
         """Build zero conditioning latents and mask once per T2V trajectory."""
-        pipeline = self.bundle.model.diffusion_pipeline
         args = self.bundle.hymm_args
         if not getattr(args, "extend_latent_channels", False):
             return None, None
-        cond_latents, cond_mask, _task_type = pipeline.prepare_channel_cond_latents(None, latents)
-        require(
-            isinstance(cond_latents, torch.Tensor) and isinstance(cond_mask, torch.Tensor),
-            "Leo2DiffusionStage: prepare_channel_cond_latents must return Tensor latents/mask; "
-            f"got {type(cond_latents).__name__} and {type(cond_mask).__name__}",
-        )
-        return (
-            cond_latents.to(device=latents.device, dtype=latents.dtype),
-            cond_mask.to(device=latents.device, dtype=latents.dtype),
-        )
+        # Native prepare_channel_cond_latents(None, latents), specialized to the supported T2V path.
+        return torch.zeros_like(latents), torch.zeros_like(latents[:, :1])
 
     def predict_noise(
         self,
@@ -103,10 +94,10 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
         # to the compute device, forward None entries AS-IS (never drop keys --
         # prepare_inputs_for_generation dereferences them with kwargs[...]).
         if blob.get("_device") != str(device):
+            from .preprocessing_cache import map_tensors
+
             blob["input_ids"] = blob["input_ids"].to(device)
-            blob["model_kwargs"] = {
-                k: (v.to(device) if isinstance(v, torch.Tensor) else v) for k, v in blob["model_kwargs"].items()
-            }
+            blob["model_kwargs"] = map_tensors(blob["model_kwargs"], device)
             blob["_device"] = str(device)
         cond_latents, cond_mask = channel_cond
         if cond_latents is not None:
@@ -223,11 +214,7 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
 
         model = self.bundle.model
         cache_context_factory = getattr(model, "cache_context", None)
-        cache_context = (
-            cache_context_factory("unirl_rollout")
-            if callable(cache_context_factory)
-            else nullcontext()
-        )
+        cache_context = cache_context_factory("unirl_rollout") if callable(cache_context_factory) else nullcontext()
         with self._autocast(), cache_context:
             for step_idx in range(num_steps):
                 step_eta = float(params.eta) if step_idx in sde_set else 0.0

@@ -201,10 +201,22 @@ class BaseFSDP2Backend(Remote):
         self.ema = None
         if shadow is not None:
             active_cfg = ema_lora_cfg or ema_cfg
+            if isinstance(active_cfg, EmaLoraConfig):
+                if not isinstance(active_cfg.ema_device, str):
+                    raise TypeError(
+                        f"EmaLoraConfig.ema_device must be str, got "
+                        f"{type(active_cfg.ema_device).__name__}: {active_cfg.ema_device!r}"
+                    )
+                if active_cfg.ema_device.strip().lower() != "cuda":
+                    raise ValueError(
+                        "UniRL EMA LoRA shadow adapters are model parameters and must use "
+                        f"ema_device='cuda'; got {active_cfg.ema_device!r}"
+                    )
             self.ema = EMA(
                 shadow=shadow,
                 decay_fn=make_decay_fn(active_cfg),
                 timing=active_cfg.timing,
+                update_interval=getattr(active_cfg, "ema_update_interval", 1),
             )
 
         self.optimizer = build_optimizer(
@@ -311,7 +323,9 @@ class BaseFSDP2Backend(Remote):
 
     def on_rollout_end(self) -> None:
         if self.ema is not None:
-            self.ema.on_rollout_end(self._optimizer_step_count)
+            # Flow-Factory schedules are zero-based: after the first committed
+            # optimizer update, the corresponding EMA schedule step is 0.
+            self.ema.on_rollout_end(max(self._optimizer_step_count - 1, 0))
 
     @distributed(dispatch_mode=Dispatch.BROADCAST)
     def get_optimizer_step_count(self) -> int:

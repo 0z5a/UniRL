@@ -49,9 +49,12 @@ class GPUStoreTransport(WorkerLocalTransport):
         if base is not None:
             return base
         ipc_h, shape, stride = borrow_map[h.store_key]
-        storage = torch.UntypedStorage._new_shared_cuda(*ipc_h)
-        view = torch.empty(0, dtype=h.dtype, device=self.device)
-        view.set_(storage, 0, shape, stride)
+        if 0 in shape:
+            view = torch.empty_strided(shape, stride, dtype=h.dtype, device=self.device)
+        else:
+            storage = torch.UntypedStorage._new_shared_cuda(*ipc_h)
+            view = torch.empty(0, dtype=h.dtype, device=self.device)
+            view.set_(storage, 0, shape, stride)
         base = view.detach()
         resolved[h.store_key] = base
         return base
@@ -73,6 +76,8 @@ class GPUStoreTransport(WorkerLocalTransport):
             allocs = ray.get(self._tw.batch_allocate.remote([(tuple(t.shape), t.dtype) for t in tl]))
             views_storages = []
             for t, (_, ipc_h, stride) in zip(tl, allocs):
+                if t.numel() == 0:
+                    continue
                 storage = torch.UntypedStorage._new_shared_cuda(*ipc_h)
                 view = torch.empty(0, dtype=t.dtype, device=self.device)
                 view.set_(storage, 0, tuple(t.shape), stride)

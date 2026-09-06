@@ -1,0 +1,15 @@
+# @package _global_
+# Preprocess both train/eval prompts before launching; see unirl/models/leo2/README.md.
+defaults:
+  - leo2_t2v_trainside
+  - _self_
+
+bundle:
+  config:
+    preprocessing_cache_dir: ${oc.env:LEO2_PREPROCESS_CACHE,outputs/leo2_preprocessed}
+    preprocessing_cache_mode: readonly
+    load_video_vae: true
+    vae_on_gpu: false
+
+logging:
+  run_name: leo2_t2v_cached

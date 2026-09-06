@@ -1,0 +1,2757 @@
+[
+  {
+    "case": "cp1_ep8_ac1",
+    "cp": 1,
+    "ep": 8,
+    "tp": 1,
+    "activation_checkpointing": true,
+    "groups": 8,
+    "group_size": 2,
+    "num_rollouts": 2,
+    "videos_per_rollout": 16,
+    "returncode": 0,
+    "wall_s": 1239.3233394622803,
+    "node": 1,
+    "generate_s": [
+      200.72,
+      192.425
+    ],
+    "train_s": [
+      267.9,
+      262.6
+    ],
+    "peak_gpu_mib": 97271,
+    "active_gpu_util_median": 100.0,
+    "errors": [],
+    "steady_videos_per_s": 0.03497874046657463,
+    "steady_videos_per_s_per_node": 0.03497874046657463,
+    "validated_two_updates": true,
+    "iterations": [
+      {
+        "rollout": 0,
+        "loss": 7.398193702101707e-08,
+        "grad_norm": 0.0003662109375,
+        "lr": 0.0001,
+        "has_backward": true,
+        "step_time_s": 471.5500944228843,
+        "rollout_replay_logp_absdiff_max": 1.0788440704345703e-05
+      },
+      {
+        "rollout": 1,
+        "loss": 2.5972258299589157e-07,
+        "grad_norm": 0.0006561279296875,
+        "lr": 0.0001,
+        "has_backward": true,
+        "step_time_s": 457.42070144833997,
+        "rollout_replay_logp_absdiff_max": 1.531839370727539e-05
+      }
+    ]
+  },
+  {
+    "case": "cp2_ep1_ac1_prod",
+    "cp": 2,
+    "ep": 1,
+    "tp": 1,
+    "activation_checkpointing": true,
+    "groups": 4,
+    "group_size": 2,
+    "num_rollouts": 2,
+    "videos_per_rollout": 8,
+    "returncode": 0,
+    "wall_s": 1198.7845890522003,
+    "recipe_sampling": {
+      "steps": 30,
+      "sde_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "eta": 0.5,
+      "shift": 3.0
+    },
+    "node": 1,
+    "generate_s": [
+      297.396,
+      277.043
+    ],
+    "train_s": [
+      163.9,
+      152.7
+    ],
+    "peak_gpu_mib": 66453,
+    "active_gpu_util_median": 100.0,
+    "errors": [],
+    "steady_videos_per_s": 0.018549626249645908,
+    "steady_videos_per_s_per_node": 0.018549626249645908,
+    "validated_two_updates": true,
+    "iterations": [
+      {
+        "rollout": 0,
+        "loss": 3.725290298461914e-08,
+        "grad_norm": 0.0002117156982421875,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 463.60410399828106,
+        "rollout_replay_logp_absdiff_max": 1.3530254364013672e-05
+      },
+      {
+        "rollout": 1,
+        "loss": -7.0035457611083984e-06,
+        "grad_norm": 9.441375732421875e-05,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 431.2755358158611,
+        "rollout_replay_logp_absdiff_max": 1.7579644918441772e-05
+      }
+    ]
+  },
+  {
+    "case": "cp2_ep1_ac1_stepwise",
+    "cp": 2,
+    "ep": 1,
+    "tp": 1,
+    "activation_checkpointing": true,
+    "groups": 4,
+    "group_size": 2,
+    "num_rollouts": 2,
+    "videos_per_rollout": 8,
+    "returncode": 0,
+    "wall_s": 1209.161729812622,
+    "recipe_sampling": {
+      "steps": 30,
+      "sde_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "eta": 0.5,
+      "shift": 3.0
+    },
+    "node": 1,
+    "generate_s": [
+      294.877,
+      276.404
+    ],
+    "train_s": [
+      160.6,
+      152.1
+    ],
+    "peak_gpu_mib": 50023,
+    "active_gpu_util_median": 100.0,
+    "errors": [],
+    "steady_videos_per_s": 0.018609199599800702,
+    "steady_videos_per_s_per_node": 0.018609199599800702,
+    "validated_two_updates": true,
+    "iterations": [
+      {
+        "rollout": 0,
+        "loss": 4.172325132612009e-08,
+        "grad_norm": 0.00021076202392578125,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 457.4289763648994,
+        "rollout_replay_logp_absdiff_max": 1.3530254364013672e-05
+      },
+      {
+        "rollout": 1,
+        "loss": 2.3245811462263566e-06,
+        "grad_norm": 0.0001239776611328125,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 429.89489994430915,
+        "rollout_replay_logp_absdiff_max": 1.4331191778182983e-05
+      }
+    ]
+  },
+  {
+    "case": "cp8_ep1_ac1_production121",
+    "cp": 8,
+    "ep": 1,
+    "tp": 1,
+    "activation_checkpointing": true,
+    "groups": 1,
+    "group_size": 8,
+    "num_rollouts": 2,
+    "videos_per_rollout": 8,
+    "returncode": 0,
+    "wall_s": 3552.920032262802,
+    "recipe_sampling": {
+      "steps": 30,
+      "sde_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "eta": 0.5,
+      "shift": 3.0,
+      "frames": 121,
+      "height": 464,
+      "width": 848
+    },
+    "node": 1,
+    "generate_s": [
+      1067.021,
+      1029.145
+    ],
+    "train_s": [
+      565.6,
+      558.5
+    ],
+    "peak_gpu_mib": 52551,
+    "active_gpu_util_median": 100.0,
+    "errors": [],
+    "steady_videos_per_s": 0.004991578588402078,
+    "steady_videos_per_s_per_node": 0.004991578588402078,
+    "validated_two_updates": true,
+    "iterations": [
+      {
+        "rollout": 0,
+        "loss": -1.0782899334982332e-05,
+        "grad_norm": 6.818771362304688e-05,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 1651.222111705225,
+        "rollout_replay_logp_absdiff_max": 1.779850572347641e-05
+      },
+      {
+        "rollout": 1,
+        "loss": -1.6596168278537604e-07,
+        "grad_norm": 8.0108642578125e-05,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 1602.699398260098,
+        "rollout_replay_logp_absdiff_max": 1.8055550754070282e-05
+      }
+    ]
+  },
+  {
+    "case": "cp4_ep16_ac0_w16_cross_stepwise",
+    "cp": 4,
+    "ep": 16,
+    "tp": 1,
+    "activation_checkpointing": false,
+    "groups": 4,
+    "group_size": 4,
+    "videos_per_rollout": 16,
+    "num_rollouts": 2,
+    "world": 16,
+    "members": [
+      1,
+      3
+    ],
+    "returncode": 1,
+    "wall_s": 840.5850079059601,
+    "recipe_sampling": {
+      "steps": 30,
+      "sde_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "eta": 0.5,
+      "shift": 3.0
+    },
+    "generate_s": [
+      382.235
+    ],
+    "train_s": [],
+    "peak_gpu_mib": 97283,
+    "active_gpu_util_median": 99.0,
+    "errors": [
+      "OutOfMemoryError: CUDA out of memory. Tried to allocate 414.00 MiB. GPU 0 has a total capacity of 95.00 GiB of which 367.94 MiB is free. Process 3260712 has 94.63 GiB memory in use. Of the allocated memory 87.30 GiB is allocated by PyTorch, and 1.62 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)",
+      "OutOfMemoryError: CUDA out of memory. Tried to allocate 414.00 MiB. GPU 0 has a total capacity of 95.00 GiB of which 367.94 MiB is free. Process 3260712 has 94.63 GiB memory in use. Of the allocated memory 87.30 GiB is allocated by PyTorch, and 1.62 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    ],
+    "validated_two_updates": false,
+    "iterations": []
+  },
+  {
+    "case": "cp4_ep1_ac1_production121",
+    "cp": 4,
+    "ep": 1,
+    "tp": 1,
+    "activation_checkpointing": true,
+    "groups": 2,
+    "group_size": 4,
+    "num_rollouts": 2,
+    "videos_per_rollout": 8,
+    "returncode": 0,
+    "wall_s": 3233.329608440399,
+    "recipe_sampling": {
+      "steps": 30,
+      "sde_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "eta": 0.5,
+      "shift": 3.0,
+      "frames": 121,
+      "height": 464,
+      "width": 848
+    },
+    "node": 1,
+    "generate_s": [
+      940.211,
+      908.655
+    ],
+    "train_s": [
+      533.3,
+      525.7
+    ],
+    "peak_gpu_mib": 51831,
+    "active_gpu_util_median": 100.0,
+    "errors": [],
+    "steady_videos_per_s": 0.005550004597468006,
+    "steady_videos_per_s_per_node": 0.005550004597468006,
+    "validated_two_updates": true,
+    "iterations": [
+      {
+        "rollout": 0,
+        "loss": 4.344992339602727e-06,
+        "grad_norm": 7.343292236328125e-05,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 1485.5004052990116,
+        "rollout_replay_logp_absdiff_max": 1.9490718841552734e-05
+      },
+      {
+        "rollout": 1,
+        "loss": -6.77183270450521e-06,
+        "grad_norm": 0.00018405914306640625,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 1441.4402473918162,
+        "rollout_replay_logp_absdiff_max": 1.5348196029663086e-05
+      }
+    ]
+  },
+  {
+    "case": "cp1_ep8_ac0",
+    "cp": 1,
+    "ep": 8,
+    "tp": 1,
+    "activation_checkpointing": false,
+    "groups": 8,
+    "group_size": 2,
+    "num_rollouts": 2,
+    "videos_per_rollout": 16,
+    "returncode": 1,
+    "wall_s": 560.5078730583191,
+    "node": 0,
+    "generate_s": [
+      213.201
+    ],
+    "train_s": [],
+    "peak_gpu_mib": 97127,
+    "active_gpu_util_median": 100.0,
+    "errors": [
+      "OutOfMemoryError: CUDA out of memory. Tried to allocate 2.34 GiB. GPU 0 has a total capacity of 95.00 GiB of which 2.10 GiB is free. Process 761680 has 92.89 GiB memory in use. Of the allocated memory 87.64 GiB is allocated by PyTorch, and 1.19 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    ],
+    "validated_two_updates": false,
+    "iterations": []
+  },
+  {
+    "case": "cp2_ep4_ac1",
+    "cp": 2,
+    "ep": 4,
+    "tp": 1,
+    "activation_checkpointing": true,
+    "groups": 4,
+    "group_size": 2,
+    "num_rollouts": 2,
+    "videos_per_rollout": 8,
+    "returncode": 0,
+    "wall_s": 1281.006157875061,
+    "recipe_sampling": {
+      "steps": 30,
+      "sde_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "eta": 0.5,
+      "shift": 3.0
+    },
+    "node": 0,
+    "generate_s": [
+      323.457,
+      281.773
+    ],
+    "train_s": [
+      182.8,
+      169.8
+    ],
+    "peak_gpu_mib": 94883,
+    "active_gpu_util_median": 99.0,
+    "errors": [],
+    "steady_videos_per_s": 0.01766093245633184,
+    "steady_videos_per_s_per_node": 0.01766093245633184,
+    "validated_two_updates": true,
+    "iterations": [
+      {
+        "rollout": 0,
+        "loss": -5.364418029785156e-07,
+        "grad_norm": 0.00010156631469726562,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 508.33568596979603,
+        "rollout_replay_logp_absdiff_max": 1.4767050743103027e-05
+      },
+      {
+        "rollout": 1,
+        "loss": 1.087784767150879e-06,
+        "grad_norm": 0.0001430511474609375,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 452.97721509216353,
+        "rollout_replay_logp_absdiff_max": 1.7486512660980225e-05
+      }
+    ]
+  },
+  {
+    "case": "cp4_ep1_ac1_prod",
+    "cp": 4,
+    "ep": 1,
+    "tp": 1,
+    "activation_checkpointing": true,
+    "groups": 2,
+    "group_size": 4,
+    "num_rollouts": 2,
+    "videos_per_rollout": 8,
+    "returncode": 0,
+    "wall_s": 1382.0532758235931,
+    "recipe_sampling": {
+      "steps": 30,
+      "sde_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "eta": 0.5,
+      "shift": 3.0
+    },
+    "node": 0,
+    "generate_s": [
+      365.444,
+      320.271
+    ],
+    "train_s": [
+      189.3,
+      175.5
+    ],
+    "peak_gpu_mib": 54669,
+    "active_gpu_util_median": 100.0,
+    "errors": [],
+    "steady_videos_per_s": 0.016051329597391556,
+    "steady_videos_per_s_per_node": 0.016051329597391556,
+    "validated_two_updates": true,
+    "iterations": [
+      {
+        "rollout": 0,
+        "loss": 2.3990869522094727e-06,
+        "grad_norm": 0.00021457672119140625,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 559.552460656967,
+        "rollout_replay_logp_absdiff_max": 1.5409663319587708e-05
+      },
+      {
+        "rollout": 1,
+        "loss": -5.213543772697449e-06,
+        "grad_norm": 0.00041961669921875,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 498.4010795778595,
+        "rollout_replay_logp_absdiff_max": 1.765042543411255e-05
+      }
+    ]
+  },
+  {
+    "case": "cp8_ep1_ac0_production121",
+    "cp": 8,
+    "ep": 1,
+    "tp": 1,
+    "activation_checkpointing": false,
+    "groups": 1,
+    "group_size": 8,
+    "num_rollouts": 2,
+    "videos_per_rollout": 8,
+    "returncode": 1,
+    "wall_s": 1550.929382801056,
+    "recipe_sampling": {
+      "steps": 30,
+      "sde_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "eta": 0.5,
+      "shift": 3.0,
+      "frames": 121,
+      "height": 464,
+      "width": 848
+    },
+    "node": 0,
+    "generate_s": [
+      1084.552
+    ],
+    "train_s": [],
+    "peak_gpu_mib": 97281,
+    "active_gpu_util_median": 100.0,
+    "errors": [
+      "OutOfMemoryError: CUDA out of memory. Tried to allocate 48.00 MiB. GPU 0 has a total capacity of 95.00 GiB of which 3.94 MiB is free. Process 111246 has 94.99 GiB memory in use. Of the allocated memory 87.96 GiB is allocated by PyTorch, and 746.56 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)",
+      "OutOfMemoryError: CUDA out of memory. Tried to allocate 48.00 MiB. GPU 0 has a total capacity of 95.00 GiB of which 3.94 MiB is free. Process 111246 has 94.99 GiB memory in use. Of the allocated memory 87.96 GiB is allocated by PyTorch, and 746.56 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    ],
+    "validated_two_updates": false,
+    "iterations": []
+  },
+  {
+    "case": "cp8_ep16_ac0_w16_cross",
+    "cp": 8,
+    "ep": 16,
+    "tp": 1,
+    "activation_checkpointing": false,
+    "groups": 2,
+    "group_size": 8,
+    "videos_per_rollout": 16,
+    "num_rollouts": 2,
+    "world": 16,
+    "members": [
+      0,
+      1
+    ],
+    "returncode": 1,
+    "wall_s": 997.4752271175385,
+    "recipe_sampling": {
+      "steps": 30,
+      "sde_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "eta": 0.5,
+      "shift": 3.0
+    },
+    "generate_s": [
+      507.083
+    ],
+    "train_s": [],
+    "peak_gpu_mib": 97281,
+    "active_gpu_util_median": 99.0,
+    "errors": [
+      "OutOfMemoryError: CUDA out of memory. Tried to allocate 188.00 MiB. GPU 0 has a total capacity of 95.00 GiB of which 83.94 MiB is free. Process 3607484 has 94.91 GiB memory in use. Of the allocated memory 86.33 GiB is allocated by PyTorch, and 1.38 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)",
+      "OutOfMemoryError: CUDA out of memory. Tried to allocate 188.00 MiB. GPU 0 has a total capacity of 95.00 GiB of which 83.94 MiB is free. Process 3607484 has 94.91 GiB memory in use. Of the allocated memory 86.33 GiB is allocated by PyTorch, and 1.38 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    ],
+    "validated_two_updates": false,
+    "iterations": []
+  },
+  {
+    "case": "cp2_ep1_ac0_stepwise",
+    "cp": 2,
+    "ep": 1,
+    "tp": 1,
+    "activation_checkpointing": false,
+    "groups": 4,
+    "group_size": 2,
+    "num_rollouts": 2,
+    "videos_per_rollout": 8,
+    "returncode": 1,
+    "wall_s": 765.1712164878845,
+    "recipe_sampling": {
+      "steps": 30,
+      "sde_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "eta": 0.5,
+      "shift": 3.0
+    },
+    "node": 0,
+    "generate_s": [
+      306.969
+    ],
+    "train_s": [],
+    "peak_gpu_mib": 97267,
+    "active_gpu_util_median": 100.0,
+    "errors": [
+      "OutOfMemoryError: CUDA out of memory. Tried to allocate 768.00 MiB. GPU 0 has a total capacity of 95.00 GiB of which 645.94 MiB is free. Process 2070128 has 94.37 GiB memory in use. Of the allocated memory 89.62 GiB is allocated by PyTorch, and 707.15 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)",
+      "OutOfMemoryError: CUDA out of memory. Tried to allocate 768.00 MiB. GPU 0 has a total capacity of 95.00 GiB of which 645.94 MiB is free. Process 2070128 has 94.37 GiB memory in use. Of the allocated memory 89.62 GiB is allocated by PyTorch, and 707.15 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    ],
+    "validated_two_updates": false,
+    "iterations": []
+  },
+  {
+    "case": "cp2_ep2_ac1_stepwise",
+    "cp": 2,
+    "ep": 2,
+    "tp": 1,
+    "activation_checkpointing": true,
+    "groups": 4,
+    "group_size": 2,
+    "num_rollouts": 2,
+    "videos_per_rollout": 8,
+    "returncode": 0,
+    "wall_s": 1473.0887339115143,
+    "recipe_sampling": {
+      "steps": 30,
+      "sde_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "eta": 0.5,
+      "shift": 3.0
+    },
+    "node": 0,
+    "generate_s": [
+      324.741,
+      281.596
+    ],
+    "train_s": [
+      278.9,
+      266.7
+    ],
+    "peak_gpu_mib": 97279,
+    "active_gpu_util_median": 99.0,
+    "errors": [],
+    "steady_videos_per_s": 0.014549989978285764,
+    "steady_videos_per_s_per_node": 0.014549989978285764,
+    "validated_two_updates": true,
+    "iterations": [
+      {
+        "rollout": 0,
+        "loss": 8.642673492431641e-07,
+        "grad_norm": 0.000125885009765625,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 605.7402002681047,
+        "rollout_replay_logp_absdiff_max": 1.6417354345321655e-05
+      },
+      {
+        "rollout": 1,
+        "loss": 6.824731826615693e-07,
+        "grad_norm": 0.0001316070556640625,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 549.8285574037582,
+        "rollout_replay_logp_absdiff_max": 1.4994293451309204e-05
+      }
+    ]
+  },
+  {
+    "case": "cp2_ep1_ac1_production121",
+    "cp": 2,
+    "ep": 1,
+    "tp": 1,
+    "activation_checkpointing": true,
+    "groups": 4,
+    "group_size": 2,
+    "num_rollouts": 2,
+    "videos_per_rollout": 8,
+    "returncode": 0,
+    "wall_s": 3102.5295107364655,
+    "recipe_sampling": {
+      "steps": 30,
+      "sde_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "eta": 0.5,
+      "shift": 3.0,
+      "frames": 121,
+      "height": 464,
+      "width": 848
+    },
+    "node": 0,
+    "generate_s": [
+      882.255,
+      844.31
+    ],
+    "train_s": [
+      530.9,
+      518.1
+    ],
+    "peak_gpu_mib": 63975,
+    "active_gpu_util_median": 100.0,
+    "errors": [],
+    "steady_videos_per_s": 0.0058581496905581,
+    "steady_videos_per_s_per_node": 0.0058581496905581,
+    "validated_two_updates": true,
+    "iterations": [
+      {
+        "rollout": 0,
+        "loss": 2.308189868932553e-06,
+        "grad_norm": 0.0001373291015625,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 1418.7307958109304,
+        "rollout_replay_logp_absdiff_max": 1.8171966075897217e-05
+      },
+      {
+        "rollout": 1,
+        "loss": -1.811683177950496e-05,
+        "grad_norm": 7.200241088867188e-05,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 1365.6189108472317,
+        "rollout_replay_logp_absdiff_max": 1.9844621419906616e-05
+      }
+    ]
+  },
+  {
+    "case": "cp16_ep8_ac0_w16_cross_production121",
+    "cp": 16,
+    "ep": 8,
+    "tp": 1,
+    "activation_checkpointing": false,
+    "groups": 1,
+    "group_size": 16,
+    "videos_per_rollout": 16,
+    "num_rollouts": 2,
+    "world": 16,
+    "members": [
+      0,
+      1
+    ],
+    "forced_initial_lora_sync": false,
+    "layout": "colocated",
+    "rollout_cp": 16,
+    "rollout_ep": 8,
+    "train_world": 16,
+    "rollout_world": 16,
+    "returncode": 0,
+    "wall_s": 3884.038647413254,
+    "recipe_sampling": {
+      "steps": 30,
+      "sde_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "eta": 0.5,
+      "shift": 3.0,
+      "frames": 121,
+      "height": 464,
+      "width": 848
+    },
+    "generate_s": [
+      1295.806,
+      1268.13
+    ],
+    "train_s": [
+      465.6,
+      459.5
+    ],
+    "peak_gpu_mib": 90075,
+    "active_gpu_util_median": 99.0,
+    "errors": [],
+    "steady_videos_per_s": 0.009067555978622967,
+    "steady_videos_per_s_per_node": 0.0045337779893114835,
+    "validated_two_updates": true,
+    "iterations": [
+      {
+        "rollout": 0,
+        "loss": -4.542525857645363e-06,
+        "grad_norm": 7.677078247070312e-05,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 1803.2214539991692,
+        "rollout_replay_logp_absdiff_max": 1.714145764708519e-05
+      },
+      {
+        "rollout": 1,
+        "loss": 3.2826326787308707e-06,
+        "grad_norm": 7.200241088867188e-05,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 1764.5328066041693,
+        "rollout_replay_logp_absdiff_max": 1.6944948583841324e-05
+      }
+    ]
+  },
+  {
+    "case": "cp2_ep8_ac0",
+    "cp": 2,
+    "ep": 8,
+    "tp": 1,
+    "activation_checkpointing": false,
+    "groups": 4,
+    "group_size": 2,
+    "num_rollouts": 2,
+    "videos_per_rollout": 8,
+    "returncode": 1,
+    "wall_s": 566.7242629528046,
+    "node": 2,
+    "generate_s": [
+      130.265
+    ],
+    "train_s": [],
+    "peak_gpu_mib": 97247,
+    "active_gpu_util_median": 94.5,
+    "errors": [
+      "OutOfMemoryError: CUDA out of memory. Tried to allocate 236.00 MiB. GPU 0 has a total capacity of 95.00 GiB of which 67.94 MiB is free. Process 2491790 has 94.92 GiB memory in use. Of the allocated memory 88.85 GiB is allocated by PyTorch, and 1.94 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)",
+      "OutOfMemoryError: CUDA out of memory. Tried to allocate 236.00 MiB. GPU 0 has a total capacity of 95.00 GiB of which 67.94 MiB is free. Process 2491790 has 94.92 GiB memory in use. Of the allocated memory 88.85 GiB is allocated by PyTorch, and 1.94 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    ],
+    "validated_two_updates": false,
+    "iterations": []
+  },
+  {
+    "case": "cp2_ep2_ac1_prod",
+    "cp": 2,
+    "ep": 2,
+    "tp": 1,
+    "activation_checkpointing": true,
+    "groups": 4,
+    "group_size": 2,
+    "num_rollouts": 2,
+    "videos_per_rollout": 8,
+    "returncode": 1,
+    "wall_s": 771.0388369560242,
+    "recipe_sampling": {
+      "steps": 30,
+      "sde_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "eta": 0.5,
+      "shift": 3.0
+    },
+    "node": 2,
+    "generate_s": [
+      304.838
+    ],
+    "train_s": [],
+    "peak_gpu_mib": 97281,
+    "active_gpu_util_median": 99.0,
+    "errors": [
+      "OutOfMemoryError: CUDA out of memory. Tried to allocate 654.00 MiB. GPU 0 has a total capacity of 95.00 GiB of which 503.94 MiB is free. Process 2667866 has 94.50 GiB memory in use. Of the allocated memory 88.62 GiB is allocated by PyTorch, and 1.24 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)",
+      "OutOfMemoryError: CUDA out of memory. Tried to allocate 654.00 MiB. GPU 0 has a total capacity of 95.00 GiB of which 503.94 MiB is free. Process 2667866 has 94.50 GiB memory in use. Of the allocated memory 88.62 GiB is allocated by PyTorch, and 1.24 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    ],
+    "validated_two_updates": false,
+    "iterations": []
+  },
+  {
+    "case": "cp8_ep2_ac1_prod",
+    "cp": 8,
+    "ep": 2,
+    "tp": 1,
+    "activation_checkpointing": true,
+    "groups": 1,
+    "group_size": 8,
+    "num_rollouts": 2,
+    "videos_per_rollout": 8,
+    "returncode": 0,
+    "wall_s": 1462.9794282913208,
+    "recipe_sampling": {
+      "steps": 30,
+      "sde_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "eta": 0.5,
+      "shift": 3.0
+    },
+    "node": 2,
+    "generate_s": [
+      402.44,
+      368.775
+    ],
+    "train_s": [
+      192.9,
+      185.9
+    ],
+    "peak_gpu_mib": 94923,
+    "active_gpu_util_median": 98.0,
+    "errors": [],
+    "steady_videos_per_s": 0.014298357498185752,
+    "steady_videos_per_s_per_node": 0.014298357498185752,
+    "validated_two_updates": true,
+    "iterations": [
+      {
+        "rollout": 0,
+        "loss": 7.268041372299194e-06,
+        "grad_norm": 6.723403930664062e-05,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 604.197576454957,
+        "rollout_replay_logp_absdiff_max": 1.6794539988040924e-05
+      },
+      {
+        "rollout": 1,
+        "loss": 5.694106221199036e-06,
+        "grad_norm": 9.5367431640625e-05,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 559.5048243139172,
+        "rollout_replay_logp_absdiff_max": 2.3482367396354675e-05
+      }
+    ]
+  },
+  {
+    "case": "cp8_ep16_ac1_w16_cross",
+    "cp": 8,
+    "ep": 16,
+    "tp": 1,
+    "activation_checkpointing": true,
+    "groups": 2,
+    "group_size": 8,
+    "videos_per_rollout": 16,
+    "num_rollouts": 2,
+    "world": 16,
+    "members": [
+      2,
+      3
+    ],
+    "returncode": -6,
+    "wall_s": 1071.8712055683136,
+    "recipe_sampling": {
+      "steps": 30,
+      "sde_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "eta": 0.5,
+      "shift": 3.0
+    },
+    "generate_s": [
+      447.609
+    ],
+    "train_s": [
+      214.2
+    ],
+    "peak_gpu_mib": 47589,
+    "active_gpu_util_median": 98.0,
+    "errors": [],
+    "validated_two_updates": false,
+    "iterations": [
+      {
+        "rollout": 0,
+        "loss": 6.451737135648727e-07,
+        "grad_norm": 9.202957153320312e-05,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 671.109558721073,
+        "rollout_replay_logp_absdiff_max": 1.5455298125743866e-05
+      }
+    ]
+  },
+  {
+    "case": "cp2_ep8_ac0_stepwise",
+    "cp": 2,
+    "ep": 8,
+    "tp": 1,
+    "activation_checkpointing": false,
+    "groups": 4,
+    "group_size": 2,
+    "num_rollouts": 2,
+    "videos_per_rollout": 8,
+    "returncode": 1,
+    "wall_s": 732.9466824531555,
+    "recipe_sampling": {
+      "steps": 30,
+      "sde_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "eta": 0.5,
+      "shift": 3.0
+    },
+    "node": 2,
+    "generate_s": [
+      310.139
+    ],
+    "train_s": [],
+    "peak_gpu_mib": 97217,
+    "active_gpu_util_median": 99.0,
+    "errors": [
+      "OutOfMemoryError: CUDA out of memory. Tried to allocate 632.00 MiB. GPU 0 has a total capacity of 95.00 GiB of which 247.94 MiB is free. Process 3663648 has 94.75 GiB memory in use. Of the allocated memory 88.88 GiB is allocated by PyTorch, and 1.73 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)",
+      "OutOfMemoryError: CUDA out of memory. Tried to allocate 632.00 MiB. GPU 0 has a total capacity of 95.00 GiB of which 247.94 MiB is free. Process 3663648 has 94.75 GiB memory in use. Of the allocated memory 88.88 GiB is allocated by PyTorch, and 1.73 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    ],
+    "validated_two_updates": false,
+    "iterations": []
+  },
+  {
+    "case": "cp2_ep4_ac1_stepwise",
+    "cp": 2,
+    "ep": 4,
+    "tp": 1,
+    "activation_checkpointing": true,
+    "groups": 4,
+    "group_size": 2,
+    "num_rollouts": 2,
+    "videos_per_rollout": 8,
+    "returncode": 0,
+    "wall_s": 1200.1772401332855,
+    "recipe_sampling": {
+      "steps": 30,
+      "sde_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "eta": 0.5,
+      "shift": 3.0
+    },
+    "node": 2,
+    "generate_s": [
+      301.912,
+      279.897
+    ],
+    "train_s": [
+      163.8,
+      155.8
+    ],
+    "peak_gpu_mib": 79449,
+    "active_gpu_util_median": 99.0,
+    "errors": [],
+    "steady_videos_per_s": 0.01830098372993601,
+    "steady_videos_per_s_per_node": 0.01830098372993601,
+    "validated_two_updates": true,
+    "iterations": [
+      {
+        "rollout": 0,
+        "loss": -5.260109901539245e-07,
+        "grad_norm": 0.00010156631469726562,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 467.3967256920878,
+        "rollout_replay_logp_absdiff_max": 1.4767050743103027e-05
+      },
+      {
+        "rollout": 1,
+        "loss": -3.239512443534154e-06,
+        "grad_norm": 9.34600830078125e-05,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 437.13497143401764,
+        "rollout_replay_logp_absdiff_max": 1.5866011381149292e-05
+      }
+    ]
+  },
+  {
+    "case": "cp2_ep8_ac1_production121",
+    "cp": 2,
+    "ep": 8,
+    "tp": 1,
+    "activation_checkpointing": true,
+    "groups": 4,
+    "group_size": 2,
+    "num_rollouts": 2,
+    "videos_per_rollout": 8,
+    "returncode": 0,
+    "wall_s": 3303.0771293640137,
+    "recipe_sampling": {
+      "steps": 30,
+      "sde_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "eta": 0.5,
+      "shift": 3.0,
+      "frames": 121,
+      "height": 464,
+      "width": 848
+    },
+    "node": 2,
+    "generate_s": [
+      914.576,
+      888.56
+    ],
+    "train_s": [
+      602.5,
+      586.8
+    ],
+    "peak_gpu_mib": 97279,
+    "active_gpu_util_median": 100.0,
+    "errors": [],
+    "steady_videos_per_s": 0.005410679072458536,
+    "steady_videos_per_s_per_node": 0.005410679072458536,
+    "validated_two_updates": true,
+    "iterations": [
+      {
+        "rollout": 0,
+        "loss": 9.700655937139313e-07,
+        "grad_norm": 0.00018596649169921875,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 1522.910341428942,
+        "rollout_replay_logp_absdiff_max": 1.6517937183380127e-05
+      },
+      {
+        "rollout": 1,
+        "loss": -3.3780932426341614e-06,
+        "grad_norm": 0.000102996826171875,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 1478.5574773269473,
+        "rollout_replay_logp_absdiff_max": 1.730397343635559e-05
+      }
+    ]
+  },
+  {
+    "case": "cp16_ep16_ac0_w16_cross_production121",
+    "cp": 16,
+    "ep": 16,
+    "tp": 1,
+    "activation_checkpointing": false,
+    "groups": 1,
+    "group_size": 16,
+    "videos_per_rollout": 16,
+    "num_rollouts": 2,
+    "world": 16,
+    "members": [
+      2,
+      3
+    ],
+    "layout": "colocated",
+    "rollout_cp": 16,
+    "rollout_ep": 16,
+    "train_world": 16,
+    "rollout_world": 16,
+    "returncode": 0,
+    "wall_s": 4104.393734931946,
+    "recipe_sampling": {
+      "steps": 30,
+      "sde_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "eta": 0.5,
+      "shift": 3.0,
+      "frames": 121,
+      "height": 464,
+      "width": 848
+    },
+    "generate_s": [
+      1385.415,
+      1335.017
+    ],
+    "train_s": [
+      489.1,
+      477.0
+    ],
+    "peak_gpu_mib": 84829,
+    "active_gpu_util_median": 99.0,
+    "errors": [],
+    "steady_videos_per_s": 0.008653936777153332,
+    "steady_videos_per_s_per_node": 0.004326968388576666,
+    "validated_two_updates": true,
+    "iterations": [
+      {
+        "rollout": 0,
+        "loss": 6.985152140280559e-06,
+        "grad_norm": 6.103515625e-05,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 1914.7281438490609,
+        "rollout_replay_logp_absdiff_max": 1.7023645341396332e-05
+      },
+      {
+        "rollout": 1,
+        "loss": -1.4159828424648024e-06,
+        "grad_norm": 7.534027099609375e-05,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 1848.8695274780039,
+        "rollout_replay_logp_absdiff_max": 1.7943326383829117e-05
+      }
+    ]
+  },
+  {
+    "case": "cp2_ep8_ac1",
+    "cp": 2,
+    "ep": 8,
+    "tp": 1,
+    "activation_checkpointing": true,
+    "groups": 4,
+    "group_size": 2,
+    "num_rollouts": 2,
+    "videos_per_rollout": 8,
+    "returncode": 0,
+    "wall_s": 815.7083549499512,
+    "node": 3,
+    "generate_s": [
+      129.343,
+      108.78
+    ],
+    "train_s": [
+      134.5,
+      128.6
+    ],
+    "peak_gpu_mib": 81621,
+    "active_gpu_util_median": 99.0,
+    "errors": [],
+    "steady_videos_per_s": 0.033481598655007695,
+    "steady_videos_per_s_per_node": 0.033481598655007695,
+    "validated_two_updates": true,
+    "iterations": [
+      {
+        "rollout": 0,
+        "loss": 5.019828677177429e-07,
+        "grad_norm": 0.0005035400390625,
+        "lr": 0.0001,
+        "has_backward": true,
+        "step_time_s": 266.0044957064092,
+        "rollout_replay_logp_absdiff_max": 1.049041748046875e-05
+      },
+      {
+        "rollout": 1,
+        "loss": -4.252651706337929e-07,
+        "grad_norm": 6.4849853515625e-05,
+        "lr": 0.0001,
+        "has_backward": true,
+        "step_time_s": 238.93721690028906,
+        "rollout_replay_logp_absdiff_max": 3.129243850708008e-06
+      }
+    ]
+  },
+  {
+    "case": "cp2_ep8_ac1_prod",
+    "cp": 2,
+    "ep": 8,
+    "tp": 1,
+    "activation_checkpointing": true,
+    "groups": 4,
+    "group_size": 2,
+    "num_rollouts": 2,
+    "videos_per_rollout": 8,
+    "returncode": 0,
+    "wall_s": 1229.398285150528,
+    "recipe_sampling": {
+      "steps": 30,
+      "sde_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "eta": 0.5,
+      "shift": 3.0
+    },
+    "node": 3,
+    "generate_s": [
+      308.515,
+      289.951
+    ],
+    "train_s": [
+      163.2,
+      158.6
+    ],
+    "peak_gpu_mib": 82005,
+    "active_gpu_util_median": 99.0,
+    "errors": [],
+    "steady_videos_per_s": 0.017774474847521704,
+    "steady_videos_per_s_per_node": 0.017774474847521704,
+    "validated_two_updates": true,
+    "iterations": [
+      {
+        "rollout": 0,
+        "loss": 3.2708048820495605e-06,
+        "grad_norm": 0.0002269744873046875,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 474.0962802916765,
+        "rollout_replay_logp_absdiff_max": 1.4610588550567627e-05
+      },
+      {
+        "rollout": 1,
+        "loss": 2.7045607566833496e-06,
+        "grad_norm": 0.00010156631469726562,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 450.0836209580302,
+        "rollout_replay_logp_absdiff_max": 1.9319355487823486e-05
+      }
+    ]
+  },
+  {
+    "case": "cp2_ep8_ac1_stepwise",
+    "cp": 2,
+    "ep": 8,
+    "tp": 1,
+    "activation_checkpointing": true,
+    "groups": 4,
+    "group_size": 2,
+    "num_rollouts": 2,
+    "videos_per_rollout": 8,
+    "returncode": 0,
+    "wall_s": 1227.0350110530853,
+    "recipe_sampling": {
+      "steps": 30,
+      "sde_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "eta": 0.5,
+      "shift": 3.0
+    },
+    "node": 3,
+    "generate_s": [
+      307.34,
+      287.911
+    ],
+    "train_s": [
+      161.8,
+      158.6
+    ],
+    "peak_gpu_mib": 66095,
+    "active_gpu_util_median": 99.0,
+    "errors": [],
+    "steady_videos_per_s": 0.01785616486505188,
+    "steady_videos_per_s_per_node": 0.01785616486505188,
+    "validated_two_updates": true,
+    "iterations": [
+      {
+        "rollout": 0,
+        "loss": 3.3020973205372117e-06,
+        "grad_norm": 0.00023174285888671875,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 471.12080678343773,
+        "rollout_replay_logp_absdiff_max": 1.4610588550567627e-05
+      },
+      {
+        "rollout": 1,
+        "loss": -1.8477439880232316e-06,
+        "grad_norm": 0.00012874603271484375,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 448.0245372094214,
+        "rollout_replay_logp_absdiff_max": 1.864507794380188e-05
+      }
+    ]
+  },
+  {
+    "case": "cp4_ep8_ac1_production121",
+    "cp": 4,
+    "ep": 8,
+    "tp": 1,
+    "activation_checkpointing": true,
+    "groups": 2,
+    "group_size": 4,
+    "num_rollouts": 2,
+    "videos_per_rollout": 8,
+    "returncode": 0,
+    "wall_s": 3318.4408462047577,
+    "recipe_sampling": {
+      "steps": 30,
+      "sde_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "eta": 0.5,
+      "shift": 3.0,
+      "frames": 121,
+      "height": 464,
+      "width": 848
+    },
+    "node": 3,
+    "generate_s": [
+      973.816,
+      935.066
+    ],
+    "train_s": [
+      545.5,
+      535.8
+    ],
+    "peak_gpu_mib": 74711,
+    "active_gpu_util_median": 100.0,
+    "errors": [],
+    "steady_videos_per_s": 0.005413215144025486,
+    "steady_videos_per_s_per_node": 0.005413215144025486,
+    "validated_two_updates": true,
+    "iterations": [
+      {
+        "rollout": 0,
+        "loss": 1.0315701365476437e-05,
+        "grad_norm": 0.00012063980102539062,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 1532.026784233749,
+        "rollout_replay_logp_absdiff_max": 1.7156824469566345e-05
+      },
+      {
+        "rollout": 1,
+        "loss": -5.056336522119009e-06,
+        "grad_norm": 0.000141143798828125,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 1477.8647785373032,
+        "rollout_replay_logp_absdiff_max": 1.4871358871459961e-05
+      }
+    ]
+  },
+  {
+    "case": "cp4_ep8_ac0",
+    "cp": 4,
+    "ep": 8,
+    "tp": 1,
+    "activation_checkpointing": false,
+    "groups": 2,
+    "group_size": 4,
+    "num_rollouts": 2,
+    "videos_per_rollout": 8,
+    "returncode": 1,
+    "wall_s": 694.844927072525,
+    "node": 4,
+    "generate_s": [
+      159.84
+    ],
+    "train_s": [],
+    "peak_gpu_mib": 97283,
+    "active_gpu_util_median": 99.0,
+    "errors": [
+      "OutOfMemoryError: CUDA out of memory. Tried to allocate 202.00 MiB. GPU 0 has a total capacity of 95.00 GiB of which 65.94 MiB is free. Process 3809770 has 94.93 GiB memory in use. Of the allocated memory 88.53 GiB is allocated by PyTorch, and 1.51 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)",
+      "OutOfMemoryError: CUDA out of memory. Tried to allocate 202.00 MiB. GPU 0 has a total capacity of 95.00 GiB of which 65.94 MiB is free. Process 3809770 has 94.93 GiB memory in use. Of the allocated memory 88.53 GiB is allocated by PyTorch, and 1.51 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    ],
+    "validated_two_updates": false,
+    "iterations": []
+  },
+  {
+    "case": "cp4_ep4_ac1_prod",
+    "cp": 4,
+    "ep": 4,
+    "tp": 1,
+    "activation_checkpointing": true,
+    "groups": 2,
+    "group_size": 4,
+    "num_rollouts": 2,
+    "videos_per_rollout": 8,
+    "returncode": 0,
+    "wall_s": 1312.2597119808197,
+    "recipe_sampling": {
+      "steps": 30,
+      "sde_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "eta": 0.5,
+      "shift": 3.0
+    },
+    "node": 4,
+    "generate_s": [
+      346.339,
+      309.404
+    ],
+    "train_s": [
+      174.2,
+      165.1
+    ],
+    "peak_gpu_mib": 73435,
+    "active_gpu_util_median": 99.0,
+    "errors": [],
+    "steady_videos_per_s": 0.016765301990929467,
+    "steady_videos_per_s_per_node": 0.016765301990929467,
+    "validated_two_updates": true,
+    "iterations": [
+      {
+        "rollout": 0,
+        "loss": 2.1979212760925293e-06,
+        "grad_norm": 9.34600830078125e-05,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 525.0324915852398,
+        "rollout_replay_logp_absdiff_max": 1.4333054423332214e-05
+      },
+      {
+        "rollout": 1,
+        "loss": -8.903443813323975e-07,
+        "grad_norm": 0.00038909912109375,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 477.1760153397918,
+        "rollout_replay_logp_absdiff_max": 1.8579885363578796e-05
+      }
+    ]
+  },
+  {
+    "case": "cp4_ep16_ac0_w16_cross",
+    "cp": 4,
+    "ep": 16,
+    "tp": 1,
+    "activation_checkpointing": false,
+    "groups": 4,
+    "group_size": 4,
+    "videos_per_rollout": 16,
+    "num_rollouts": 2,
+    "world": 16,
+    "members": [
+      4,
+      5
+    ],
+    "returncode": 1,
+    "wall_s": 849.0388090610504,
+    "recipe_sampling": {
+      "steps": 30,
+      "sde_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "eta": 0.5,
+      "shift": 3.0
+    },
+    "generate_s": [
+      389.198
+    ],
+    "train_s": [],
+    "peak_gpu_mib": 97281,
+    "active_gpu_util_median": 99.0,
+    "errors": [
+      "OutOfMemoryError: CUDA out of memory. Tried to allocate 974.00 MiB. GPU 0 has a total capacity of 95.00 GiB of which 445.94 MiB is free. Process 353619 has 94.55 GiB memory in use. Of the allocated memory 87.15 GiB is allocated by PyTorch, and 1.20 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)",
+      "OutOfMemoryError: CUDA out of memory. Tried to allocate 974.00 MiB. GPU 0 has a total capacity of 95.00 GiB of which 445.94 MiB is free. Process 353619 has 94.55 GiB memory in use. Of the allocated memory 87.15 GiB is allocated by PyTorch, and 1.20 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    ],
+    "validated_two_updates": false,
+    "iterations": []
+  },
+  {
+    "case": "cp4_ep8_ac0_stepwise",
+    "cp": 4,
+    "ep": 8,
+    "tp": 1,
+    "activation_checkpointing": false,
+    "groups": 2,
+    "group_size": 4,
+    "num_rollouts": 2,
+    "videos_per_rollout": 8,
+    "returncode": 1,
+    "wall_s": 788.1787350177765,
+    "recipe_sampling": {
+      "steps": 30,
+      "sde_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "eta": 0.5,
+      "shift": 3.0
+    },
+    "node": 4,
+    "generate_s": [
+      348.303
+    ],
+    "train_s": [],
+    "peak_gpu_mib": 97279,
+    "active_gpu_util_median": 99.0,
+    "errors": [
+      "OutOfMemoryError: CUDA out of memory. Tried to allocate 208.00 MiB. GPU 0 has a total capacity of 95.00 GiB of which 65.94 MiB is free. Process 660944 has 94.93 GiB memory in use. Of the allocated memory 88.79 GiB is allocated by PyTorch, and 1.25 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)",
+      "OutOfMemoryError: CUDA out of memory. Tried to allocate 208.00 MiB. GPU 0 has a total capacity of 95.00 GiB of which 65.94 MiB is free. Process 660944 has 94.93 GiB memory in use. Of the allocated memory 88.79 GiB is allocated by PyTorch, and 1.25 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    ],
+    "validated_two_updates": false,
+    "iterations": []
+  },
+  {
+    "case": "cp4_ep2_ac1_stepwise",
+    "cp": 4,
+    "ep": 2,
+    "tp": 1,
+    "activation_checkpointing": true,
+    "groups": 2,
+    "group_size": 4,
+    "num_rollouts": 2,
+    "videos_per_rollout": 8,
+    "returncode": 0,
+    "wall_s": 1297.7853183746338,
+    "recipe_sampling": {
+      "steps": 30,
+      "sde_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "eta": 0.5,
+      "shift": 3.0
+    },
+    "node": 4,
+    "generate_s": [
+      344.817,
+      304.826
+    ],
+    "train_s": [
+      171.8,
+      161.8
+    ],
+    "peak_gpu_mib": 97097,
+    "active_gpu_util_median": 99.0,
+    "errors": [],
+    "steady_videos_per_s": 0.0170499170225238,
+    "steady_videos_per_s_per_node": 0.0170499170225238,
+    "validated_two_updates": true,
+    "iterations": [
+      {
+        "rollout": 0,
+        "loss": -9.886920452339965e-07,
+        "grad_norm": 0.00018978118896484375,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 520.6563959503546,
+        "rollout_replay_logp_absdiff_max": 1.5227124094963074e-05
+      },
+      {
+        "rollout": 1,
+        "loss": -2.942979335646134e-07,
+        "grad_norm": 0.000194549560546875,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 469.2104946570471,
+        "rollout_replay_logp_absdiff_max": 1.6922131180763245e-05
+      }
+    ]
+  },
+  {
+    "case": "cp8_ep8_ac1_production121",
+    "cp": 8,
+    "ep": 8,
+    "tp": 1,
+    "activation_checkpointing": true,
+    "groups": 1,
+    "group_size": 8,
+    "num_rollouts": 2,
+    "videos_per_rollout": 8,
+    "returncode": 0,
+    "returncode_source": "validated complete log after unchanged driver exited; original supervisor replaced",
+    "gpu_sample_window_start": 1788673456.807981,
+    "wall_s": 3629.544586420059,
+    "recipe_sampling": {
+      "steps": 30,
+      "sde_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "eta": 0.5,
+      "shift": 3.0,
+      "frames": 121,
+      "height": 464,
+      "width": 848
+    },
+    "node": 4,
+    "generate_s": [
+      1096.683,
+      1047.805
+    ],
+    "train_s": [
+      572.9,
+      564.2
+    ],
+    "peak_gpu_mib": 56951,
+    "active_gpu_util_median": 99.0,
+    "errors": [],
+    "steady_videos_per_s": 0.004916334906928449,
+    "steady_videos_per_s_per_node": 0.004916334906928449,
+    "validated_two_updates": true,
+    "iterations": [
+      {
+        "rollout": 0,
+        "loss": 9.66154038883893e-07,
+        "grad_norm": 8.344650268554688e-05,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 1689.7964820852503,
+        "rollout_replay_logp_absdiff_max": 1.485925167798996e-05
+      },
+      {
+        "rollout": 1,
+        "loss": 1.740455627480264e-06,
+        "grad_norm": 0.0002765655517578125,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 1627.2284438405186,
+        "rollout_replay_logp_absdiff_max": 1.5820376574993134e-05
+      }
+    ]
+  },
+  {
+    "case": "cp16_ep16_ac1_w16_cross_production121",
+    "cp": 16,
+    "ep": 16,
+    "tp": 1,
+    "activation_checkpointing": true,
+    "groups": 1,
+    "group_size": 16,
+    "videos_per_rollout": 16,
+    "num_rollouts": 2,
+    "world": 16,
+    "members": [
+      4,
+      5
+    ],
+    "layout": "colocated",
+    "rollout_cp": 16,
+    "rollout_ep": 16,
+    "train_world": 16,
+    "rollout_world": 16,
+    "returncode": 0,
+    "wall_s": 4445.791240692139,
+    "recipe_sampling": {
+      "steps": 30,
+      "sde_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "eta": 0.5,
+      "shift": 3.0,
+      "frames": 121,
+      "height": 464,
+      "width": 848
+    },
+    "generate_s": [
+      1385.86,
+      1331.578
+    ],
+    "train_s": [
+      671.6,
+      653.7
+    ],
+    "peak_gpu_mib": 47981,
+    "active_gpu_util_median": 99.0,
+    "errors": [],
+    "steady_videos_per_s": 0.007910533052009132,
+    "steady_videos_per_s_per_node": 0.003955266526004566,
+    "validated_two_updates": true,
+    "iterations": [
+      {
+        "rollout": 0,
+        "loss": 4.812236875297027e-06,
+        "grad_norm": 8.630752563476562e-05,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 2099.568412495777,
+        "rollout_replay_logp_absdiff_max": 1.6755890101194382e-05
+      },
+      {
+        "rollout": 1,
+        "loss": -1.4895573258455475e-06,
+        "grad_norm": 5.3882598876953125e-05,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 2022.619701454416,
+        "rollout_replay_logp_absdiff_max": 1.854589208960533e-05
+      }
+    ]
+  },
+  {
+    "case": "cp4_ep8_ac1",
+    "cp": 4,
+    "ep": 8,
+    "tp": 1,
+    "activation_checkpointing": true,
+    "groups": 2,
+    "group_size": 4,
+    "num_rollouts": 2,
+    "videos_per_rollout": 8,
+    "returncode": 0,
+    "wall_s": 883.8636870384216,
+    "node": 5,
+    "generate_s": [
+      161.408,
+      131.355
+    ],
+    "train_s": [
+      143.6,
+      136.2
+    ],
+    "peak_gpu_mib": 58473,
+    "active_gpu_util_median": 98.0,
+    "errors": [],
+    "steady_videos_per_s": 0.029612877348760017,
+    "steady_videos_per_s_per_node": 0.029612877348760017,
+    "validated_two_updates": true,
+    "iterations": [
+      {
+        "rollout": 0,
+        "loss": 4.544854164123535e-07,
+        "grad_norm": 0.00110626220703125,
+        "lr": 0.0001,
+        "has_backward": true,
+        "step_time_s": 309.51905892044306,
+        "rollout_replay_logp_absdiff_max": 9.670853614807129e-06
+      },
+      {
+        "rollout": 1,
+        "loss": -9.21543687582016e-07,
+        "grad_norm": 0.000743865966796875,
+        "lr": 0.0001,
+        "has_backward": true,
+        "step_time_s": 270.1527415178716,
+        "rollout_replay_logp_absdiff_max": 1.138448715209961e-05
+      }
+    ]
+  },
+  {
+    "case": "cp4_ep2_ac1_prod",
+    "cp": 4,
+    "ep": 2,
+    "tp": 1,
+    "activation_checkpointing": true,
+    "groups": 2,
+    "group_size": 4,
+    "num_rollouts": 2,
+    "videos_per_rollout": 8,
+    "returncode": 0,
+    "wall_s": 1325.2459528446198,
+    "recipe_sampling": {
+      "steps": 30,
+      "sde_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "eta": 0.5,
+      "shift": 3.0
+    },
+    "node": 5,
+    "generate_s": [
+      339.578,
+      305.259
+    ],
+    "train_s": [
+      186.7,
+      175.4
+    ],
+    "peak_gpu_mib": 97281,
+    "active_gpu_util_median": 99.0,
+    "errors": [],
+    "steady_videos_per_s": 0.016555683662512144,
+    "steady_videos_per_s_per_node": 0.016555683662512144,
+    "validated_two_updates": true,
+    "iterations": [
+      {
+        "rollout": 0,
+        "loss": -3.4570693969726562e-06,
+        "grad_norm": 0.000274658203125,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 530.701494846493,
+        "rollout_replay_logp_absdiff_max": 1.7505139112472534e-05
+      },
+      {
+        "rollout": 1,
+        "loss": -8.577480912208557e-07,
+        "grad_norm": 0.00019741058349609375,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 483.21773736923933,
+        "rollout_replay_logp_absdiff_max": 2.09808349609375e-05
+      }
+    ]
+  },
+  {
+    "case": "cp4_ep8_ac1_stepwise",
+    "cp": 4,
+    "ep": 8,
+    "tp": 1,
+    "activation_checkpointing": true,
+    "groups": 2,
+    "group_size": 4,
+    "num_rollouts": 2,
+    "videos_per_rollout": 8,
+    "returncode": 0,
+    "wall_s": 1310.6472952365875,
+    "recipe_sampling": {
+      "steps": 30,
+      "sde_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "eta": 0.5,
+      "shift": 3.0
+    },
+    "node": 5,
+    "generate_s": [
+      346.973,
+      314.649
+    ],
+    "train_s": [
+      171.6,
+      165.7
+    ],
+    "peak_gpu_mib": 57103,
+    "active_gpu_util_median": 99.0,
+    "errors": [],
+    "steady_videos_per_s": 0.016559949750495736,
+    "steady_videos_per_s_per_node": 0.016559949750495736,
+    "validated_two_updates": true,
+    "iterations": [
+      {
+        "rollout": 0,
+        "loss": -6.403774023139297e-07,
+        "grad_norm": 0.0001373291015625,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 522.4757386371493,
+        "rollout_replay_logp_absdiff_max": 1.5232712030410767e-05
+      },
+      {
+        "rollout": 1,
+        "loss": -1.924484968177098e-06,
+        "grad_norm": 0.000209808349609375,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 483.09325333312154,
+        "rollout_replay_logp_absdiff_max": 1.7901882529258728e-05
+      }
+    ]
+  },
+  {
+    "case": "cp4_ep16_ac1_w16_cross_stepwise",
+    "cp": 4,
+    "ep": 16,
+    "tp": 1,
+    "activation_checkpointing": true,
+    "groups": 4,
+    "group_size": 4,
+    "videos_per_rollout": 16,
+    "num_rollouts": 2,
+    "world": 16,
+    "members": [
+      5,
+      6
+    ],
+    "returncode": 0,
+    "wall_s": 1442.0693681240082,
+    "recipe_sampling": {
+      "steps": 30,
+      "sde_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "eta": 0.5,
+      "shift": 3.0
+    },
+    "generate_s": [
+      381.352,
+      349.84
+    ],
+    "train_s": [
+      189.2,
+      182.2
+    ],
+    "peak_gpu_mib": 49933,
+    "active_gpu_util_median": 99.0,
+    "errors": [],
+    "steady_videos_per_s": 0.029927621687130843,
+    "steady_videos_per_s_per_node": 0.014963810843565422,
+    "validated_two_updates": true,
+    "iterations": [
+      {
+        "rollout": 0,
+        "loss": 4.1685998439060234e-07,
+        "grad_norm": 9.298324584960938e-05,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 574.9507136046886,
+        "rollout_replay_logp_absdiff_max": 1.4692544937133789e-05
+      },
+      {
+        "rollout": 1,
+        "loss": 2.4214386940349386e-07,
+        "grad_norm": 7.82012939453125e-05,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 534.6231707707047,
+        "rollout_replay_logp_absdiff_max": 1.6827136278152466e-05
+      }
+    ]
+  },
+  {
+    "case": "cp8_ep8_ac0_production121",
+    "cp": 8,
+    "ep": 8,
+    "tp": 1,
+    "activation_checkpointing": false,
+    "groups": 1,
+    "group_size": 8,
+    "num_rollouts": 2,
+    "videos_per_rollout": 8,
+    "returncode": 1,
+    "wall_s": 1530.5667531490326,
+    "recipe_sampling": {
+      "steps": 30,
+      "sde_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "eta": 0.5,
+      "shift": 3.0,
+      "frames": 121,
+      "height": 464,
+      "width": 848
+    },
+    "node": 5,
+    "generate_s": [
+      1086.859
+    ],
+    "train_s": [],
+    "peak_gpu_mib": 97281,
+    "active_gpu_util_median": 99.0,
+    "errors": [
+      "OutOfMemoryError: CUDA out of memory. Tried to allocate 520.00 MiB. GPU 0 has a total capacity of 95.00 GiB of which 419.94 MiB is free. Process 825470 has 94.58 GiB memory in use. Of the allocated memory 87.43 GiB is allocated by PyTorch, and 1.27 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)",
+      "OutOfMemoryError: CUDA out of memory. Tried to allocate 520.00 MiB. GPU 0 has a total capacity of 95.00 GiB of which 419.94 MiB is free. Process 825470 has 94.58 GiB memory in use. Of the allocated memory 87.43 GiB is allocated by PyTorch, and 1.27 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    ],
+    "validated_two_updates": false,
+    "iterations": []
+  },
+  {
+    "case": "cp8_ep8_ac0",
+    "cp": 8,
+    "ep": 8,
+    "tp": 1,
+    "activation_checkpointing": false,
+    "groups": 1,
+    "group_size": 8,
+    "num_rollouts": 2,
+    "videos_per_rollout": 8,
+    "returncode": 1,
+    "wall_s": 746.7083604335785,
+    "node": 6,
+    "generate_s": [
+      205.546
+    ],
+    "train_s": [],
+    "peak_gpu_mib": 97275,
+    "active_gpu_util_median": 99.0,
+    "errors": [
+      "OutOfMemoryError: CUDA out of memory. Tried to allocate 48.00 MiB. GPU 0 has a total capacity of 95.00 GiB of which 9.94 MiB is free. Process 2862320 has 94.98 GiB memory in use. Of the allocated memory 86.67 GiB is allocated by PyTorch, and 1.15 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)",
+      "OutOfMemoryError: CUDA out of memory. Tried to allocate 48.00 MiB. GPU 0 has a total capacity of 95.00 GiB of which 9.94 MiB is free. Process 2862320 has 94.98 GiB memory in use. Of the allocated memory 86.67 GiB is allocated by PyTorch, and 1.15 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    ],
+    "validated_two_updates": false,
+    "iterations": []
+  },
+  {
+    "case": "cp8_ep8_ac1_prod",
+    "cp": 8,
+    "ep": 8,
+    "tp": 1,
+    "activation_checkpointing": true,
+    "groups": 1,
+    "group_size": 8,
+    "num_rollouts": 2,
+    "videos_per_rollout": 8,
+    "returncode": 0,
+    "wall_s": 1520.6564104557037,
+    "recipe_sampling": {
+      "steps": 30,
+      "sde_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "eta": 0.5,
+      "shift": 3.0
+    },
+    "node": 6,
+    "generate_s": [
+      419.428,
+      379.621
+    ],
+    "train_s": [
+      194.6,
+      191.0
+    ],
+    "peak_gpu_mib": 54725,
+    "active_gpu_util_median": 98.0,
+    "errors": [],
+    "steady_videos_per_s": 0.01389689477440886,
+    "steady_videos_per_s_per_node": 0.01389689477440886,
+    "validated_two_updates": true,
+    "iterations": [
+      {
+        "rollout": 0,
+        "loss": 2.605840563774109e-06,
+        "grad_norm": 5.841255187988281e-05,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 622.9421039819717,
+        "rollout_replay_logp_absdiff_max": 1.599825918674469e-05
+      },
+      {
+        "rollout": 1,
+        "loss": 4.736939445137978e-06,
+        "grad_norm": 7.772445678710938e-05,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 575.6681711897254,
+        "rollout_replay_logp_absdiff_max": 1.8299557268619537e-05
+      }
+    ]
+  },
+  {
+    "case": "cp16_ep16_ac0_w16_cross",
+    "cp": 16,
+    "ep": 16,
+    "tp": 1,
+    "activation_checkpointing": false,
+    "groups": 1,
+    "group_size": 16,
+    "videos_per_rollout": 16,
+    "num_rollouts": 2,
+    "world": 16,
+    "members": [
+      6,
+      7
+    ],
+    "returncode": 1,
+    "wall_s": 1066.692480802536,
+    "recipe_sampling": {
+      "steps": 30,
+      "sde_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "eta": 0.5,
+      "shift": 3.0
+    },
+    "generate_s": [
+      590.793
+    ],
+    "train_s": [],
+    "peak_gpu_mib": 97255,
+    "active_gpu_util_median": 98.0,
+    "errors": [],
+    "validated_two_updates": false,
+    "iterations": []
+  },
+  {
+    "case": "cp8_ep8_ac0_stepwise",
+    "cp": 8,
+    "ep": 8,
+    "tp": 1,
+    "activation_checkpointing": false,
+    "groups": 1,
+    "group_size": 8,
+    "num_rollouts": 2,
+    "videos_per_rollout": 8,
+    "returncode": 0,
+    "wall_s": 1396.7504696846008,
+    "recipe_sampling": {
+      "steps": 30,
+      "sde_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "eta": 0.5,
+      "shift": 3.0
+    },
+    "node": 6,
+    "generate_s": [
+      414.905,
+      379.532
+    ],
+    "train_s": [
+      141.0,
+      135.7
+    ],
+    "peak_gpu_mib": 78935,
+    "active_gpu_util_median": 98.0,
+    "errors": [],
+    "steady_videos_per_s": 0.01538237666459836,
+    "steady_videos_per_s_per_node": 0.01538237666459836,
+    "validated_two_updates": true,
+    "iterations": [
+      {
+        "rollout": 0,
+        "loss": 9.966548532025499e-07,
+        "grad_norm": 0.00013256072998046875,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 565.256306655705,
+        "rollout_replay_logp_absdiff_max": 1.8612481653690338e-05
+      },
+      {
+        "rollout": 1,
+        "loss": 2.0120292901770753e-06,
+        "grad_norm": 9.870529174804688e-05,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 520.0756797492504,
+        "rollout_replay_logp_absdiff_max": 1.746043562889099e-05
+      }
+    ]
+  },
+  {
+    "case": "cp4_ep4_ac1_production121",
+    "cp": 4,
+    "ep": 4,
+    "tp": 1,
+    "activation_checkpointing": true,
+    "groups": 2,
+    "group_size": 4,
+    "num_rollouts": 2,
+    "videos_per_rollout": 8,
+    "returncode": 0,
+    "wall_s": 3269.4118576049805,
+    "recipe_sampling": {
+      "steps": 30,
+      "sde_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "eta": 0.5,
+      "shift": 3.0,
+      "frames": 121,
+      "height": 464,
+      "width": 848
+    },
+    "node": 6,
+    "generate_s": [
+      952.509,
+      913.173
+    ],
+    "train_s": [
+      540.0,
+      527.3
+    ],
+    "peak_gpu_mib": 86799,
+    "active_gpu_util_median": 100.0,
+    "errors": [],
+    "steady_videos_per_s": 0.005526946124344629,
+    "steady_videos_per_s_per_node": 0.005526946124344629,
+    "validated_two_updates": true,
+    "iterations": [
+      {
+        "rollout": 0,
+        "loss": -2.5331973997622104e-08,
+        "grad_norm": 0.00014400482177734375,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 1504.7478657960892,
+        "rollout_replay_logp_absdiff_max": 2.018362283706665e-05
+      },
+      {
+        "rollout": 1,
+        "loss": -2.4666078388135837e-07,
+        "grad_norm": 0.00018787384033203125,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 1447.4539501592517,
+        "rollout_replay_logp_absdiff_max": 1.9781291484832764e-05
+      }
+    ]
+  },
+  {
+    "case": "cp16_ep16_ac0_w16_isolated_r_cp2_ep1_production121",
+    "cp": 16,
+    "ep": 16,
+    "tp": 1,
+    "activation_checkpointing": false,
+    "groups": 8,
+    "group_size": 2,
+    "videos_per_rollout": 16,
+    "num_rollouts": 2,
+    "world": 16,
+    "members": [
+      6,
+      7
+    ],
+    "layout": "isolated_colocate",
+    "rollout_cp": 2,
+    "rollout_ep": 1,
+    "train_world": 16,
+    "rollout_world": 16,
+    "returncode": 1,
+    "wall_s": 390.6453173160553,
+    "recipe_sampling": {
+      "steps": 30,
+      "sde_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "eta": 0.5,
+      "shift": 3.0,
+      "frames": 121,
+      "height": 464,
+      "width": 848
+    },
+    "generate_s": [],
+    "train_s": [],
+    "peak_gpu_mib": 16652,
+    "errors": [
+      "ValueError: Leo2 enable_deepep=true requires expert_parallel_size > 1, got expert_parallel_size=1."
+    ],
+    "validated_two_updates": false,
+    "iterations": []
+  },
+  {
+    "case": "cp16_ep16_ac0_w16_isolated_r_cp2_ep1_production121_v2",
+    "cp": 16,
+    "ep": 16,
+    "tp": 1,
+    "activation_checkpointing": false,
+    "groups": 8,
+    "group_size": 2,
+    "videos_per_rollout": 16,
+    "num_rollouts": 2,
+    "world": 16,
+    "members": [
+      6,
+      7
+    ],
+    "layout": "isolated_colocate",
+    "rollout_cp": 2,
+    "rollout_ep": 1,
+    "train_world": 16,
+    "rollout_world": 16,
+    "returncode": 1,
+    "wall_s": 1602.2504811286926,
+    "recipe_sampling": {
+      "steps": 30,
+      "sde_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "eta": 0.5,
+      "shift": 3.0,
+      "frames": 121,
+      "height": 464,
+      "width": 848
+    },
+    "generate_s": [],
+    "train_s": [],
+    "peak_gpu_mib": 50750,
+    "errors": [
+      "TypeError: _new_shared in CUDA mode received an invalid combination of arguments - got (int, !NoneType!, int, int, !NoneType!, int, !NoneType!, !NoneType!), but expected (int device, bytes handle, int storage_size_bytes, int storage_offset_bytes, bytes _ref_counter, int _ref_counter_offset, bytes event_handle, bool event_sync_required)"
+    ],
+    "validated_two_updates": false,
+    "iterations": []
+  },
+  {
+    "case": "cp16_ep16_ac0_w16_isolated_r_cp2_ep1_production121_v3",
+    "cp": 16,
+    "ep": 16,
+    "tp": 1,
+    "activation_checkpointing": false,
+    "groups": 8,
+    "group_size": 2,
+    "videos_per_rollout": 16,
+    "num_rollouts": 2,
+    "world": 16,
+    "members": [
+      6,
+      7
+    ],
+    "forced_initial_lora_sync": true,
+    "layout": "isolated_colocate",
+    "rollout_cp": 2,
+    "rollout_ep": 1,
+    "train_world": 16,
+    "rollout_world": 16,
+    "returncode": 0,
+    "wall_s": 3666.637629032135,
+    "recipe_sampling": {
+      "steps": 30,
+      "sde_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "eta": 0.5,
+      "shift": 3.0,
+      "frames": 121,
+      "height": 464,
+      "width": 848
+    },
+    "generate_s": [
+      863.456,
+      844.522
+    ],
+    "train_s": [
+      544.8,
+      481.7
+    ],
+    "peak_gpu_mib": 91228,
+    "active_gpu_util_median": 100.0,
+    "errors": [],
+    "steady_videos_per_s": 0.011739596084781131,
+    "steady_videos_per_s_per_node": 0.005869798042390566,
+    "validated_two_updates": true,
+    "iterations": [
+      {
+        "rollout": 0,
+        "loss": 7.614493370208808e-07,
+        "grad_norm": 0.00018596649169921875,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 1463.0685204863548,
+        "rollout_replay_logp_absdiff_max": 2.242065966129303e-05
+      },
+      {
+        "rollout": 1,
+        "loss": 7.269307970998035e-05,
+        "grad_norm": 0.00022792816162109375,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 1362.9089011624455,
+        "rollout_replay_logp_absdiff_max": 2.30385921895504e-05
+      }
+    ]
+  },
+  {
+    "case": "cp8_ep8_ac1",
+    "cp": 8,
+    "ep": 8,
+    "tp": 1,
+    "activation_checkpointing": true,
+    "groups": 1,
+    "group_size": 8,
+    "num_rollouts": 2,
+    "videos_per_rollout": 8,
+    "returncode": 0,
+    "wall_s": 1015.2746198177338,
+    "node": 7,
+    "generate_s": [
+      203.673,
+      170.75
+    ],
+    "train_s": [
+      158.4,
+      153.8
+    ],
+    "peak_gpu_mib": 54517,
+    "active_gpu_util_median": 97.0,
+    "errors": [],
+    "steady_videos_per_s": 0.024284905520950813,
+    "steady_videos_per_s_per_node": 0.024284905520950813,
+    "validated_two_updates": true,
+    "iterations": [
+      {
+        "rollout": 0,
+        "loss": 1.2814998626708984e-05,
+        "grad_norm": 0.001922607421875,
+        "lr": 0.0001,
+        "has_backward": true,
+        "step_time_s": 370.21511102095246,
+        "rollout_replay_logp_absdiff_max": 0.0003628954291343689
+      },
+      {
+        "rollout": 1,
+        "loss": 3.8086436688899994e-05,
+        "grad_norm": 0.001434326171875,
+        "lr": 0.0001,
+        "has_backward": true,
+        "step_time_s": 329.42273516766727,
+        "rollout_replay_logp_absdiff_max": 0.0001956745982170105
+      }
+    ]
+  },
+  {
+    "case": "cp4_ep8_ac1_prod",
+    "cp": 4,
+    "ep": 8,
+    "tp": 1,
+    "activation_checkpointing": true,
+    "groups": 2,
+    "group_size": 4,
+    "num_rollouts": 2,
+    "videos_per_rollout": 8,
+    "returncode": 0,
+    "wall_s": 1316.8308646678925,
+    "recipe_sampling": {
+      "steps": 30,
+      "sde_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "eta": 0.5,
+      "shift": 3.0
+    },
+    "node": 7,
+    "generate_s": [
+      347.748,
+      316.916
+    ],
+    "train_s": [
+      172.5,
+      166.9
+    ],
+    "peak_gpu_mib": 60149,
+    "active_gpu_util_median": 99.0,
+    "errors": [],
+    "steady_videos_per_s": 0.016439143322856734,
+    "steady_videos_per_s_per_node": 0.016439143322856734,
+    "validated_two_updates": true,
+    "iterations": [
+      {
+        "rollout": 0,
+        "loss": -6.537884473800659e-07,
+        "grad_norm": 0.00013637542724609375,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 524.5100433100015,
+        "rollout_replay_logp_absdiff_max": 1.5232712030410767e-05
+      },
+      {
+        "rollout": 1,
+        "loss": 6.07222318649292e-07,
+        "grad_norm": 0.00014495849609375,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 486.6433635186404,
+        "rollout_replay_logp_absdiff_max": 1.9000843167304993e-05
+      }
+    ]
+  },
+  {
+    "case": "cp4_ep1_ac0_stepwise",
+    "cp": 4,
+    "ep": 1,
+    "tp": 1,
+    "activation_checkpointing": false,
+    "groups": 2,
+    "group_size": 4,
+    "num_rollouts": 2,
+    "videos_per_rollout": 8,
+    "returncode": 1,
+    "wall_s": 789.7774403095245,
+    "recipe_sampling": {
+      "steps": 30,
+      "sde_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "eta": 0.5,
+      "shift": 3.0
+    },
+    "node": 7,
+    "generate_s": [
+      343.803
+    ],
+    "train_s": [],
+    "peak_gpu_mib": 97251,
+    "active_gpu_util_median": 100.0,
+    "errors": [
+      "OutOfMemoryError: CUDA out of memory. Tried to allocate 768.00 MiB. GPU 0 has a total capacity of 95.00 GiB of which 605.94 MiB is free. Process 371607 has 94.40 GiB memory in use. Of the allocated memory 88.99 GiB is allocated by PyTorch, and 627.97 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)",
+      "OutOfMemoryError: CUDA out of memory. Tried to allocate 768.00 MiB. GPU 0 has a total capacity of 95.00 GiB of which 605.94 MiB is free. Process 371607 has 94.40 GiB memory in use. Of the allocated memory 88.99 GiB is allocated by PyTorch, and 627.97 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    ],
+    "validated_two_updates": false,
+    "iterations": []
+  },
+  {
+    "case": "cp8_ep8_ac1_stepwise",
+    "cp": 8,
+    "ep": 8,
+    "tp": 1,
+    "activation_checkpointing": true,
+    "groups": 1,
+    "group_size": 8,
+    "num_rollouts": 2,
+    "videos_per_rollout": 8,
+    "returncode": 0,
+    "wall_s": 1494.485633611679,
+    "recipe_sampling": {
+      "steps": 30,
+      "sde_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "eta": 0.5,
+      "shift": 3.0
+    },
+    "node": 7,
+    "generate_s": [
+      414.43,
+      378.73
+    ],
+    "train_s": [
+      192.8,
+      189.7
+    ],
+    "peak_gpu_mib": 54297,
+    "active_gpu_util_median": 98.0,
+    "errors": [],
+    "steady_videos_per_s": 0.013956556523982115,
+    "steady_videos_per_s_per_node": 0.013956556523982115,
+    "validated_two_updates": true,
+    "iterations": [
+      {
+        "rollout": 0,
+        "loss": 6.941705942176135e-06,
+        "grad_norm": 0.00011491775512695312,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 616.2112091816962,
+        "rollout_replay_logp_absdiff_max": 1.760106533765793e-05
+      },
+      {
+        "rollout": 1,
+        "loss": 3.3304095267971956e-06,
+        "grad_norm": 9.632110595703125e-05,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 573.2072940953076,
+        "rollout_replay_logp_absdiff_max": 1.5700235962867737e-05
+      }
+    ]
+  },
+  {
+    "case": "cp2_ep4_ac1_production121",
+    "cp": 2,
+    "ep": 4,
+    "tp": 1,
+    "activation_checkpointing": true,
+    "groups": 4,
+    "group_size": 2,
+    "num_rollouts": 2,
+    "videos_per_rollout": 8,
+    "returncode": 0,
+    "wall_s": 3250.901801109314,
+    "recipe_sampling": {
+      "steps": 30,
+      "sde_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "eta": 0.5,
+      "shift": 3.0,
+      "frames": 121,
+      "height": 464,
+      "width": 848
+    },
+    "node": 7,
+    "generate_s": [
+      890.729,
+      861.195
+    ],
+    "train_s": [
+      596.3,
+      585.3
+    ],
+    "peak_gpu_mib": 97281,
+    "active_gpu_util_median": 100.0,
+    "errors": [],
+    "steady_videos_per_s": 0.0055182259801929215,
+    "steady_videos_per_s_per_node": 0.0055182259801929215,
+    "validated_two_updates": true,
+    "iterations": [
+      {
+        "rollout": 0,
+        "loss": 1.7495453357690982e-05,
+        "grad_norm": 0.00067901611328125,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 1492.7299489397556,
+        "rollout_replay_logp_absdiff_max": 1.6752630472183228e-05
+      },
+      {
+        "rollout": 1,
+        "loss": -5.127489566811305e-06,
+        "grad_norm": 5.8650970458984375e-05,
+        "lr": 2.5e-05,
+        "has_backward": true,
+        "step_time_s": 1449.7412807513028,
+        "rollout_replay_logp_absdiff_max": 1.4081597328186035e-05
+      }
+    ]
+  }
+]

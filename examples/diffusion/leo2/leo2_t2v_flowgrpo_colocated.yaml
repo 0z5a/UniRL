@@ -1,0 +1,27 @@
+# @package _global_
+defaults:
+  - leo2_t2v_flowgrpo_separate
+  - _self_
+
+layout: colocate
+workers_per_device: 2
+transport_kind: gpu_store
+rollout_isolated_workers: true
+enable_fsdp_offload: true
+rollout_sleep_after_generate: true
+rollout_ep: 1
+
+bundle:
+  config:
+    context_parallel_size: 16
+    expert_parallel_size: 16
+    enable_deepep: true
+
+backend:
+  fsdp_cfg:
+    activation_checkpointing: false
+
+rollout:
+  offload_on_sleep: true
+  bundle_config:
+    enable_deepep: false

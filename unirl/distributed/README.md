@@ -105,7 +105,10 @@ layout is a `placement(…)` wiring in the trainer (`trainer/diffusion.py`).
 - **`transport_kind` is a cluster-wide choice.** `colocate_store` assumes one worker
   per GPU; multi-slot colocate needs `gpu_store`; cross-node production wants
   `transfer_queue: mooncake` (RDMA).
+- **Empty CUDA tensors have no IPC storage handle.** GPU Store retains their shape,
+  dtype, and reference counting, but skips IPC writes and reconstructs empty views
+  locally with the stored stride when resolving them.
 - **`layout` only branches on `"separate"`.** `"colocate"` and `"colocated"` are the
   same thing (the entrypoint and trainer defaults disagree textually, but the only
   test is `!= "separate"`); the multi-process-same-GPU "real colocate"
-  (`shared_workers=False`) path exists but no trainer uses it.
+  (`shared_workers=False`) path is used by diffusion's `rollout_isolated_workers` mode.

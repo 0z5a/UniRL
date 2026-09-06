@@ -65,6 +65,14 @@ class EmaLoraConfig:
     default_adapter: str = "default"
     shadow_adapter: str = "old"
     ema_decay: float = 0.001
+    # Flow-Factory-compatible names. When set, these override the legacy
+    # ema_decay_type / ema_flat_steps / ema_uprate schedule fields below.
+    ema_decay_schedule: Optional[str] = None
+    flat_steps: Optional[int] = None
+    ramp_rate: Optional[float] = None
+    ema_update_interval: int = 1
+    ema_device: str = "cuda"
+    # Legacy UniRL schedule names retained for existing recipes.
     ema_decay_type: str = "constant"
     ema_flat_steps: int = 0
     ema_uprate: float = 0.001

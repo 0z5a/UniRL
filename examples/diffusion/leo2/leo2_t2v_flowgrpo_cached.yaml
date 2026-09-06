@@ -1,0 +1,62 @@
+# @package _global_
+# 64-GPU FlowGRPO; CP/EP and FSDP shards remain within each eight-GPU node.
+defaults:
+  - leo2_t2v_cached
+  - _self_
+
+num_devices: 64
+num_groups: 32
+group_size: 16
+batch_size: ${num_groups}
+rollout_chunk_prompts: ${num_groups}
+num_rollouts: 300
+adv_use_global_std: false
+
+bundle:
+  config:
+    video_shift: 3.0
+    context_parallel_size: 2
+    expert_parallel_size: 1
+    enable_deepep: false
+    inference_cache_method: none
+
+backend:
+  optimizer_cfg:
+    learning_rate: 2.5e-5
+  fsdp_cfg:
+    fsdp_mode: hybrid8
+    sp_size: ${bundle.config.context_parallel_size}
+    ep_size: ${bundle.config.expert_parallel_size}
+    activation_checkpointing: true
+    checkpoint_format: dcp
+
+sampling:
+  num_inference_steps: 30
+  eta: 0.5
+  sde_indices: [0, 1, 2, 3, 4]
+  init_same_noise: true
+  height: 464
+  width: 848
+  num_frames: 121
+  samples_per_prompt: ${group_size}
+
+data_source:
+  args:
+    run:
+      data_path: ${oc.env:LEO2_PROMPT_FILE,/root/Flow-Factory/dataset/vid_prompt/train.txt}
+      eval_data_path: ${oc.env:LEO2_EVAL_PROMPT_FILE,/root/Flow-Factory/dataset/vid_prompt/test.txt}
+
+reward:
+  backend:
+    config:
+      frame_selection: uniform
+      num_score_frames: 4
+
+algorithm:
+  old_logp_source: rollout
+  rollout_replay_parity_action: raise
+
+logging:
+  project_name: ${oc.env:WANDB_PROJECT,leo2-rl}
+  run_name: leo2_flowgrpo_cached_64gpu
+  tags: [leo2, flowgrpo, cached, 64gpu, lora-r64]
