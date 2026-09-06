@@ -20,6 +20,7 @@ from cache_benchmark_entry import (  # noqa: E402
 )
 from compute_pixel_metrics import _load_prompts  # noqa: E402
 from build_magcache_profile import _load_prompts as _load_magcache_prompts  # noqa: E402
+from prepare_context_ir_pilot_cases import rows as _pilot_rows  # noqa: E402
 
 
 def _case_row(**updates: object) -> dict[str, object]:
@@ -161,3 +162,14 @@ def test_committed_bilingual_manifests_preserve_pair_seed_identity() -> None:
     )
     assert len(magcache_prompts) == 32
     assert len({seed for seed, _ in magcache_prompts}) == 16
+
+
+def test_formal_pilot_cases_use_external_baselines_and_hifi_cfg_window() -> None:
+    baseline = Path("/shared/baseline")
+    generated = _pilot_rows(6, baseline, Path("/shared/profiles"))
+    assert len(generated) == 10
+    assert all(row["reference_root"] == str(baseline) for row in generated.values())
+    assert generated["cfg_g5"]["cfg_start_step"] == 3
+    assert generated["cfg_g5"]["cfg_end_step"] == 5
+    assert generated["cfg_g5"]["cfg_interval"] == 2
+    assert generated["dfr_cfg_g5"]["dfr_start_step"] == 1
