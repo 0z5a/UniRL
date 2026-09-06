@@ -151,6 +151,20 @@ def test_fastercache_canonicalizes_full_cfg_histories_to_conditional_branch() ->
     assert canonical[1] is None
 
 
+def test_fastercache_trims_history_before_full_cfg_forward() -> None:
+    controller = LeoFasterCacheController(
+        LeoFasterCacheConfig(start_step=0, end_step=6, interval=2),
+        num_layers=1,
+    )
+    first = (torch.zeros(1, 2, 3), None)
+    second = (torch.ones(1, 2, 3), None)
+    controller._histories = {0: [first, second]}
+
+    controller.set_cfg_mode(enabled=True, conditional_only=False)
+
+    assert controller._histories == {0: [second]}
+
+
 def test_combined_cache_requires_dfr_and_cfg_configs() -> None:
     config = LeoCombinedCacheConfig(
         feature=LeoFasterCacheConfig(start_step=1, end_step=5, interval=2),

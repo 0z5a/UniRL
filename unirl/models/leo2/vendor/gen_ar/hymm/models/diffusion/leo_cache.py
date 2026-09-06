@@ -1302,6 +1302,10 @@ class LeoFasterCacheController:
             raise ValueError("Leo FasterCache conditional_only=True requires enabled=True")
         self._cfg_enabled = enabled
         self._cfg_conditional_only = conditional_only
+        if enabled and not conditional_only:
+            for layer_idx, history in tuple(self._histories.items()):
+                if len(history) > 1:
+                    self._histories[layer_idx] = history[-1:]
 
     @torch.compiler.disable
     def begin_step(

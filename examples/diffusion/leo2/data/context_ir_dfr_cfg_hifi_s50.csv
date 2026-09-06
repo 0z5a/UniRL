@@ -1,3 +1,3 @@
 name,method,cache_threshold,flow_shift_video,guidance_scale,baseline_case,reference_root,taylor_max_extrapolation,magcache_profile,magcache_threshold,magcache_max_skip_steps,magcache_retention_ratio,dfr_start_step,dfr_end_step,dfr_interval,dfr_layers,cfg_start_step,cfg_end_step,cfg_interval,cfg_low_frequency_weight,cfg_high_frequency_weight,cfg_low_frequency_start_step,cfg_low_frequency_end_step,cfg_high_frequency_start_step,cfg_high_frequency_end_step
 exact_s50_g5,off,off,9.0,5.0,exact_s50_g5,,,,,,,,,,,,,,,,,,,
-dfr_cfg_hifi_s50_g5,fastercache_dfr+cfg_cache,off,9.0,5.0,exact_s50_g5,,,,,,,10,49,2,,35,49,2,1.0,1.0,35,49,35,49
+dfr_cfg_hifi_s50_g5,fastercache_dfr+cfg_cache,off,9.0,5.0,exact_s50_g5,,,,,,,10,49,2,24-47,35,49,2,1.0,1.0,35,49,35,49

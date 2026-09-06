@@ -19,10 +19,8 @@ from prepare_context_ir_cache_cases import (
 
 
 def _write(path: Path, row: dict[str, object]) -> None:
-    if path.exists():
-        raise FileExistsError(f"refusing to overwrite pilot case file: {path}")
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("x", encoding="utf-8", newline="") as handle:
+    with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=TSV_FIELDS)
         writer.writeheader()
         writer.writerow(row)
@@ -92,18 +90,21 @@ def rows(steps: int, baseline_root: Path, profile_root: Path) -> dict[str, dict[
         )
     baseline = f"exact_s{steps}_g5"
     result["cfg_g5"] = _cfg_candidate(steps, baseline, baseline_root)
+    composite_cfg = {
+        key: value
+        for key, value in _cfg_candidate(steps, baseline, baseline_root).items()
+        if key.startswith("cfg_")
+    }
+    if steps == 6:
+        composite_cfg["cfg_interval"] = 3
     result["dfr_cfg_g5"] = _row(
         f"dfr_cfg_hifi_s{steps}_g5",
         "fastercache_dfr+cfg_cache",
         5.0,
         baseline,
         reference_root=str(baseline_root),
-        **_dfr_values(steps),
-        **{
-            key: value
-            for key, value in _cfg_candidate(steps, baseline, baseline_root).items()
-            if key.startswith("cfg_")
-        },
+        **_dfr_values(steps, layers="24-47"),
+        **composite_cfg,
     )
     return result
 

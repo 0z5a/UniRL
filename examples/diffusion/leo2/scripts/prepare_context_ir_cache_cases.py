@@ -42,13 +42,16 @@ def _cfg_values(steps: int, *, interval: int = 5, weight: float = 1.1) -> dict[s
     }
 
 
-def _dfr_values(steps: int) -> dict[str, object]:
+def _dfr_values(steps: int, *, layers: str | None = None) -> dict[str, object]:
     start, end = DFR_WINDOWS[steps]
-    return {
+    values = {
         "dfr_start_step": start,
         "dfr_end_step": end,
         "dfr_interval": 2,
     }
+    if layers is not None:
+        values["dfr_layers"] = layers
+    return values
 
 
 def _write(path: Path, rows: list[dict[str, object]]) -> None:
@@ -193,6 +196,9 @@ def _cfg_hifi_case(steps: int) -> list[dict[str, object]]:
 def _dfr_cfg_hifi_case(steps: int) -> list[dict[str, object]]:
     baseline = f"exact_s{steps}_g5"
     cfg_row = _cfg_hifi_case(steps)[1]
+    cfg_values = {key: value for key, value in cfg_row.items() if key.startswith("cfg_")}
+    if steps == 6:
+        cfg_values["cfg_interval"] = 3
     return [
         _row(baseline, "off", 5.0, baseline),
         _row(
@@ -200,8 +206,8 @@ def _dfr_cfg_hifi_case(steps: int) -> list[dict[str, object]]:
             "fastercache_dfr+cfg_cache",
             5.0,
             baseline,
-            **_dfr_values(steps),
-            **{key: value for key, value in cfg_row.items() if key.startswith("cfg_")},
+            **_dfr_values(steps, layers="24-47"),
+            **cfg_values,
         ),
     ]
 

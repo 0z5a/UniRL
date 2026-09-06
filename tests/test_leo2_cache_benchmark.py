@@ -173,3 +173,5 @@ def test_formal_pilot_cases_use_external_baselines_and_hifi_cfg_window() -> None
     assert generated["cfg_g5"]["cfg_end_step"] == 5
     assert generated["cfg_g5"]["cfg_interval"] == 2
     assert generated["dfr_cfg_g5"]["dfr_start_step"] == 1
+    assert generated["dfr_cfg_g5"]["dfr_layers"] == "24-47"
+    assert generated["dfr_cfg_g5"]["cfg_interval"] == 3
