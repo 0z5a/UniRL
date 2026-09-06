@@ -176,6 +176,7 @@ def test_formal_pilot_cases_use_external_baselines_and_hifi_cfg_window() -> None
     assert generated["dfr_cfg_g5"]["dfr_start_step"] == 1
     assert generated["dfr_cfg_g5"]["dfr_layers"] == "24-47"
     assert generated["dfr_cfg_g5"]["cfg_interval"] == 3
+    assert generated["dfr_g5"]["dfr_layers"] == "36-47"
     inferred = load_cases(
         REPO_ROOT / "examples/diffusion/leo2/data/context_ir_cfg_hifi_s6.csv"
     )

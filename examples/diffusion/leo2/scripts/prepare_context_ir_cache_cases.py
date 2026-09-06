@@ -101,7 +101,10 @@ def _matrix(steps: int, profile_root: Path) -> list[dict[str, object]]:
                     "fastercache_dfr",
                     guidance,
                     baseline,
-                    **_dfr_values(steps),
+                    **_dfr_values(
+                        steps,
+                        layers="36-47" if guidance > 1 else None,
+                    ),
                 ),
             ]
         )
@@ -214,6 +217,20 @@ def _dfr_cfg_hifi_case(steps: int) -> list[dict[str, object]]:
     ]
 
 
+def _dfr_guided_case(steps: int) -> list[dict[str, object]]:
+    baseline = f"exact_s{steps}_g5"
+    return [
+        _row(baseline, "off", 5.0, baseline),
+        _row(
+            f"dfr_late12_s{steps}_g5",
+            "fastercache_dfr",
+            5.0,
+            baseline,
+            **_dfr_values(steps, layers="36-47"),
+        ),
+    ]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -243,6 +260,11 @@ def main() -> None:
         _write(
             args.output_dir / f"context_ir_dfr_cfg_hifi_s{steps}.csv",
             _dfr_cfg_hifi_case(steps),
+            steps=steps,
+        )
+        _write(
+            args.output_dir / f"context_ir_dfr_guided_s{steps}.csv",
+            _dfr_guided_case(steps),
             steps=steps,
         )
         _write(

@@ -87,7 +87,10 @@ def rows(steps: int, baseline_root: Path, profile_root: Path) -> dict[str, dict[
             guidance,
             common["baseline"],
             reference_root=common["reference_root"],
-            **_dfr_values(steps),
+            **_dfr_values(
+                steps,
+                layers="36-47" if guidance > 1 else None,
+            ),
         )
     baseline = f"exact_s{steps}_g5"
     result["cfg_g5"] = _cfg_candidate(steps, baseline, baseline_root)
