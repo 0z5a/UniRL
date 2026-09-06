@@ -85,11 +85,12 @@ class Leo2CondStage:
         require(
             len(prompts) > 0 and len(prompts) == len(seeds), "Leo2CondStage: prompts/seeds must be nonempty and aligned"
         )
-        if self.disk_cache is not None:
+        disk_cache = getattr(self, "disk_cache", None)
+        if disk_cache is not None:
             blobs = []
             for prompt in prompts:
-                key = self.disk_cache.condition_key(prompt, height=height, width=width, num_frames=num_frames)
-                blobs.extend(self.disk_cache.read_condition(key).hymm)
+                key = disk_cache.condition_key(prompt, height=height, width=width, num_frames=num_frames)
+                blobs.extend(disk_cache.read_condition(key).hymm)
             self.cache_hits += len(prompts)
             return Leo2Conditions.from_dict({"hymm": blobs})
         if self._cache_size <= 0 or len(prompts) != 1 or len(seeds) != 1:

@@ -73,16 +73,17 @@ def build_preprocessing_bundle(config: Leo2PipelineConfig, *, with_text: bool):
 
 def _records(paths: list[str], *, encode_targets: bool) -> list[dict]:
     """Read prompt text files or the existing raw supervised manifest format."""
-    from unirl.data.sft import SupervisedDataset
+    from unirl.data.datasets import TextPromptDataset
 
     records = []
     for path in paths:
-        if Path(path).suffix == ".txt":
-            if encode_targets:
-                raise ValueError("Target encoding requires a JSON/JSONL manifest with target video media refs.")
-            records.extend({"prompt": line.strip()} for line in Path(path).read_text().splitlines() if line.strip())
-        else:
+        if encode_targets:
+            from unirl.data.sft import SupervisedDataset
+
             records.extend(SupervisedDataset(path).records)
+            continue
+        dataset = TextPromptDataset(file_path=path)
+        records.extend(dataset.get_prompt_example(index) for index in range(len(dataset)))
     if not records:
         raise ValueError("No Leo2 preprocessing records found.")
     for record in records:

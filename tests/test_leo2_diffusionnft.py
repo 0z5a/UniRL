@@ -10,6 +10,7 @@ import pytest
 import torch
 import torch.distributed.checkpoint as dcp
 import torch.nn as nn
+from hydra.utils import instantiate
 from omegaconf import OmegaConf
 
 from unirl.algorithms.diffusionnft import DiffusionNFT
@@ -17,6 +18,7 @@ from unirl.models.leo2.bundle import _dcp_load_into, _make_inference_cache_confi
 from unirl.models.leo2.conditions import Leo2Conditions
 from unirl.models.leo2.diffusion import Leo2DiffusionStage
 from unirl.models.leo2.pipeline import Leo2Pipeline
+from unirl.models.leo2.preprocess import _records
 from unirl.models.leo2.text_embed import Leo2CondStage, _to_transport_tree
 from unirl.distributed.group.remote import RankInfo
 from unirl.rollout.engine.trainside.engine import TrainsideRolloutEngine
@@ -291,6 +293,40 @@ def test_leo2_nft_recipe_matches_requested_contract() -> None:
     assert config.backend.fsdp_cfg.ep_size == 8
 
 
+def test_leo2_context_ir_flowgrpo_recipe_matches_requested_contract() -> None:
+    path = Path(__file__).parents[1] / "examples/diffusion/leo2/leo2_t2v_flowgrpo_context_ir.yaml"
+    config = OmegaConf.load(path)
+
+    assert config.num_devices == 64
+    assert config.num_groups == 32
+    assert config.group_size == 16
+    assert config.bundle.config.context_parallel_size == 2
+    assert config.bundle.config.expert_parallel_size == 1
+    assert config.backend.optimizer_cfg.learning_rate == pytest.approx(3e-4)
+    assert config.backend.lora_cfg.rank == 128
+    assert config.backend.lora_cfg.alpha == 256
+    assert config.sampling.num_inference_steps == 12
+    assert config.sampling.num_frames == 9
+    assert config.sampling.sde_indices is None
+
+    scheduler = instantiate(config.sampling.scheduler)
+    for rollout_id in range(8):
+        selected = scheduler.get_sde_indices(rollout_id)
+        assert len(selected) == 2
+        assert selected <= set(range(5))
+
+
+def test_leo2_preprocess_preserves_multiline_prompt_jsonl(tmp_path: Path) -> None:
+    manifest = tmp_path / "prompts.jsonl"
+    manifest.write_text('{"prompt_id":"zh:1","prompt":"first line\\nsecond line","language":"zh"}\n')
+
+    records = _records([str(manifest)], encode_targets=False)
+
+    assert len(records) == 1
+    assert records[0]["prompt_id"] == "zh:1"
+    assert records[0]["prompt"] == "first line\nsecond line"
+
+
 def test_ema_piecewise_linear_matches_flow_factory_schedule() -> None:
     decay = make_decay_fn(
         EmaLoraConfig(
@@ -504,7 +540,9 @@ def test_leo2_condition_cache_reuses_sibling_prompt_without_sharing_containers()
     assert stage.cache_hits == 1
     assert "_device" not in second.hymm[0]
     assert first.hymm[0] is not second.hymm[0]
-    assert first.hymm[0]["input_ids"] is second.hymm[0]["input_ids"]
+    assert first.hymm[0]["input_ids"].untyped_storage().data_ptr() == (
+        second.hymm[0]["input_ids"].untyped_storage().data_ptr()
+    )
 
 
 def test_diffusion_nft_draws_two_shifted_logit_normal_training_steps() -> None:
