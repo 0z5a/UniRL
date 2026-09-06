@@ -1121,15 +1121,22 @@ class LeoCFGCacheController:
                 "Leo CFG cache conditional output signature changed: "
                 f"expected {self._output_signature}, got {self._signature(conditional)}"
             )
-        low_delta = self._low_frequency_delta
-        high_delta = self._high_frequency_delta
         step = self._step_index - 1
         if self.config.low_frequency_start_step <= step < self.config.low_frequency_end_step:
-            low_delta = low_delta * self.config.low_frequency_weight
+            self._low_frequency_delta = (
+                self._low_frequency_delta * self.config.low_frequency_weight
+            )
         if self.config.high_frequency_start_step <= step < self.config.high_frequency_end_step:
-            high_delta = high_delta * self.config.high_frequency_weight
+            self._high_frequency_delta = (
+                self._high_frequency_delta * self.config.high_frequency_weight
+            )
         low_cond, high_cond = self._split_frequency(conditional.float())
-        spectrum = low_cond + low_delta + high_cond + high_delta
+        spectrum = (
+            low_cond
+            + self._low_frequency_delta
+            + high_cond
+            + self._high_frequency_delta
+        )
         reconstructed = torch.fft.ifft2(
             torch.fft.ifftshift(spectrum, dim=(-2, -1)),
             dim=(-2, -1),

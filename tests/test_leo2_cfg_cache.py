@@ -74,6 +74,34 @@ def test_cfg_cache_six_step_accounting() -> None:
     assert stats["cfg_reuse_calls"] == 4
 
 
+def test_cfg_cache_frequency_weights_accumulate_between_exact_steps() -> None:
+    controller = LeoCFGCacheController(
+        LeoCFGCacheConfig(
+            start_step=1,
+            end_step=4,
+            interval=5,
+            low_frequency_weight=2.0,
+            high_frequency_weight=2.0,
+            low_frequency_start_step=1,
+            low_frequency_end_step=4,
+            high_frequency_start_step=1,
+            high_frequency_end_step=4,
+        )
+    )
+    reference = torch.zeros(2, 1, 1, 4, 4)
+    conditional = torch.zeros(1, 1, 1, 4, 4)
+    unconditional = torch.ones_like(conditional)
+    with torch.no_grad(), controller.context("test"):
+        assert controller.begin_step(guidance_enabled=True, reference=reference) is False
+        controller.record_exact(conditional, unconditional)
+        assert controller.begin_step(guidance_enabled=True, reference=reference) is True
+        first = controller.reconstruct_unconditional(conditional)
+        assert controller.begin_step(guidance_enabled=True, reference=reference) is True
+        second = controller.reconstruct_unconditional(conditional)
+    torch.testing.assert_close(first, torch.full_like(first, 2.0))
+    torch.testing.assert_close(second, torch.full_like(second, 4.0))
+
+
 def test_cfg_cache_guidance_one_is_a_strict_bypass() -> None:
     controller = _controller()
     with controller.context("test"):
