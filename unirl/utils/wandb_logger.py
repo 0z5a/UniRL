@@ -1,5 +1,6 @@
 """WandB Logger for unirl Training."""
 
+import concurrent.futures
 import functools
 import logging
 import os
@@ -220,6 +221,13 @@ class UniRLWandBLogger:
         self.memory_monitor = None
 
         self.enabled = enabled and rank == 0
+        self._media_executor: Optional[concurrent.futures.ThreadPoolExecutor] = None
+        self._media_future: Optional[concurrent.futures.Future] = None
+        if self.enabled and self.log_media:
+            self._media_executor = concurrent.futures.ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix="unirl-wandb-media",
+            )
 
         if self.enabled and project:
             if not WANDB_AVAILABLE:
@@ -401,7 +409,40 @@ class UniRLWandBLogger:
         video_fps: int = 8,
         step_key: str = "rollout/step",
     ) -> None:
-        """Log rollout media preview payload produced by the rollout pipeline."""
+        """Encode and upload rollout media off the training critical path."""
+        if media_preview is None:
+            return
+        kwargs = {
+            "key": key,
+            "video_key": video_key,
+            "video_fps": video_fps,
+            "step_key": step_key,
+        }
+        if self._media_executor is None:
+            self._log_generated_media_sync(rollout_id, media_preview, **kwargs)
+            return
+        if self._media_future is not None:
+            # Keep at most one retained preview and surface asynchronous failures
+            # before accepting the next payload.
+            self._media_future.result()
+        self._media_future = self._media_executor.submit(
+            self._log_generated_media_sync,
+            rollout_id,
+            media_preview,
+            **kwargs,
+        )
+
+    def _log_generated_media_sync(
+        self,
+        rollout_id: int,
+        media_preview: Any,
+        *,
+        key: str,
+        video_key: Optional[str],
+        video_fps: int,
+        step_key: str,
+    ) -> None:
+        """Encode and upload one media payload on the media worker thread."""
         if media_preview is None:
             return
 
@@ -436,8 +477,11 @@ class UniRLWandBLogger:
             else:
                 try:
                     reward_values = [float(r) for r in rewards]
-                except Exception:
-                    reward_values = None
+                except (TypeError, ValueError) as exc:
+                    raise TypeError(
+                        "log_generated_media expected rewards to contain numeric values, "
+                        f"got {type(rewards).__name__}: {rewards!r}"
+                    ) from exc
 
         if video_key is None:
             if key == "rollout/generated_media":
@@ -502,8 +546,6 @@ class UniRLWandBLogger:
                     payload[video_key] = wandb_videos
 
             wandb.log(payload)
-        except Exception as e:
-            print(f"Warning: Failed to log generated media: {e}")
         finally:
             for _p in _muxed_paths:
                 try:
@@ -672,6 +714,12 @@ class UniRLWandBLogger:
 
     def finish(self):
         """Finish wandb run."""
+        if self._media_future is not None:
+            self._media_future.result()
+            self._media_future = None
+        if self._media_executor is not None:
+            self._media_executor.shutdown(wait=True)
+            self._media_executor = None
         if self.enabled and self._initialized:
             try:
                 wandb.finish()

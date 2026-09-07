@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from contextlib import nullcontext
+import os
 from pathlib import Path
 from types import MethodType, SimpleNamespace
 
@@ -14,7 +15,12 @@ from hydra.utils import instantiate
 from omegaconf import OmegaConf
 
 from unirl.algorithms.diffusionnft import DiffusionNFT
-from unirl.models.leo2.bundle import _dcp_load_into, _make_inference_cache_config, _patch_router_dtype
+from unirl.models.leo2.bundle import (
+    _configure_grouped_gemm_fallback,
+    _dcp_load_into,
+    _make_inference_cache_config,
+    _patch_router_dtype,
+)
 from unirl.models.leo2.conditions import Leo2Conditions
 from unirl.models.leo2.diffusion import Leo2DiffusionStage, _combine_modality_logp
 from unirl.models.leo2.pipeline import Leo2Pipeline
@@ -165,6 +171,24 @@ def test_leo2_joint_log_prob_matches_flow_factory_element_weighting() -> None:
     )
 
     torch.testing.assert_close(actual, (video * 12 + audio * 4) / 16)
+
+
+def test_leo2_grouped_gemm_fallback_defaults_inside_ray_worker(monkeypatch) -> None:
+    key = "HY_PARALLELISM_USE_CUTLASS_GROUPED_GEMM"
+    monkeypatch.delenv(key, raising=False)
+
+    _configure_grouped_gemm_fallback()
+
+    assert os.environ[key] == "0"
+
+
+def test_leo2_grouped_gemm_fallback_preserves_explicit_policy(monkeypatch) -> None:
+    key = "HY_PARALLELISM_USE_CUTLASS_GROUPED_GEMM"
+    monkeypatch.setenv(key, "1")
+
+    _configure_grouped_gemm_fallback()
+
+    assert os.environ[key] == "1"
 
 
 @pytest.mark.parametrize(

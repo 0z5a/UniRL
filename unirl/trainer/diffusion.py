@@ -922,11 +922,18 @@ class DiffusionTrainer(BaseTrainer):
         """Score one generated chunk, hydrate small results, then release decoded media."""
         # With no reward configured, ``part.rewards`` stays None and the block below no-ops.
         if self.reward is not None:
+            reward_t0 = time.perf_counter()
             with self._reward_phase():
                 scored_rows = self.reward.score_and_attach(_flatten_reward_rows(sample))
                 sample = _restore_reward_rows(sample, scored_rows)
                 del scored_rows
+            logger.info(
+                "lifecycle rollout %d: reward.score_and_attach %.3fs",
+                rollout_id,
+                time.perf_counter() - reward_t0,
+            )
 
+        finalize_t0 = time.perf_counter()
         part = sample.parts[-1]
         mean_reward = 0.0
         if part.rewards is not None:
@@ -950,7 +957,14 @@ class DiffusionTrainer(BaseTrainer):
             if any(md for md in root_md):
                 gen_part.metadata = [dict(md) if md else {} for md in root_md]
 
+        media_t0 = time.perf_counter()
         self._drop_decoded(sample, rollout_id=rollout_id, upload_media=upload_media)
+        logger.info(
+            "lifecycle rollout %d: media enqueue/drop %.3fs; score finalize total %.3fs",
+            rollout_id,
+            time.perf_counter() - media_t0,
+            time.perf_counter() - finalize_t0,
+        )
         return sample, mean_reward
 
     def _chunked_rollout_and_score(

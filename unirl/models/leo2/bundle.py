@@ -63,9 +63,19 @@ def ensure_hy_parallel_state() -> bool:
     return True
 
 
+def _configure_grouped_gemm_fallback() -> None:
+    """Disable unavailable CUTLASS retries unless the caller chose a policy."""
+    os.environ.setdefault("HY_PARALLELISM_USE_CUTLASS_GROUPED_GEMM", "0")
+
+
 def _bootstrap_hymm(config: Leo2PipelineConfig):
     """Import hymm, parse args from the yaml, set globals. Idempotent."""
     global _HYMM_BOOTSTRAPPED, _HY_PARALLEL_CONFIG
+    # Ray worker runtime_env contains only rank/bootstrap variables, so launcher
+    # environment overrides are not inherited reliably.  The vendored fallback
+    # otherwise retries unavailable CUTLASS grouped GEMM and emits one warning
+    # per MoE invocation, which can back-pressure an entire rollout.
+    _configure_grouped_gemm_fallback()
 
     requested_parallel_config = (
         config.context_parallel_size,

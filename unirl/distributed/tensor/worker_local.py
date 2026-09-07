@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import time
 from typing import Any, Callable, ClassVar, Dict, List, Optional, Tuple
 
 import ray
@@ -10,6 +12,8 @@ import torch
 from unirl.distributed.tensor.ref import TensorRef, TensorSpan, map_tree
 from unirl.distributed.tensor.transport import TensorTransport
 from unirl.distributed.utils import collect_leaves
+
+logger = logging.getLogger(__name__)
 
 
 def _apply_tensor_op(t: torch.Tensor, op: str, *args) -> torch.Tensor:
@@ -74,25 +78,62 @@ class WorkerLocalTransport(TensorTransport):
 
     @classmethod
     def _move(cls, pool: Any, to_move: Dict[tuple, Any]) -> Dict[tuple, Any]:
-        """One batched NCCL hop per ``(src, dst)`` device group; return key → received span."""
+        """Move refs in disjoint NCCL waves; return transfer key → received span."""
         groups: Dict[Tuple[int, int], List[tuple]] = {}
         for key in to_move:
             groups.setdefault((key[0], key[1]), []).append(key)
 
         moved: Dict[tuple, Any] = {}
-        for src_device_id, dst_device_id in sorted(groups):
-            keys = groups[(src_device_id, dst_device_id)]
-            spans = [to_move[k] for k in keys]
-            recv_ref = pool.slot0_worker(dst_device_id).transport_op.remote(
-                "nccl_recv", src_device_id, [s.shape for s in spans], [s.dtype for s in spans]
-            )
-            send_ref = pool.slot0_worker(src_device_id).transport_op.remote("nccl_send", dst_device_id, spans)
-            new_handles, _ = ray.get([recv_ref, send_ref])
+        transfer_groups = sorted(groups)
+        waves: List[List[Tuple[int, int]]] = []
+        while transfer_groups:
+            used_devices: set[int] = set()
+            wave: List[Tuple[int, int]] = []
+            deferred: List[Tuple[int, int]] = []
+            for pair in transfer_groups:
+                src_device_id, dst_device_id = pair
+                if src_device_id in used_devices or dst_device_id in used_devices:
+                    deferred.append(pair)
+                    continue
+                used_devices.update(pair)
+                wave.append(pair)
+            waves.append(wave)
+            transfer_groups = deferred
 
-            dst_worker = pool.slot0_worker(dst_device_id)
-            for key, new_h in zip(keys, new_handles):
-                new_h.rebind(dst_worker)
-                moved[key] = TensorSpan(new_h, 0, int(new_h.shape[0]))
+        started = time.perf_counter()
+        for wave in waves:
+            pending: List[Tuple[Tuple[int, int], List[tuple], Any, Any]] = []
+            refs: List[Any] = []
+            for src_device_id, dst_device_id in wave:
+                keys = groups[(src_device_id, dst_device_id)]
+                spans = [to_move[k] for k in keys]
+                recv_ref = pool.slot0_worker(dst_device_id).transport_op.remote(
+                    "nccl_recv", src_device_id, [s.shape for s in spans], [s.dtype for s in spans]
+                )
+                send_ref = pool.slot0_worker(src_device_id).transport_op.remote("nccl_send", dst_device_id, spans)
+                pending.append(((src_device_id, dst_device_id), keys, recv_ref, send_ref))
+                refs.extend((recv_ref, send_ref))
+
+            results = ray.get(refs)
+            for index, ((_, dst_device_id), keys, _, _) in enumerate(pending):
+                new_handles = results[index * 2]
+                if len(new_handles) != len(keys):
+                    raise RuntimeError(
+                        "WorkerLocalTransport NCCL receive count mismatch: "
+                        f"expected {len(keys)} handles for destination device {dst_device_id}, "
+                        f"received {len(new_handles)}"
+                    )
+                dst_worker = pool.slot0_worker(dst_device_id)
+                for key, new_h in zip(keys, new_handles):
+                    new_h.rebind(dst_worker)
+                    moved[key] = TensorSpan(new_h, 0, int(new_h.shape[0]))
+        logger.info(
+            "worker-local tensor localization: %d spans across %d device pairs in %d waves, %.3fs",
+            len(to_move),
+            len(groups),
+            len(waves),
+            time.perf_counter() - started,
+        )
         return moved
 
     @classmethod
