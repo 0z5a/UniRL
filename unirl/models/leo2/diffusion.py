@@ -30,6 +30,23 @@ def _combine_modality_logp(
     n_video: int,
     n_audio: int,
 ) -> torch.Tensor:
+    """Combine per-modality means by generated scalar degrees of freedom."""
+    for name, value in (("n_video", n_video), ("n_audio", n_audio)):
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(
+                f"Leo2 joint log-prob expected positive int {name}, "
+                f"got {type(value).__name__}: {value!r}"
+            )
+    if not isinstance(video_logp, torch.Tensor) or not isinstance(audio_logp, torch.Tensor):
+        raise TypeError(
+            "Leo2 joint log-prob expected Tensor video_logp/audio_logp, "
+            f"got {type(video_logp).__name__}/{type(audio_logp).__name__}"
+        )
+    if video_logp.shape != audio_logp.shape or video_logp.ndim != 1:
+        raise ValueError(
+            "Leo2 joint log-prob expected matching per-sample tensors shaped [B], "
+            f"got video={tuple(video_logp.shape)}, audio={tuple(audio_logp.shape)}"
+        )
     total = n_video + n_audio
     return (video_logp * n_video + audio_logp * n_audio) / total
 

@@ -37,20 +37,21 @@ backend:
     checkpoint_format: dcp
 
 sampling:
-  num_inference_steps: 10
+  num_inference_steps: 12
   guidance_scale: 1.0
   eta: 0.5
   sde_indices: null
   scheduler:
     _target_: unirl.sde.index_schedule.AllSDEScheduler
-    num_timesteps: 10
-    timestep_fraction: [0.0, 0.6]
-    num_sde_steps: 1
+    num_timesteps: 12
+    timestep_fraction: [0.0, 0.4166666667]
+    num_sde_steps: 2
     seed: 42
   init_same_noise: true
   height: 464
   width: 848
-  num_frames: 121
+  # Leo2 requires F = 4k + 1; 11 requested frames round down to 9.
+  num_frames: 9
   samples_per_prompt: ${group_size}
 
 stack:

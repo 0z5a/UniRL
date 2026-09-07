@@ -16,7 +16,7 @@ from omegaconf import OmegaConf
 from unirl.algorithms.diffusionnft import DiffusionNFT
 from unirl.models.leo2.bundle import _dcp_load_into, _make_inference_cache_config, _patch_router_dtype
 from unirl.models.leo2.conditions import Leo2Conditions
-from unirl.models.leo2.diffusion import Leo2DiffusionStage
+from unirl.models.leo2.diffusion import Leo2DiffusionStage, _combine_modality_logp
 from unirl.models.leo2.pipeline import Leo2Pipeline
 from unirl.models.leo2.preprocess import _records
 from unirl.models.leo2.text_embed import Leo2CondStage, _to_transport_tree
@@ -151,6 +151,47 @@ def test_leo2_audio_decode_returns_length_first_stereo() -> None:
     items = decoded.to_list()
     assert len(items) == 1
     assert tuple(items[0].waveform.shape) == (8, 2)
+
+
+def test_leo2_joint_log_prob_matches_flow_factory_element_weighting() -> None:
+    video = torch.tensor([2.0, 4.0])
+    audio = torch.tensor([8.0, 10.0])
+
+    actual = _combine_modality_logp(
+        video,
+        audio,
+        n_video=12,
+        n_audio=4,
+    )
+
+    torch.testing.assert_close(actual, (video * 12 + audio * 4) / 16)
+
+
+@pytest.mark.parametrize(
+    ("video", "audio", "n_video", "n_audio", "exception", "message"),
+    [
+        (torch.ones(2), torch.ones(2), True, 4, ValueError, "positive int n_video"),
+        (torch.ones(2), torch.ones(2), 12, 0, ValueError, "positive int n_audio"),
+        (torch.ones(2, 1), torch.ones(2, 1), 12, 4, ValueError, r"shaped \[B\]"),
+        (torch.ones(2), torch.ones(3), 12, 4, ValueError, "matching per-sample"),
+        (torch.ones(2), [1.0, 1.0], 12, 4, TypeError, "expected Tensor"),
+    ],
+)
+def test_leo2_joint_log_prob_rejects_invalid_component_contract(
+    video,
+    audio,
+    n_video,
+    n_audio,
+    exception,
+    message,
+) -> None:
+    with pytest.raises(exception, match=message):
+        _combine_modality_logp(
+            video,
+            audio,
+            n_video=n_video,
+            n_audio=n_audio,
+        )
 
 
 def test_leo2_av_generate_stores_audio_trajectory() -> None:
@@ -465,15 +506,15 @@ def test_leo2_motion_bilingual_flowgrpo_recipe_matches_requested_contract() -> N
     assert config.backend.fsdp_cfg.activation_checkpointing is True
     assert config.stack.num_updates_per_batch == 2
     assert config.sampling.guidance_scale == pytest.approx(1.0)
-    assert config.sampling.num_inference_steps == 10
-    assert config.sampling.num_frames == 121
+    assert config.sampling.num_inference_steps == 12
+    assert config.sampling.num_frames == 9
     assert config.sampling.sde_indices is None
 
     scheduler = instantiate(config.sampling.scheduler)
     for rollout_id in range(16):
         selected = scheduler.get_sde_indices(rollout_id)
-        assert len(selected) == 1
-        assert selected <= set(range(6))
+        assert len(selected) == 2
+        assert selected <= set(range(5))
 
 
 def test_leo2_preprocess_preserves_multiline_prompt_jsonl(tmp_path: Path) -> None:
