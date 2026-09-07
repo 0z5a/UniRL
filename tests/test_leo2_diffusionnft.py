@@ -446,6 +446,34 @@ def test_leo2_context_ir_flowgrpo_recipe_matches_requested_contract() -> None:
         assert selected <= set(range(5))
 
 
+def test_leo2_motion_bilingual_flowgrpo_recipe_matches_requested_contract() -> None:
+    path = Path(__file__).parents[1] / "examples/diffusion/leo2/leo2_t2v_flowgrpo_motion_bilingual.yaml"
+    config = OmegaConf.load(path)
+
+    assert config.num_devices == 64
+    assert config.num_groups == 32
+    assert config.group_size == 8
+    assert config.save_interval == 20
+    assert config.bundle.config.video_shift == pytest.approx(12.0)
+    assert config.bundle.config.context_parallel_size == 2
+    assert config.bundle.config.expert_parallel_size == 1
+    assert config.backend.optimizer_cfg.learning_rate == pytest.approx(3e-4)
+    assert config.backend.lora_cfg.rank == 128
+    assert config.backend.lora_cfg.alpha == 256
+    assert config.backend.fsdp_cfg.activation_checkpointing is True
+    assert config.stack.num_updates_per_batch == 2
+    assert config.sampling.guidance_scale == pytest.approx(1.0)
+    assert config.sampling.num_inference_steps == 10
+    assert config.sampling.num_frames == 121
+    assert config.sampling.sde_indices is None
+
+    scheduler = instantiate(config.sampling.scheduler)
+    for rollout_id in range(16):
+        selected = scheduler.get_sde_indices(rollout_id)
+        assert len(selected) == 1
+        assert selected <= set(range(6))
+
+
 def test_leo2_preprocess_preserves_multiline_prompt_jsonl(tmp_path: Path) -> None:
     manifest = tmp_path / "prompts.jsonl"
     manifest.write_text('{"prompt_id":"zh:1","prompt":"first line\\nsecond line","language":"zh"}\n')

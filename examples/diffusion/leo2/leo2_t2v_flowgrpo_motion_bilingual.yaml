@@ -1,0 +1,76 @@
+# @package _global_
+# 64-GPU trainside FlowGRPO over deduplicated bilingual + Video-Motion prompts.
+defaults:
+  - leo2_t2v_cached
+  - _self_
+
+num_devices: 64
+num_groups: 32
+group_size: 8
+batch_size: ${num_groups}
+rollout_chunk_prompts: ${num_groups}
+num_rollouts: 300
+adv_use_global_std: false
+save_interval: 20
+
+bundle:
+  config:
+    video_shift: 12.0
+    context_parallel_size: 2
+    expert_parallel_size: 1
+    enable_deepep: false
+    inference_cache_method: none
+
+backend:
+  optimizer_cfg:
+    learning_rate: 3.0e-4
+  lora_cfg:
+    rank: 128
+    alpha: 256
+  fsdp_cfg:
+    fsdp_mode: hybrid8
+    sp_size: ${bundle.config.context_parallel_size}
+    ep_size: ${bundle.config.expert_parallel_size}
+    activation_checkpointing: true
+    checkpoint_format: dcp
+
+sampling:
+  num_inference_steps: 10
+  guidance_scale: 1.0
+  eta: 0.5
+  sde_indices: null
+  scheduler:
+    _target_: unirl.sde.index_schedule.AllSDEScheduler
+    num_timesteps: 10
+    timestep_fraction: [0.0, 0.6]
+    num_sde_steps: 1
+    seed: 42
+  init_same_noise: true
+  height: 464
+  width: 848
+  num_frames: 121
+  samples_per_prompt: ${group_size}
+
+stack:
+  num_updates_per_batch: 2
+
+data_source:
+  args:
+    run:
+      data_path: ${oc.env:LEO2_PROMPT_FILE}
+      eval_data_path: ${oc.env:LEO2_EVAL_PROMPT_FILE,${oc.env:LEO2_PROMPT_FILE}}
+
+reward:
+  backend:
+    config:
+      frame_selection: uniform
+      num_score_frames: 4
+
+algorithm:
+  old_logp_source: rollout
+  rollout_replay_parity_action: raise
+
+logging:
+  project_name: ${oc.env:WANDB_PROJECT,leo2-rl}
+  run_name: leo2_flowgrpo_motion_bilingual_64gpu
+  tags: [leo2, flowgrpo, motion, bilingual, cached, 64gpu, lora-r128]
