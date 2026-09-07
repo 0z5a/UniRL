@@ -15,19 +15,9 @@ save_interval: 20
 
 bundle:
   config:
-    extra_hymm_args:
-      - --bot-task
-      - video
-      - --use-system-prompt
-      - li-dit-encode-visual-qwen-3.5
-      - --gate-impl
-      - deepseek
-      - --vae-type
-      - 16x16x4-48c-hy-v3_3-release2
     video_shift: 12.0
-    enable_audio: false
-    audio_joint_sde: false
-    audio_vae_on_gpu: false
+    enable_audio: true
+    audio_joint_sde: true
     context_parallel_size: 2
     expert_parallel_size: 1
     enable_deepep: false
