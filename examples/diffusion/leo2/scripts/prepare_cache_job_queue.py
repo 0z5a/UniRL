@@ -22,6 +22,11 @@ def main() -> None:
     parser.add_argument("--artifact-root", type=Path, required=True)
     parser.add_argument("--repo-root", type=Path, default=Path("/root/UniRL"))
     parser.add_argument("--queue", type=Path, required=True)
+    parser.add_argument(
+        "--config",
+        action="append",
+        help="Optional STEPS:GUIDANCE:SECONDS_PER_PROMPT; repeat for each configuration",
+    )
     args = parser.parse_args()
     if args.queue.exists():
         raise FileExistsError(f"refusing to overwrite queue: {args.queue}")
@@ -30,8 +35,23 @@ def main() -> None:
     if not isinstance(shards, list) or not shards:
         raise ValueError(f"shard manifest has no shards: {args.shard_manifest}")
 
+    configs = []
+    for raw in args.config or ():
+        try:
+            steps_text, guidance_text, seconds_text = raw.split(":")
+            config = (int(steps_text), int(guidance_text), float(seconds_text))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"expected --config STEPS:GUIDANCE:SECONDS_PER_PROMPT, got {raw!r}"
+            ) from exc
+        if config[0] <= 0 or config[1] <= 0 or config[2] <= 0:
+            raise ValueError(f"queue configuration values must be positive, got {config!r}")
+        configs.append(config)
+    if not configs:
+        configs = list(CONFIGS)
+
     jobs = []
-    for steps, guidance, seconds_per_prompt in CONFIGS:
+    for steps, guidance, seconds_per_prompt in configs:
         case_file = args.repo_root / f"examples/diffusion/leo2/data/context_ir_exact_s{steps}_g{guidance}.csv"
         if not case_file.is_file():
             raise FileNotFoundError(f"exact case file not found: {case_file}")
