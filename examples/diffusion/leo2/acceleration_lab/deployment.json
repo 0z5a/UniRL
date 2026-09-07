@@ -1,0 +1,10 @@
+{
+  "auth": "inherited Lab Hub Basic Auth",
+  "artifact_root": "/apdcephfs_fsgm3/share_305110755/hunyuan/bowenping/leo2_acceleration_benchmark",
+  "current_release": "/apdcephfs_fsgm3/share_305110755/hunyuan/bowenping/leo2_acceleration_benchmark/releases/current.json",
+  "incremental_refresh_seconds": 300,
+  "schema_version": "leo2-acceleration-deployment/1",
+  "viewer_path": "/apdcephfs_fsgm3/share_305110755/hunyuan/bowenping/leo2_acceleration_lab",
+  "viewer_port": 16023,
+  "viewer_route": "/leo2-acceleration/"
+}
