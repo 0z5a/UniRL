@@ -59,10 +59,21 @@ def _write_video_with_audio(
 
         samples = audio.float().cpu()
         if samples.ndim == 1:
-            samples = samples.unsqueeze(0)
-        if samples.shape[0] == 1:
-            samples = samples.expand(2, -1)
-        samples = samples.T
+            samples = samples[:, None]
+        elif samples.ndim != 2:
+            raise ValueError(
+                "AV media mux expected audio shaped [samples], [samples, channels], "
+                f"or [channels, samples], got {tuple(samples.shape)}"
+            )
+        if samples.shape[-1] not in (1, 2):
+            if samples.shape[0] not in (1, 2):
+                raise ValueError(
+                    "AV media mux expected one or two audio channels, "
+                    f"got shape {tuple(samples.shape)}"
+                )
+            samples = samples.T
+        if samples.shape[-1] == 1:
+            samples = samples.expand(-1, 2)
         samples = torch.clamp(samples, -1.0, 1.0)
         int16_samples = (samples * 32767.0).to(torch.int16)
 

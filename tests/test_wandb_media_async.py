@@ -33,12 +33,23 @@ def test_media_encoding_runs_off_the_training_thread() -> None:
 def test_pyav_mux_writes_video_and_audio_streams() -> None:
     av = pytest.importorskip("av")
     frames = np.zeros((2, 16, 16, 3), dtype=np.uint8)
-    audio = torch.zeros(2, 4800)
+    time = torch.arange(4800, dtype=torch.float32) / 48000
+    audio = torch.stack(
+        (
+            0.5 * torch.sin(2 * torch.pi * 440 * time),
+            torch.zeros_like(time),
+        ),
+        dim=1,
+    )
 
     path = _write_video_with_audio(frames, fps=8, audio=audio, audio_sample_rate=48000)
     try:
         with av.open(path) as container:
             assert len(container.streams.video) == 1
             assert len(container.streams.audio) == 1
+            decoded = [frame.to_ndarray() for frame in container.decode(audio=0)]
+            waveform = np.concatenate(decoded, axis=-1)
+            assert np.mean(waveform[0].astype(float) ** 2) > 0.05
+            assert np.mean(waveform[1].astype(float) ** 2) < 1e-6
     finally:
         os.unlink(path)
