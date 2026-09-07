@@ -1843,14 +1843,32 @@ class LeoModelBase(HunyuanMultimodalState):
             raise RuntimeError("Leo CFG cache conditional inputs requested while CFG cache is disabled")
         return self._leo_cfg_cache_controller.conditional_inputs(model_inputs)
 
-    def cfg_cache_record_exact(self, conditional: torch.Tensor, unconditional: torch.Tensor) -> None:
+    def cfg_cache_record_exact(
+        self,
+        conditional: torch.Tensor,
+        unconditional: torch.Tensor,
+        *,
+        modality: str = "video",
+    ) -> None:
         if self._leo_cfg_cache_controller is not None:
-            self._leo_cfg_cache_controller.record_exact(conditional, unconditional)
+            self._leo_cfg_cache_controller.record_exact(
+                conditional,
+                unconditional,
+                modality=modality,
+            )
 
-    def cfg_cache_reconstruct_unconditional(self, conditional: torch.Tensor) -> torch.Tensor:
+    def cfg_cache_reconstruct_unconditional(
+        self,
+        conditional: torch.Tensor,
+        *,
+        modality: str = "video",
+    ) -> torch.Tensor:
         if self._leo_cfg_cache_controller is None:
             raise RuntimeError("Leo CFG cache reconstruction requested while CFG cache is disabled")
-        return self._leo_cfg_cache_controller.reconstruct_unconditional(conditional)
+        return self._leo_cfg_cache_controller.reconstruct_unconditional(
+            conditional,
+            modality=modality,
+        )
 
     def get_printable_layers(self):
         if self._config.moe_layer_num_skipped == 0:

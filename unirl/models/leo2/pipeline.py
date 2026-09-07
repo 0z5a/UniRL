@@ -17,6 +17,8 @@ from unirl.types.sample import Sample
 
 from .bundle import Leo2Bundle
 from .config import (
+    LEO2_AUDIO_LATENT_CHANNELS,
+    LEO2_AUDIO_SAMPLE_RATE,
     LEO2_VAE_LATENT_CHANNELS,
     LEO2_VAE_SPATIAL,
     LEO2_VAE_TEMPORAL,
@@ -24,7 +26,7 @@ from .config import (
 )
 from .diffusion import Leo2DiffusionStage
 from .text_embed import Leo2CondStage
-from .vae import Leo2VideoDecodeStage
+from .vae import Leo2AudioDecodeStage, Leo2VideoDecodeStage
 
 
 class Leo2Pipeline(Pipeline):
@@ -37,6 +39,7 @@ class Leo2Pipeline(Pipeline):
         cond_stage: Leo2CondStage,
         diffusion: Leo2DiffusionStage,
         video_decode: Leo2VideoDecodeStage,
+        audio_decode: Leo2AudioDecodeStage | None,
         config: Leo2PipelineConfig,
     ) -> None:
         super().__init__()
@@ -44,6 +47,7 @@ class Leo2Pipeline(Pipeline):
         self.cond_stage = cond_stage
         self.diffusion = diffusion
         self.video_decode = video_decode
+        self.audio_decode = audio_decode
         self.config = config
 
     @classmethod
@@ -68,8 +72,13 @@ class Leo2Pipeline(Pipeline):
                 trajectory_precision=config.trajectory_precision,
                 logprob_precision=config.logprob_precision,
                 profile_forward=config.profile_forward,
+                enable_audio=config.enable_audio,
+                video_shift=config.video_shift,
+                audio_shift=config.audio_shift,
+                audio_joint_sde=config.audio_joint_sde,
             ),
             video_decode=Leo2VideoDecodeStage(bundle),
+            audio_decode=Leo2AudioDecodeStage(bundle) if config.enable_audio else None,
             config=config,
         )
 
@@ -134,11 +143,11 @@ class Leo2Pipeline(Pipeline):
                     video_size=(int(params.height), int(params.width)),
                     num_frames=int(params.num_frames),
                     video_fps=24,
-                    bot_task="video",
+                    bot_task="av" if self.config.enable_audio else "video",
                     use_system_prompt=self.bundle.use_system_prompt,
                     diff_guidance_scale=1.0,
                     diff_infer_steps=int(params.num_inference_steps),
-                    output_type={"visual": "latent"},
+                    output_type={"visual": "latent", "audio": "latent"},
                     verbose=0,
                 )
             latents = out.videos if hasattr(out, "videos") else out
@@ -187,12 +196,30 @@ class Leo2Pipeline(Pipeline):
             video_noise is not None,
             "Leo2Pipeline.generate: no initial latents from the driver x_T recipe.",
         )
+        audio_noise = None
+        if self.config.enable_audio:
+            blob = conditions.hymm[0]
+            audio_token_length = blob.get("audio_token_length")
+            require(
+                type(audio_token_length) is int and audio_token_length > 0,
+                "Leo2Pipeline.generate: AV conditions carry no positive audio_token_length",
+            )
+            audio_noise = recipe.resolve(
+                device=self.bundle.device,
+                salt="audio",
+                latent_shape=(LEO2_AUDIO_LATENT_CHANNELS, audio_token_length),
+            )
+            require(
+                audio_noise is not None,
+                "Leo2Pipeline.generate: no initial audio latents from the driver noise recipe",
+            )
 
         segment = self.diffusion.generate(
             conditions,
             params=params,
             sigmas=params.sigmas.to(self.bundle.device),
             initial_latents=video_noise,
+            initial_audio_latents=audio_noise,
             sde_indices=list(params.sde_indices) if params.sde_indices is not None else None,
             denoise_seed_keys=[str(sample_id) for sample_id in gen.sample_ids],
             denoise_base_seed=base_seed,
@@ -200,10 +227,23 @@ class Leo2Pipeline(Pipeline):
 
         final_latents = segment.latents_at(int(params.num_inference_steps))
         videos = self.video_decode.decode(final_latents)
+        primitives = {"video": videos}
+        primitive_metadata = {}
+        if self.config.enable_audio:
+            require(
+                self.audio_decode is not None and segment.aux_latents is not None,
+                "Leo2Pipeline.generate: AV rollout produced no audio decoder/trajectory",
+            )
+            final_audio_latents = segment.aux_latents_at(
+                int(params.num_inference_steps)
+            )
+            primitives["audio"] = self.audio_decode.decode(final_audio_latents)
+            primitive_metadata["audio"] = {"sample_rate": LEO2_AUDIO_SAMPLE_RATE}
 
         filled = gen.fill(
             segment=segment,
-            primitives={"video": videos},
+            primitives=primitives,
+            primitive_metadata=primitive_metadata,
             conditions=conditions.to_dict(),
         )
         return Sample(parts=[*sample.parts[:-1], filled], reward_compute_s=sample.reward_compute_s)

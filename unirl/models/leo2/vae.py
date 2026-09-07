@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 import torch
 
-from unirl.types.primitives import Video, Videos
+from unirl.types.primitives import Audio, Audios, Video, Videos
 
 if TYPE_CHECKING:
     from .bundle import Leo2Bundle
@@ -32,6 +32,26 @@ def video_vae_ctx(bundle: "Leo2Bundle"):
             if callable(getattr(vae, "clear_cache", None)):
                 vae.clear_cache()
             vae.to("cpu")
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+
+@contextmanager
+def audio_vae_ctx(bundle: "Leo2Bundle"):
+    """Host the frozen stereo audio VAE during decode."""
+    audio_vae = bundle.model.model_dict.get("audio_vae")
+    if audio_vae is None:
+        raise RuntimeError(
+            "Leo2 audio VAE is not loaded; set enable_audio=true and stage "
+            "audio_encoder/dual_channel_48k assets"
+        )
+    transient = not bundle.config.audio_vae_on_gpu
+    try:
+        audio_vae.to(bundle.device)
+        yield audio_vae
+    finally:
+        if transient:
+            audio_vae.to("cpu")
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
@@ -120,4 +140,40 @@ class Leo2VideoDecodeStage:
         )
 
 
-__all__ = ["Leo2VideoDecodeStage"]
+class Leo2AudioDecodeStage:
+    """Decode normalized Leo2 audio latents into stereo 48 kHz waveforms."""
+
+    def __init__(self, bundle: "Leo2Bundle") -> None:
+        self.bundle = bundle
+
+    @torch.no_grad()
+    def decode(self, latents: torch.Tensor) -> Audios:
+        if not isinstance(latents, torch.Tensor) or latents.ndim != 3:
+            raise TypeError(
+                "Leo2AudioDecodeStage expects [B,C,L] Tensor latents, "
+                f"got {type(latents).__name__} shape={getattr(latents, 'shape', None)}"
+            )
+        with audio_vae_ctx(self.bundle) as audio_vae:
+            audio = audio_vae.decode(
+                latents.to(device=self.bundle.device, dtype=torch.float32)
+            )
+        if not isinstance(audio, torch.Tensor) or audio.ndim != 3:
+            raise TypeError(
+                "Leo2 audio VAE decode must return [B,C,L] Tensor, "
+                f"got {type(audio).__name__} shape={getattr(audio, 'shape', None)}"
+            )
+        if int(audio.shape[1]) == 1:
+            audio = audio.repeat(1, 2, 1)
+        if int(audio.shape[1]) != 2:
+            raise ValueError(
+                f"Leo2 audio VAE must decode mono/stereo, got shape={tuple(audio.shape)}"
+            )
+        return Audios.from_list(
+            [
+                Audio(waveform=item.transpose(0, 1).contiguous().cpu())
+                for item in audio.float()
+            ]
+        )
+
+
+__all__ = ["Leo2AudioDecodeStage", "Leo2VideoDecodeStage", "audio_vae_ctx"]

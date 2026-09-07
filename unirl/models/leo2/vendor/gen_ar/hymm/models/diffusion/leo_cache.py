@@ -1020,6 +1020,9 @@ class LeoCFGCacheController:
         self._low_frequency_delta: torch.Tensor | None = None
         self._high_frequency_delta: torch.Tensor | None = None
         self._output_signature: tuple | None = None
+        self._audio_low_frequency_delta: torch.Tensor | None = None
+        self._audio_high_frequency_delta: torch.Tensor | None = None
+        self._audio_output_signature: tuple | None = None
 
     @torch.compiler.disable
     def begin_step(
@@ -1116,51 +1119,99 @@ class LeoCFGCacheController:
         return value
 
     @torch.compiler.disable
-    def record_exact(self, conditional: torch.Tensor, unconditional: torch.Tensor) -> None:
+    def record_exact(
+        self,
+        conditional: torch.Tensor,
+        unconditional: torch.Tensor,
+        *,
+        modality: str = "video",
+    ) -> None:
         """Store frequency-domain `(unconditional - conditional)` deltas."""
-        self._validate_outputs(conditional, unconditional, operation="record")
-        low_cond, high_cond = self._split_frequency(conditional.float())
-        low_uncond, high_uncond = self._split_frequency(unconditional.float())
-        self._low_frequency_delta = (low_uncond - low_cond).detach()
-        self._high_frequency_delta = (high_uncond - high_cond).detach()
-        self._output_signature = self._signature(conditional)
-        cache_bytes = (
-            self._low_frequency_delta.numel() * self._low_frequency_delta.element_size()
-            + self._high_frequency_delta.numel() * self._high_frequency_delta.element_size()
+        self._validate_outputs(
+            conditional,
+            unconditional,
+            operation="record",
+            modality=modality,
         )
-        self._peak_cache_bytes = max(self._peak_cache_bytes, cache_bytes)
+        low_cond, high_cond = self._split_frequency(
+            conditional.float(), modality=modality
+        )
+        low_uncond, high_uncond = self._split_frequency(
+            unconditional.float(), modality=modality
+        )
+        low_delta = (low_uncond - low_cond).detach()
+        high_delta = (high_uncond - high_cond).detach()
+        if modality == "video":
+            self._low_frequency_delta = low_delta
+            self._high_frequency_delta = high_delta
+            self._output_signature = self._signature(conditional)
+        elif modality == "audio":
+            self._audio_low_frequency_delta = low_delta
+            self._audio_high_frequency_delta = high_delta
+            self._audio_output_signature = self._signature(conditional)
+        else:
+            raise ValueError(f"Leo CFG cache modality must be video or audio, got {modality!r}")
+        cache_bytes = (
+            low_delta.numel() * low_delta.element_size()
+            + high_delta.numel() * high_delta.element_size()
+        )
+        resident_bytes = cache_bytes
+        for delta in (
+            self._low_frequency_delta,
+            self._high_frequency_delta,
+            self._audio_low_frequency_delta,
+            self._audio_high_frequency_delta,
+        ):
+            if delta is not None and delta is not low_delta and delta is not high_delta:
+                resident_bytes += delta.numel() * delta.element_size()
+        self._peak_cache_bytes = max(self._peak_cache_bytes, resident_bytes)
 
     @torch.compiler.disable
-    def reconstruct_unconditional(self, conditional: torch.Tensor) -> torch.Tensor:
+    def reconstruct_unconditional(
+        self,
+        conditional: torch.Tensor,
+        *,
+        modality: str = "video",
+    ) -> torch.Tensor:
         """Reconstruct the unconditional output for a conditional-only step."""
         if not self._reuse_step:
             raise RuntimeError("Leo CFG cache reconstruction requested for a full-compute step")
-        if self._low_frequency_delta is None or self._high_frequency_delta is None:
+        if modality == "video":
+            low_delta = self._low_frequency_delta
+            high_delta = self._high_frequency_delta
+            signature = self._output_signature
+        elif modality == "audio":
+            low_delta = self._audio_low_frequency_delta
+            high_delta = self._audio_high_frequency_delta
+            signature = self._audio_output_signature
+        else:
+            raise ValueError(f"Leo CFG cache modality must be video or audio, got {modality!r}")
+        if low_delta is None or high_delta is None:
             raise RuntimeError("Leo CFG cache has no frequency deltas to reuse")
-        if self._signature(conditional) != self._output_signature:
+        if self._signature(conditional) != signature:
             raise ValueError(
                 "Leo CFG cache conditional output signature changed: "
-                f"expected {self._output_signature}, got {self._signature(conditional)}"
+                f"expected {signature}, got {self._signature(conditional)}"
             )
         step = self._step_index - 1
         if self.config.low_frequency_start_step <= step < self.config.low_frequency_end_step:
-            self._low_frequency_delta = (
-                self._low_frequency_delta * self.config.low_frequency_weight
-            )
+            low_delta = low_delta * self.config.low_frequency_weight
         if self.config.high_frequency_start_step <= step < self.config.high_frequency_end_step:
-            self._high_frequency_delta = (
-                self._high_frequency_delta * self.config.high_frequency_weight
-            )
-        low_cond, high_cond = self._split_frequency(conditional.float())
-        spectrum = (
-            low_cond
-            + self._low_frequency_delta
-            + high_cond
-            + self._high_frequency_delta
+            high_delta = high_delta * self.config.high_frequency_weight
+        if modality == "video":
+            self._low_frequency_delta = low_delta
+            self._high_frequency_delta = high_delta
+        else:
+            self._audio_low_frequency_delta = low_delta
+            self._audio_high_frequency_delta = high_delta
+        low_cond, high_cond = self._split_frequency(
+            conditional.float(), modality=modality
         )
-        reconstructed = torch.fft.ifft2(
-            torch.fft.ifftshift(spectrum, dim=(-2, -1)),
-            dim=(-2, -1),
+        spectrum = low_cond + low_delta + high_cond + high_delta
+        dims = (-2, -1) if modality == "video" else (-1,)
+        reconstructed = torch.fft.ifftn(
+            torch.fft.ifftshift(spectrum, dim=dims),
+            dim=dims,
         ).real
         return reconstructed.to(dtype=conditional.dtype)
 
@@ -1188,6 +1239,7 @@ class LeoCFGCacheController:
         unconditional: torch.Tensor,
         *,
         operation: str,
+        modality: str,
     ) -> None:
         if not isinstance(conditional, torch.Tensor) or not isinstance(unconditional, torch.Tensor):
             raise TypeError(
@@ -1200,24 +1252,47 @@ class LeoCFGCacheController:
                 f"{tuple(conditional.shape)}/{conditional.dtype} and "
                 f"{tuple(unconditional.shape)}/{unconditional.dtype}"
             )
-        if conditional.ndim != 5 or int(conditional.shape[0]) != 1:
+        expected_ndim = 5 if modality == "video" else 3 if modality == "audio" else None
+        if expected_ndim is None:
+            raise ValueError(f"Leo CFG cache modality must be video or audio, got {modality!r}")
+        if conditional.ndim != expected_ndim or int(conditional.shape[0]) != 1:
             raise ValueError(
-                "Leo CFG cache expects branch outputs shaped [1,C,T,H,W], "
-                f"got {tuple(conditional.shape)}"
+                f"Leo CFG cache expects {modality} branch output ndim={expected_ndim} "
+                f"with batch 1, got {tuple(conditional.shape)}"
             )
 
     @staticmethod
-    def _split_frequency(value: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        spectrum = torch.fft.fftshift(torch.fft.fft2(value, dim=(-2, -1)), dim=(-2, -1))
-        height, width = value.shape[-2:]
-        radius = min(height, width) // 5
-        y_grid, x_grid = torch.meshgrid(
-            torch.arange(height, device=value.device),
-            torch.arange(width, device=value.device),
-            indexing="ij",
+    def _split_frequency(
+        value: torch.Tensor,
+        *,
+        modality: str,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if modality == "video":
+            dims = (-2, -1)
+            height, width = value.shape[-2:]
+            radius = min(height, width) // 5
+            y_grid, x_grid = torch.meshgrid(
+                torch.arange(height, device=value.device),
+                torch.arange(width, device=value.device),
+                indexing="ij",
+            )
+            mask = (x_grid - width // 2).square() + (
+                y_grid - height // 2
+            ).square() <= radius**2
+            mask = mask.reshape(*([1] * (value.ndim - 2)), height, width)
+        elif modality == "audio":
+            dims = (-1,)
+            length = int(value.shape[-1])
+            radius = max(length // 5, 1)
+            positions = torch.arange(length, device=value.device)
+            mask = (positions - length // 2).abs() <= radius
+            mask = mask.reshape(*([1] * (value.ndim - 1)), length)
+        else:
+            raise ValueError(f"Leo CFG cache modality must be video or audio, got {modality!r}")
+        spectrum = torch.fft.fftshift(
+            torch.fft.fftn(value, dim=dims),
+            dim=dims,
         )
-        mask = (x_grid - width // 2).square() + (y_grid - height // 2).square() <= radius**2
-        mask = mask.reshape(*([1] * (value.ndim - 2)), height, width)
         return spectrum * mask, spectrum * ~mask
 
     def _validate_distributed_config(

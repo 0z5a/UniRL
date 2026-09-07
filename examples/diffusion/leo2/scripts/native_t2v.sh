@@ -40,10 +40,13 @@ exec "${PYTHON_BIN}" -m torch.distributed.run --nproc_per_node=8 \
   --testsets "${TESTSETS}" \
   --sample-save-base "${OUTPUT_DIR}" \
   --task-id leo2_native_t2v \
-  --bot-task video \
+  --bot-task av \
   --use-system-prompt li-dit-encode-visual-qwen-3.5 \
   --gate-impl deepseek \
   --vae-type 16x16x4-48c-hy-v3_3-release2 \
+  --use-audio-vae \
+  --audio-vae-type dual_channel_48k \
+  --audio-vae-latent-dim 96 \
   --image-size "${IMAGE_SIZE}" \
   --num-frames "${NUM_FRAMES}" \
   --video-fps 24 \

@@ -104,6 +104,48 @@ def test_cfg_cache_frequency_weights_accumulate_between_exact_steps() -> None:
     torch.testing.assert_close(second, torch.full_like(second, 4.0))
 
 
+def test_cfg_cache_reconstructs_audio_unconditional_branch() -> None:
+    controller = _controller()
+    video_reference = torch.zeros(2, 1, 2, 4, 4)
+    video_conditional = torch.zeros(1, 1, 2, 4, 4)
+    video_unconditional = torch.ones_like(video_conditional)
+    audio_conditional = torch.randn(1, 96, 16)
+    audio_unconditional = torch.randn_like(audio_conditional)
+    with torch.no_grad(), controller.context("av-test"):
+        assert (
+            controller.begin_step(
+                guidance_enabled=True,
+                reference=video_reference,
+                leader_block=object(),
+            )
+            is False
+        )
+        controller.record_exact(video_conditional, video_unconditional)
+        controller.record_exact(
+            audio_conditional,
+            audio_unconditional,
+            modality="audio",
+        )
+        assert (
+            controller.begin_step(
+                guidance_enabled=True,
+                reference=video_reference,
+                leader_block=object(),
+            )
+            is True
+        )
+        reconstructed = controller.reconstruct_unconditional(
+            audio_conditional,
+            modality="audio",
+        )
+    torch.testing.assert_close(
+        reconstructed,
+        audio_unconditional,
+        atol=1e-5,
+        rtol=1e-5,
+    )
+
+
 def test_cfg_cache_guidance_one_is_a_strict_bypass() -> None:
     controller = _controller()
     with controller.context("test"):

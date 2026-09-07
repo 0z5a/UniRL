@@ -11,12 +11,12 @@ from typing import TYPE_CHECKING, Any
 
 import torch
 
-from .config import _QWEN_ASSET_FILES, _VAE_ASSET_FILES
+from .config import _AUDIO_VAE_ASSET_FILES, _QWEN_ASSET_FILES, _VAE_ASSET_FILES
 
 if TYPE_CHECKING:
     from .conditions import Leo2Conditions
 
-_SCHEMA = 1
+_SCHEMA = 2
 PREPROCESSING_SEED = 0
 
 
@@ -85,6 +85,11 @@ class Leo2PreprocessingCache:
         assets = Path(config.assets_base)
         asset_files = [assets / "text_encoder/Qwen3.5-9B" / name for name in _QWEN_ASSET_FILES]
         asset_files += [assets / "image_encoder/vae_3d/hyvae_vid_leo2.0_v2.5.1_release2" / n for n in _VAE_ASSET_FILES]
+        if config.enable_audio:
+            asset_files += [
+                assets / "audio_encoder/dual_channel_48k" / name
+                for name in _AUDIO_VAE_ASSET_FILES
+            ]
         source_files = sorted((repo / "hymm").rglob("*.py")) + sorted((repo / "processors").rglob("*.py"))
         identity = {
             "schema": _SCHEMA,
@@ -92,6 +97,8 @@ class Leo2PreprocessingCache:
             "config": hashlib.sha256(Path(config.config_yaml).read_bytes()).hexdigest(),
             "generation": hashlib.sha256(Path(config.generation_config_path).read_bytes()).hexdigest(),
             "args": list(config.extra_hymm_args),
+            "enable_audio": bool(config.enable_audio),
+            "audio_shift": float(config.audio_shift),
             "assets": {str(p.relative_to(assets)): _file_identity(p) for p in asset_files},
             "native_code": {str(p.relative_to(repo)): hashlib.sha256(p.read_bytes()).hexdigest() for p in source_files},
             "adapter_code": {

@@ -1,6 +1,6 @@
 {
   "audio_sample_rate": 48000,
-  "bot_task": "video",
+  "bot_task": "av",
   "diff_guidance_scale": 1.0,
   "diff_guidance_scale_audio": 1.0,
   "diff_infer_steps": 50,

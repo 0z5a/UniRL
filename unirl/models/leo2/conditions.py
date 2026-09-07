@@ -125,7 +125,13 @@ def _validate_hymm_blob(blob: Any, *, path: str) -> None:
     if invalid_keys:
         raise TypeError(f"Leo2Conditions.{path} keys must be strings, got {invalid_keys[:8]}")
     required = {"input_ids", "model_kwargs", "image_size", "video_duration"}
-    allowed = required | {"captured_call", "_device"}
+    allowed = required | {
+        "audio_duration",
+        "audio_token_length",
+        "training_audio_noise",
+        "captured_call",
+        "_device",
+    }
     missing = sorted(required - set(blob))
     unknown = sorted(set(blob) - allowed)
     if missing or unknown:
@@ -170,6 +176,38 @@ def _validate_hymm_blob(blob: Any, *, path: str) -> None:
         raise ValueError(f"Leo2Conditions.{path}.image_size must contain two positive integers")
     if type(blob["video_duration"]) is not int or blob["video_duration"] <= 0:
         raise ValueError(f"Leo2Conditions.{path}.video_duration must be a positive integer")
+    audio_fields = {
+        "audio_duration",
+        "audio_token_length",
+        "training_audio_noise",
+    }
+    present_audio_fields = audio_fields & set(blob)
+    if present_audio_fields and present_audio_fields != audio_fields:
+        raise ValueError(
+            f"Leo2Conditions.{path} audio fields must be all present or absent, "
+            f"got {sorted(present_audio_fields)}"
+        )
+    if present_audio_fields:
+        if type(blob["audio_duration"]) is not int or blob["audio_duration"] <= 0:
+            raise ValueError(
+                f"Leo2Conditions.{path}.audio_duration must be a positive sample count"
+            )
+        if type(blob["audio_token_length"]) is not int or blob["audio_token_length"] <= 0:
+            raise ValueError(
+                f"Leo2Conditions.{path}.audio_token_length must be a positive integer"
+            )
+        audio_noise = blob["training_audio_noise"]
+        if (
+            not isinstance(audio_noise, torch.Tensor)
+            or audio_noise.ndim != 3
+            or int(audio_noise.shape[0]) != 1
+            or int(audio_noise.shape[-1]) != blob["audio_token_length"]
+        ):
+            raise ValueError(
+                f"Leo2Conditions.{path}.training_audio_noise must be [1,C,"
+                f"{blob['audio_token_length']}], got "
+                f"{type(audio_noise).__name__} shape={getattr(audio_noise, 'shape', None)}"
+            )
     if "_device" in blob and not isinstance(blob["_device"], str):
         raise TypeError(f"Leo2Conditions.{path}._device must be a string")
     _validate_transport_tree(blob, path=f"Leo2Conditions.{path}")

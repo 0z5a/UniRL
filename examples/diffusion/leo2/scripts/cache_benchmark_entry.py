@@ -805,6 +805,7 @@ def _validate_cache_stats(
 def _save_latent(
     latent: Any,
     *,
+    audio_latent: Any = None,
     options: BenchmarkOptions,
     prompt_index: int,
     prompt_hash: str,
@@ -816,6 +817,10 @@ def _save_latent(
 
     if not isinstance(latent, torch.Tensor):
         raise TypeError(f"Expected final video latent tensor, got {type(latent).__name__}.")
+    if audio_latent is not None and not isinstance(audio_latent, torch.Tensor):
+        raise TypeError(
+            f"Expected final audio latent Tensor or None, got {type(audio_latent).__name__}."
+        )
     filename = f"{prompt_index:02d}_{seed}.pt"
     digest = None
     if not dist.is_initialized() or dist.get_rank() == 0:
@@ -825,6 +830,11 @@ def _save_latent(
         torch.save(
             {
                 "latent": latent.detach().to(device="cpu").contiguous(),
+                "audio_latent": (
+                    audio_latent.detach().to(device="cpu").contiguous()
+                    if isinstance(audio_latent, torch.Tensor)
+                    else None
+                ),
                 "latent_space": "denormalized_vae_input",
                 "prompt_hash": prompt_hash,
                 "prompt_index": prompt_index,
@@ -882,6 +892,7 @@ def _install_instrumentation(options: BenchmarkOptions) -> None:
             payload = {
                 "baseline_case": options.baseline_case,
                 "benchmark_schema_version": 2,
+                "bot_task": str(get_args().bot_task),
                 "cache_decision_supported": sync_plan is not None if options.method in TOPOLOGY_METHODS else None,
                 "cache_enabled": bool(self.model.is_cache_enabled),
                 "cache_method": options.method,
@@ -1046,6 +1057,7 @@ def _install_instrumentation(options: BenchmarkOptions) -> None:
             raise RuntimeError(reason)
         latent_file, latent_sha256 = _save_latent(
             latent_outputs.videos,
+            audio_latent=getattr(latent_outputs, "audios", None),
             options=options,
             prompt_index=prompt_index,
             prompt_hash=prompt_hash,
@@ -1060,6 +1072,7 @@ def _install_instrumentation(options: BenchmarkOptions) -> None:
             payload = {
                 "baseline_case": options.baseline_case,
                 "benchmark_schema_version": 2,
+                "bot_task": str(get_args().bot_task),
                 "cache_method": options.method,
                 "cache_method_options": method_options,
                 "cache_threshold": options.cache_threshold,
@@ -1072,6 +1085,11 @@ def _install_instrumentation(options: BenchmarkOptions) -> None:
                 "latent_file": latent_file,
                 "latent_sha256": latent_sha256,
                 "latent_shape": list(latent_outputs.videos.shape),
+                "audio_latent_shape": (
+                    list(latent_outputs.audios.shape)
+                    if isinstance(getattr(latent_outputs, "audios", None), torch.Tensor)
+                    else None
+                ),
                 "max_memory_allocated_bytes": int(allocated),
                 "max_memory_reserved_bytes": int(reserved),
                 "num_frames": int(get_args().num_frames),

@@ -35,6 +35,10 @@ bundle:
     ckpt_path: ${oc.env:LEO2_CKPT_DIR}
     assets_base: ${oc.env:LEO2_ASSETS_BASE}
     video_shift: 3.0
+    audio_shift: 3.0
+    enable_audio: true
+    audio_joint_sde: false
+    audio_vae_on_gpu: true
     text_encoder_gpu_transient: true
 
 pipeline:

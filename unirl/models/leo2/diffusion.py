@@ -14,12 +14,24 @@ from unirl.models.types.diffusion import DiffusionStage
 from unirl.models.types.replay_result import ReplayResult
 from unirl.sde.kernels import StepStrategy
 from unirl.sde.noise import make_denoise_step_generators
+from unirl.sde.runtime import get_sigma_schedule
 from unirl.types.sampling import DiffusionSamplingParams, compute_trajectory_positions
 from unirl.types.segments.latent import LatentSegment, make_video_segment
 from unirl.utils.dtypes import parse_torch_dtype
 
 from .conditions import Leo2Conditions
 from .config import LEO2_TIMESTEP_SCALE
+
+
+def _combine_modality_logp(
+    video_logp: torch.Tensor,
+    audio_logp: torch.Tensor,
+    *,
+    n_video: int,
+    n_audio: int,
+) -> torch.Tensor:
+    total = n_video + n_audio
+    return (video_logp * n_video + audio_logp * n_audio) / total
 
 
 class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
@@ -36,11 +48,30 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
         trajectory_precision: str = "bf16",
         logprob_precision: str = "fp32",
         profile_forward: bool = False,
+        enable_audio: bool = True,
+        video_shift: float = 3.0,
+        audio_shift: float = 3.0,
+        audio_joint_sde: bool = False,
     ) -> None:
         if type(profile_forward) is not bool:
             raise TypeError(
                 "Leo2DiffusionStage expected bool for profile_forward, "
                 f"got {type(profile_forward).__name__}: {profile_forward!r}"
+            )
+        if type(enable_audio) is not bool or type(audio_joint_sde) is not bool:
+            raise TypeError(
+                "Leo2DiffusionStage enable_audio/audio_joint_sde must be bool, "
+                f"got {enable_audio!r}/{audio_joint_sde!r}"
+            )
+        if (
+            not isinstance(video_shift, (int, float))
+            or float(video_shift) <= 0
+            or not isinstance(audio_shift, (int, float))
+            or float(audio_shift) <= 0
+        ):
+            raise ValueError(
+                "Leo2DiffusionStage video_shift/audio_shift must be positive numeric, "
+                f"got {video_shift!r}/{audio_shift!r}"
             )
         self.bundle = bundle
         self.strategy = strategy
@@ -48,6 +79,26 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
         self.trajectory_dtype = parse_torch_dtype(trajectory_precision, field_name="trajectory_precision")
         self.logprob_dtype = parse_torch_dtype(logprob_precision, field_name="logprob_precision")
         self.profile_forward = profile_forward
+        self.enable_audio = bool(enable_audio)
+        self.video_shift = float(video_shift)
+        self.audio_shift = float(audio_shift)
+        self.audio_joint_sde = bool(audio_joint_sde)
+
+    def audio_schedule(self, video_schedule: torch.Tensor) -> torch.Tensor:
+        """Build Leo2's independent audio sigma grid."""
+        return get_sigma_schedule(
+            num_steps=int(video_schedule.shape[0]) - 1,
+            shift=self.audio_shift,
+            device=video_schedule.device,
+        ).to(dtype=video_schedule.dtype)
+
+    def audio_sigma_from_video(self, video_sigma: torch.Tensor) -> torch.Tensor:
+        """Map one shifted video sigma to the corresponding audio sigma."""
+        denominator = self.video_shift - (self.video_shift - 1.0) * video_sigma
+        base_sigma = video_sigma / denominator
+        return (self.audio_shift * base_sigma) / (
+            1.0 + (self.audio_shift - 1.0) * base_sigma
+        )
 
     def trainable_module(self) -> torch.nn.Module:
         return self.bundle.trainable_module()
@@ -66,15 +117,17 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
         # Native prepare_channel_cond_latents(None, latents), specialized to the supported T2V path.
         return torch.zeros_like(latents), torch.zeros_like(latents[:, :1])
 
-    def predict_noise(
+    def predict_joint_noise(
         self,
         blob: dict,
         *,
         sample: torch.Tensor,
         sigma: torch.Tensor,
         channel_cond: Tuple[Optional[torch.Tensor], Optional[torch.Tensor]],
-    ) -> torch.Tensor:
-        """One forward -> unpacked velocity ``[B, C, T, H, W]``."""
+        audio_sample: Optional[torch.Tensor] = None,
+        audio_sigma: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        """One forward -> unpacked video and optional audio velocities."""
         from .bundle import ensure_hy_parallel_state
 
         # Cheap dict check after the first call; see ensure_hy_parallel_state.
@@ -105,13 +158,25 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
         else:
             latent_model_input = sample
         t_expand = (sigma.to(sample.device) * LEO2_TIMESTEP_SCALE).reshape(1).repeat(latent_model_input.shape[0])
+        if (audio_sample is None) != (audio_sigma is None):
+            raise ValueError(
+                "Leo2 joint prediction requires audio_sample and audio_sigma together, "
+                f"got audio_sample={audio_sample is not None}, audio_sigma={audio_sigma is not None}"
+            )
+        audio_t_expand = (
+            None
+            if audio_sigma is None
+            else (audio_sigma.to(sample.device) * LEO2_TIMESTEP_SCALE)
+            .reshape(1)
+            .repeat(audio_sample.shape[0])
+        )
 
         model_inputs = model.prepare_inputs_for_generation(
             blob["input_ids"],
             latents=latent_model_input,
             timesteps=t_expand,
-            audio_latents=None,
-            audio_timesteps=None,
+            audio_latents=audio_sample,
+            audio_timesteps=audio_t_expand,
             **blob["model_kwargs"],
         )
         _dbg = getattr(self, "_mem_calls", 0)
@@ -141,6 +206,30 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
         pred = pred.to(dtype=torch.float32)
         if pred.ndim == 5 and pred.size(2) == 1 and sample.ndim == 4:
             pred = pred.squeeze(2)
+        audio_pred = model_output.get("audio_diffusion_prediction", None)
+        if audio_sample is not None:
+            require(
+                audio_pred is not None,
+                "Leo2DiffusionStage: AV forward returned no audio_diffusion_prediction",
+            )
+            audio_pred = audio_pred.to(dtype=torch.float32)
+        return pred, audio_pred
+
+    def predict_noise(
+        self,
+        blob: dict,
+        *,
+        sample: torch.Tensor,
+        sigma: torch.Tensor,
+        channel_cond: Tuple[Optional[torch.Tensor], Optional[torch.Tensor]],
+    ) -> torch.Tensor:
+        """Compatibility wrapper for video-only single-step objectives."""
+        pred, _ = self.predict_joint_noise(
+            blob,
+            sample=sample,
+            sigma=sigma,
+            channel_cond=channel_cond,
+        )
         return pred
 
     # -------------------------------------------------------------- rollout
@@ -151,6 +240,7 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
         params: DiffusionSamplingParams,
         sigmas: torch.Tensor,
         initial_latents: torch.Tensor,
+        initial_audio_latents: Optional[torch.Tensor] = None,
         sde_indices: Optional[List[int]] = None,
         denoise_seed_keys: Optional[List[str]] = None,
         denoise_base_seed: int = 0,
@@ -183,7 +273,7 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
                 for p in m.parameters()
                 if isinstance(p, DTensor) or p.is_cuda
             )
-            for key in ("text_encoder", "vae"):
+            for key in ("text_encoder", "vae", "audio_vae"):
                 aux = m.model_dict.get(key) if hasattr(m, "model_dict") else None
                 if aux is not None and hasattr(aux, "parameters"):
                     ps = list(aux.parameters())
@@ -198,6 +288,15 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
                 flush=True,
             )
         x = initial_latents.to(device=device, dtype=self.trajectory_dtype)
+        audio_sigmas = self.audio_schedule(sigmas) if self.enable_audio else None
+        if self.enable_audio:
+            require(
+                initial_audio_latents is not None,
+                "Leo2DiffusionStage AV generation requires initial_audio_latents",
+            )
+            a = initial_audio_latents.to(device=device, dtype=self.trajectory_dtype)
+        else:
+            a = None
         channel_cond = self._prep_channel_cond(blob, x)
 
         sde_sorted = sorted(sde_indices) if sde_indices is not None else list(range(num_steps))
@@ -208,9 +307,12 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
         needed = set(compute_trajectory_positions(sde_sorted, num_steps)) | {num_steps}
 
         stored_pairs: List[Tuple[int, torch.Tensor]] = []
+        stored_audio: List[torch.Tensor] = []
         sde_logp_list: List[torch.Tensor] = []
         if 0 in needed:
             stored_pairs.append((0, x.detach().clone()))
+            if a is not None:
+                stored_audio.append(a.detach().clone())
 
         model = self.bundle.model
         cache_context_factory = getattr(model, "cache_context", None)
@@ -227,7 +329,27 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
                     if step_eta > 0.0 and denoise_seed_keys is not None
                     else None
                 )
-                pred = self.predict_noise(blob, sample=x, sigma=sigmas[step_idx], channel_cond=channel_cond)
+                if self.enable_audio:
+                    pred, audio_pred = self.predict_joint_noise(
+                        blob,
+                        sample=x,
+                        sigma=sigmas[step_idx],
+                        channel_cond=channel_cond,
+                        audio_sample=a,
+                        audio_sigma=(
+                            audio_sigmas[step_idx]
+                            if audio_sigmas is not None
+                            else None
+                        ),
+                    )
+                else:
+                    pred = self.predict_noise(
+                        blob,
+                        sample=x,
+                        sigma=sigmas[step_idx],
+                        channel_cond=channel_cond,
+                    )
+                    audio_pred = None
                 x_next, log_prob, _ = self.strategy.denoise(
                     noise_pred=pred,
                     sample=x.to(torch.float32),
@@ -238,9 +360,33 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
                     step_index=step_idx,
                 )
                 x = x_next.to(dtype=self.trajectory_dtype)
+                audio_log_prob = None
+                if a is not None:
+                    require(
+                        audio_pred is not None and audio_sigmas is not None,
+                        "Leo2DiffusionStage AV step requires audio prediction and schedule",
+                    )
+                    a_next, audio_log_prob, _ = self.strategy.denoise(
+                        noise_pred=audio_pred,
+                        sample=a.to(torch.float32),
+                        sigma=audio_sigmas[step_idx],
+                        sigma_next=audio_sigmas[step_idx + 1],
+                        eta=step_eta if self.audio_joint_sde else 0.0,
+                        step_index=step_idx,
+                    )
+                    a = a_next.to(dtype=self.trajectory_dtype)
                 if (step_idx + 1) in needed:
                     stored_pairs.append((step_idx + 1, x.detach().clone()))
+                    if a is not None:
+                        stored_audio.append(a.detach().clone())
                 if log_prob is not None:
+                    if self.audio_joint_sde and audio_log_prob is not None and a is not None:
+                        log_prob = _combine_modality_logp(
+                            log_prob,
+                            audio_log_prob,
+                            n_video=x[0].numel(),
+                            n_audio=a[0].numel(),
+                        )
                     sde_logp_list.append(log_prob.to(dtype=self.logprob_dtype))
 
         cache_stats_factory = getattr(model, "cache_stats", None)
@@ -265,6 +411,11 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
             sde_logp=torch.stack(sde_logp_list, dim=1) if sde_logp_list else None,
             sde_indices=(torch.tensor(sde_sorted, dtype=torch.long, device=device) if sde_sorted else None),
             initial_latents=initial_latents.detach().clone(),
+            aux_latents=(
+                torch.stack(stored_audio, dim=1)
+                if stored_audio
+                else None
+            ),
         )
 
     # ---------------------------------------------------------------- train
@@ -287,6 +438,12 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
         blob = conditions.hymm[0]
 
         sigmas = segment.sigmas.to(self.bundle.device)
+        audio_sigmas = self.audio_schedule(sigmas) if self.enable_audio else None
+        if self.enable_audio:
+            require(
+                segment.aux_latents is not None,
+                "Leo2DiffusionStage AV replay requires segment.aux_latents",
+            )
         stored = [int(i) for i in segment.sde_indices.tolist()]
         targets = [int(i) for i in (step_indices if step_indices is not None else stored)]
 
@@ -297,9 +454,21 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
             for step_idx in targets:
                 x = segment.latents_at(step_idx).to(self.bundle.device)
                 prev_x = segment.latents_at(step_idx + 1).to(self.bundle.device)
+                a = (
+                    segment.aux_latents_at(step_idx).to(self.bundle.device)
+                    if self.enable_audio
+                    else None
+                )
                 if channel_cond is None:
                     channel_cond = self._prep_channel_cond(blob, x)
-                pred = self.predict_noise(blob, sample=x, sigma=sigmas[step_idx], channel_cond=channel_cond)
+                pred, audio_pred = self.predict_joint_noise(
+                    blob,
+                    sample=x,
+                    sigma=sigmas[step_idx],
+                    channel_cond=channel_cond,
+                    audio_sample=a,
+                    audio_sigma=audio_sigmas[step_idx] if audio_sigmas is not None else None,
+                )
                 _, log_prob, mean = self.strategy.denoise(
                     noise_pred=pred,
                     sample=x.to(torch.float32),
@@ -309,6 +478,29 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
                     prev_sample=prev_x.to(torch.float32),
                     step_index=step_idx,
                 )
+                if self.audio_joint_sde:
+                    require(
+                        a is not None
+                        and audio_pred is not None
+                        and audio_sigmas is not None,
+                        "Leo2DiffusionStage joint audio replay is missing audio state",
+                    )
+                    prev_a = segment.aux_latents_at(step_idx + 1).to(self.bundle.device)
+                    _, audio_log_prob, _ = self.strategy.denoise(
+                        noise_pred=audio_pred,
+                        sample=a.to(torch.float32),
+                        sigma=audio_sigmas[step_idx],
+                        sigma_next=audio_sigmas[step_idx + 1],
+                        eta=float(params.eta),
+                        prev_sample=prev_a.to(torch.float32),
+                        step_index=step_idx,
+                    )
+                    log_prob = _combine_modality_logp(
+                        log_prob,
+                        audio_log_prob,
+                        n_video=x[0].numel(),
+                        n_audio=a[0].numel(),
+                    )
                 log_probs.append(log_prob.to(dtype=self.logprob_dtype))
                 means.append(mean)
 
@@ -352,6 +544,29 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
         sample = sample.to(device=self.bundle.device, dtype=self.trajectory_dtype)
         channel_cond = self._prep_channel_cond(blob, sample)
         with self._autocast():
+            if self.enable_audio:
+                audio_noise = blob.get("training_audio_noise")
+                require(
+                    isinstance(audio_noise, torch.Tensor),
+                    "Leo2 AV single-step training requires conditions.training_audio_noise",
+                )
+                audio_sigma = self.audio_sigma_from_video(sigma_values[0])
+                audio_sample = (
+                    audio_noise.to(
+                        device=self.bundle.device,
+                        dtype=self.trajectory_dtype,
+                    )
+                    * audio_sigma
+                )
+                pred, _ = self.predict_joint_noise(
+                    blob,
+                    sample=sample,
+                    sigma=sigma_values[0],
+                    channel_cond=channel_cond,
+                    audio_sample=audio_sample,
+                    audio_sigma=audio_sigma,
+                )
+                return pred
             return self.predict_noise(
                 blob,
                 sample=sample,

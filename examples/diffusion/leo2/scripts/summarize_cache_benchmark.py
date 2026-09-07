@@ -136,18 +136,35 @@ def _probe_video(path: Path, *, expected_frames: int, expected_fps: float) -> di
 
 def _validate_latents(case_dir: Path, requests: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Check every request's latent file and recorded content digest."""
+    import torch
+
     validation = []
     for request in requests:
         filename = request.get("latent_file")
         path = case_dir / "latents" / filename if filename else None
         exists = path is not None and path.is_file()
         digest = _sha256(path) if exists else None
+        expected_audio_shape = request.get("audio_latent_shape")
+        audio_valid = expected_audio_shape is None
+        if exists and expected_audio_shape is not None:
+            payload = torch.load(path, map_location="cpu", weights_only=True)
+            audio_latent = payload.get("audio_latent") if isinstance(payload, dict) else None
+            audio_valid = (
+                isinstance(audio_latent, torch.Tensor)
+                and list(audio_latent.shape) == list(expected_audio_shape)
+                and torch.isfinite(audio_latent).all().item()
+            )
         validation.append(
             {
                 "path": str(path) if path else None,
                 "prompt_hash": request.get("prompt_hash"),
                 "sha256": digest,
-                "valid": exists and digest == request.get("latent_sha256"),
+                "audio_valid": audio_valid,
+                "valid": (
+                    exists
+                    and digest == request.get("latent_sha256")
+                    and audio_valid
+                ),
             }
         )
     return validation

@@ -127,6 +127,7 @@ def save_video_audio(
         str(save_path),
         codec="libx264",
         audio_codec="aac",
+        audio_fps=sample_rate,
         temp_audiofile=temp_audiofile,
     )
 

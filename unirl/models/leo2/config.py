@@ -11,6 +11,8 @@ LEO2_VAE_LATENT_CHANNELS = 48
 LEO2_VAE_SPATIAL = 16
 LEO2_VAE_TEMPORAL = 4
 LEO2_TIMESTEP_SCALE = 1000.0
+LEO2_AUDIO_LATENT_CHANNELS = 96
+LEO2_AUDIO_SAMPLE_RATE = 48000
 
 _VENDORED_GEN_AR_ROOT = Path(__file__).resolve().parent / "vendor" / "gen_ar"
 _DEFAULT_LEO2_CONFIG = _VENDORED_GEN_AR_ROOT / "hymm/configs/leo2/leo2_moe_v1_1_a12b_muon_wzd_480p_stage3.yaml"
@@ -31,6 +33,12 @@ _QWEN_ASSET_FILES = (
     "video_preprocessor_config.json",
 )
 _VAE_ASSET_FILES = ("config.json", "latent_norm_stats.pt", "pytorch_model.pt")
+_AUDIO_VAE_ASSET_FILES = (
+    "vae_audio_192d96l_3087k.ckpt",
+    "stable_audio_1920_vae_htae_32gpu.json",
+    "vae_audio_192d96l_3087k_mean_std/latent_mean.npy",
+    "vae_audio_192d96l_3087k_mean_std/latent_std.npy",
+)
 
 
 def _required_external_path(value: str, env_name: str) -> str:
@@ -62,13 +70,18 @@ class Leo2PipelineConfig:
     extra_hymm_args: List[str] = field(
         default_factory=lambda: [
             "--bot-task",
-            "video",
+            "av",
             "--use-system-prompt",
             "li-dit-encode-visual-qwen-3.5",
             "--gate-impl",
             "deepseek",
             "--vae-type",
             "16x16x4-48c-hy-v3_3-release2",
+            "--use-audio-vae",
+            "--audio-vae-type",
+            "dual_channel_48k",
+            "--audio-vae-latent-dim",
+            "96",
         ]
     )
 
@@ -80,6 +93,9 @@ class Leo2PipelineConfig:
 
     # --- schedule ---
     video_shift: float = 3.0
+    audio_shift: float = 3.0
+    enable_audio: bool = True
+    audio_joint_sde: bool = False
 
     # --- native inference acceleration ---
     # The UniRL rollout stage enters the request-scoped model cache context;
@@ -119,6 +135,7 @@ class Leo2PipelineConfig:
     # Forward timing forces CUDA synchronization and is benchmark-only.
     profile_forward: bool = False
     vae_on_gpu: bool = True
+    audio_vae_on_gpu: bool = True
     context_parallel_size: int = 1
     expert_parallel_size: int = 1
     enable_deepep: bool = False
@@ -137,10 +154,31 @@ class Leo2PipelineConfig:
             raise ValueError("Leo2 preprocessing_cache_mode must be 'off' or 'readonly'.")
         if self.preprocessing_cache_mode == "readonly" and not self.preprocessing_cache_dir:
             raise ValueError("Leo2 readonly preprocessing requires preprocessing_cache_dir.")
-        if type(self.load_video_vae) is not bool or type(self.vae_on_gpu) is not bool:
-            raise TypeError("Leo2 load_video_vae and vae_on_gpu must be bool.")
+        for name in (
+            "load_video_vae",
+            "vae_on_gpu",
+            "enable_audio",
+            "audio_joint_sde",
+            "audio_vae_on_gpu",
+        ):
+            value = getattr(self, name)
+            if type(value) is not bool:
+                raise TypeError(
+                    f"Leo2 {name} must be bool, got {type(value).__name__}: {value!r}"
+                )
         if not self.load_video_vae and self.preprocessing_cache_mode != "readonly":
             raise ValueError("Leo2 load_video_vae=false requires readonly preprocessing for cached SFT.")
+        if self.enable_audio and "--use-audio-vae" not in self.extra_hymm_args:
+            raise ValueError(
+                "Leo2 enable_audio=true requires '--use-audio-vae' in extra_hymm_args"
+            )
+        if not isinstance(self.audio_shift, (int, float)):
+            raise TypeError(
+                f"Leo2 audio_shift must be numeric, got {type(self.audio_shift).__name__}: "
+                f"{self.audio_shift!r}"
+            )
+        if float(self.audio_shift) <= 0:
+            raise ValueError(f"Leo2 audio_shift must be positive, got {self.audio_shift}")
         if type(self.context_parallel_size) is not int:
             raise TypeError(
                 "Leo2 context_parallel_size must be int, "
@@ -203,10 +241,21 @@ class Leo2PipelineConfig:
             _require_path(qwen_assets / name, f"Qwen3.5-9B asset {name}", directory=False)
         for name in _VAE_ASSET_FILES:
             _require_path(vae_assets / name, f"video VAE asset {name}", directory=False)
+        if self.enable_audio:
+            audio_vae_assets = assets / "audio_encoder/dual_channel_48k"
+            _require_path(audio_vae_assets, "dual-channel audio VAE assets", directory=True)
+            for name in _AUDIO_VAE_ASSET_FILES:
+                _require_path(
+                    audio_vae_assets / name,
+                    f"audio VAE asset {name}",
+                    directory=False,
+                )
 
 
 __all__ = [
     "Leo2PipelineConfig",
+    "LEO2_AUDIO_LATENT_CHANNELS",
+    "LEO2_AUDIO_SAMPLE_RATE",
     "LEO2_VAE_LATENT_CHANNELS",
     "LEO2_VAE_SPATIAL",
     "LEO2_VAE_TEMPORAL",

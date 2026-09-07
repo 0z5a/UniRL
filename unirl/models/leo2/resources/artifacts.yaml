@@ -61,3 +61,15 @@ artifacts:
       - path: image_encoder/vae_3d/hyvae_vid_leo2.0_v2.5.1_release2/pytorch_model.pt
         size: 7706430615
         sha256: 6b3158d045e661c81d829542333f78a109d00547eda9c810e48ebca665af6b66
+      - path: audio_encoder/dual_channel_48k/vae_audio_192d96l_3087k.ckpt
+        size: 2492469956
+        sha256: b783f77e95233f92d12c386f4c36f230c7224a0909946aa57b91ffdc69c11a5e
+      - path: audio_encoder/dual_channel_48k/stable_audio_1920_vae_htae_32gpu.json
+        size: 3696
+        sha256: 47695f4d56a15304778d2033574ca0e6a9464ba8c6205e4b1985047e221514cd
+      - path: audio_encoder/dual_channel_48k/vae_audio_192d96l_3087k_mean_std/latent_mean.npy
+        size: 896
+        sha256: ec9e9bf78cbe80003ef676bd841052dd5f36b7b406b06c07f9c8e82edb405040
+      - path: audio_encoder/dual_channel_48k/vae_audio_192d96l_3087k_mean_std/latent_std.npy
+        size: 896
+        sha256: 442acf5957db67c38a7ea216152b270a0272c2b33b55ce771db7a2f4596b1826

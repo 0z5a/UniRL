@@ -13,6 +13,7 @@ from unirl.types.conditions import TextEmbedCondition
 from unirl.types.primitives import Texts
 
 from .conditions import LEO2_MODEL_KWARGS, Leo2Conditions
+from .config import LEO2_AUDIO_LATENT_CHANNELS
 from .preprocessing_cache import Leo2PreprocessingCache, map_tensors
 
 if TYPE_CHECKING:
@@ -65,10 +66,10 @@ class Leo2CondStage:
                 video_size=(int(height), int(width)),
                 num_frames=int(num_frames),
                 video_fps=24,
-                bot_task="video",
+                bot_task="av" if self.bundle.config.enable_audio else "video",
                 use_system_prompt=self.bundle.use_system_prompt,
                 diff_guidance_scale=1.0,
-                output_type={"visual": "latent"},
+                output_type={"visual": "latent", "audio": "latent"},
                 verbose=0,
             )
         except _CaptureDone as done:
@@ -90,7 +91,19 @@ class Leo2CondStage:
             blobs = []
             for prompt in prompts:
                 key = disk_cache.condition_key(prompt, height=height, width=width, num_frames=num_frames)
-                blobs.extend(disk_cache.read_condition(key).hymm)
+                cached_condition = disk_cache.read_condition(key)
+                if self.bundle.config.enable_audio:
+                    missing_audio = [
+                        index
+                        for index, blob in enumerate(cached_condition.hymm or [])
+                        if "training_audio_noise" not in blob
+                    ]
+                    if missing_audio:
+                        raise ValueError(
+                            "Leo2 AV rollout requires an audio-aware preprocessing cache; "
+                            f"condition key={key!r} has video-only blobs at indices={missing_audio}"
+                        )
+                blobs.extend(cached_condition.hymm)
             self.cache_hits += len(prompts)
             return Leo2Conditions.from_dict({"hymm": blobs})
         if self._cache_size <= 0 or len(prompts) != 1 or len(seeds) != 1:
@@ -147,6 +160,8 @@ class Leo2CondStage:
                 require(model_kwargs is not None, "Leo2CondStage: captured call carries no model_kwargs")
                 image_size = captured.get("image_size")
                 video_duration = captured.get("video_duration")
+                audio_duration = captured.get("audio_duration")
+                audio_token_length = captured.get("audio_token_length")
                 if isinstance(image_size, (list, tuple)):
                     image_size = tuple(int(value) if isinstance(value, np.integer) else value for value in image_size)
                 if isinstance(video_duration, np.integer):
@@ -163,6 +178,19 @@ class Leo2CondStage:
                     "Leo2CondStage: captured video_duration must be a positive integer; "
                     f"requested={num_frames!r}, received={video_duration!r}",
                 )
+                if self.bundle.config.enable_audio:
+                    require(
+                        isinstance(audio_duration, (int, np.integer))
+                        and int(audio_duration) > 0,
+                        "Leo2CondStage: AV capture must provide a positive audio sample "
+                        f"count, got {audio_duration!r}",
+                    )
+                    require(
+                        isinstance(audio_token_length, (int, np.integer))
+                        and int(audio_token_length) > 0,
+                        "Leo2CondStage: AV capture must provide a positive audio token "
+                        f"length, got {audio_token_length!r}",
+                    )
 
                 # __call__ never runs (recorder aborts it), so set the guidance
                 # attributes its prelude would have set before using the pipeline.
@@ -194,6 +222,23 @@ class Leo2CondStage:
                         # visual token mask instead of the unsnapped request.
                         image_size=(int(image_size[0]), int(image_size[1])),
                         video_duration=int(video_duration),
+                        **(
+                            {
+                                "audio_duration": int(audio_duration),
+                                "audio_token_length": int(audio_token_length),
+                                "training_audio_noise": torch.randn(
+                                    1,
+                                    LEO2_AUDIO_LATENT_CHANNELS,
+                                    int(audio_token_length),
+                                    generator=torch.Generator(device="cpu").manual_seed(
+                                        int(seed) ^ 0x4C454F32
+                                    ),
+                                    dtype=torch.float32,
+                                ),
+                            }
+                            if self.bundle.config.enable_audio
+                            else {}
+                        ),
                         captured_call=_slim(captured),
                     )
                 )

@@ -343,7 +343,10 @@ def _patch_router_dtype(model: nn.Module) -> None:
 
             mod.forward = _fwd
             router_count += 1
-        if type(mod).__name__ == "FinalLayer" and isinstance(getattr(mod, "linear", None), nn.Linear):
+        if type(mod).__name__ in {"FinalLayer", "AudioFinalLayer"} and isinstance(
+            getattr(mod, "linear", None),
+            nn.Linear,
+        ):
             linear = mod.linear
 
             def _final_fwd(x, _m=linear):
@@ -359,7 +362,8 @@ def _patch_router_dtype(model: nn.Module) -> None:
             linear.forward = _final_fwd
             final_count += 1
     print(
-        f"[leo2 bundle] dtype-boundary patch applied to {router_count} gate.wg and {final_count} FinalLayer modules",
+        f"[leo2 bundle] dtype-boundary patch applied to {router_count} gate.wg "
+        f"and {final_count} visual/audio final-layer modules",
         flush=True,
     )
 
@@ -547,7 +551,12 @@ class Leo2Bundle(Bundle):
         _move_non_block_to_device(model, device)
 
         # tokenizer + frozen aux models + the hymm pipeline object
-        from hymm.core.extra_model_provider import build_text_encoder, build_tkwrapper, build_vae
+        from hymm.core.extra_model_provider import (
+            build_audio_vae,
+            build_text_encoder,
+            build_tkwrapper,
+            build_vae,
+        )
 
         if not cached:
             model.tokenizer = build_tkwrapper()
@@ -557,6 +566,16 @@ class Leo2Bundle(Bundle):
             if not config.vae_on_gpu:
                 vae.to("cpu")
             model.model_dict["vae"] = vae
+        if config.enable_audio:
+            if not getattr(args, "use_audio_vae", False):
+                raise ValueError(
+                    "Leo2 enable_audio=true but hymm parsed use_audio_vae=false"
+                )
+            audio_vae = build_audio_vae(dp_rank=0, only_encoder=False)
+            audio_vae.requires_grad_(False).eval()
+            if not config.audio_vae_on_gpu:
+                audio_vae.to("cpu")
+            model.model_dict["audio_vae"] = audio_vae
         if not cached:
             text_encoder = build_text_encoder()
             text_encoder.requires_grad_(False).eval()

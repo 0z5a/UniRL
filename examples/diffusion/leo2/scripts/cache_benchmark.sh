@@ -37,6 +37,7 @@ OUTPUT_ROOT="${LEO2_CACHE_BENCH_OUTPUT:-${REPO_ROOT}/outputs/leo2/cache-${MODE}-
 INFER_STEPS="${LEO2_INFER_STEPS:-50}"
 VIDEO_FPS="${LEO2_VIDEO_FPS:-24}"
 VIDEO_DURATION_SECONDS=8
+BOT_TASK="${LEO2_BENCH_BOT_TASK:-av}"
 ARTIFACT_MANIFEST="${REPO_ROOT}/unirl/models/leo2/resources/artifacts.yaml"
 
 if [[ ! -f "${PROMPTS_CSV}" ]]; then
@@ -57,6 +58,10 @@ if [[ ! "${VIDEO_FPS}" =~ ^[1-9][0-9]*$ ]]; then
 fi
 if [[ "${VIDEO_FPS}" != "24" ]]; then
   echo "Formal Leo2 acceleration benchmark requires 24 FPS, got: ${VIDEO_FPS}" >&2
+  exit 2
+fi
+if [[ "${BOT_TASK}" != "video" && "${BOT_TASK}" != "av" ]]; then
+  echo "LEO2_BENCH_BOT_TASK must be video or av, got: ${BOT_TASK}" >&2
   exit 2
 fi
 NUM_FRAMES=$((VIDEO_DURATION_SECONDS * VIDEO_FPS + 1))
@@ -162,6 +167,7 @@ fi
   echo "runtime_python_version=$("${PYTHON_BIN}" --version 2>&1)"
   echo "image_size=464x848"
   echo "video_duration_seconds=${VIDEO_DURATION_SECONDS}"
+  echo "bot_task=${BOT_TASK}"
   echo "video_fps=${VIDEO_FPS}"
   echo "num_frames=${NUM_FRAMES}"
   echo "diff_infer_steps=${INFER_STEPS}"
@@ -233,7 +239,7 @@ for encoded_case in "${case_rows[@]}"; do
     --testsets "${PROMPTS_CSV}@@_first_n_=${EXPECTED_VIDEOS}"
     --sample-save-base "${sample_dir}"
     --task-id "leo2_cache_bench_${case_name}"
-    --bot-task video
+    --bot-task "${BOT_TASK}"
     --use-system-prompt li-dit-encode-visual-qwen-3.5
     --gate-impl deepseek
     --vae-type 16x16x4-48c-hy-v3_3-release2
@@ -249,6 +255,13 @@ for encoded_case in "${case_rows[@]}"; do
     --context-parallel-size 8
     --expert-model-parallel-size 1
   )
+  if [[ "${BOT_TASK}" == "av" ]]; then
+    command+=(
+      --use-audio-vae
+      --audio-vae-type dual_channel_48k
+      --audio-vae-latent-dim 96
+    )
+  fi
   if [[ -n "${baseline_case}" ]]; then
     command+=(--leo2-baseline-case "${baseline_case}")
   fi

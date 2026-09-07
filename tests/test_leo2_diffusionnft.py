@@ -20,6 +20,7 @@ from unirl.models.leo2.diffusion import Leo2DiffusionStage
 from unirl.models.leo2.pipeline import Leo2Pipeline
 from unirl.models.leo2.preprocess import _records
 from unirl.models.leo2.text_embed import Leo2CondStage, _to_transport_tree
+from unirl.models.leo2.vae import Leo2AudioDecodeStage
 from unirl.distributed.group.remote import RankInfo
 from unirl.rollout.engine.trainside.engine import TrainsideRolloutEngine
 from unirl.train.backend.base_backend import BaseFSDP2Backend
@@ -37,6 +38,7 @@ def _fake_stage() -> tuple[Leo2DiffusionStage, dict[str, object]]:
     stage = object.__new__(Leo2DiffusionStage)
     stage.bundle = SimpleNamespace(device=torch.device("cpu"))
     stage.trajectory_dtype = torch.float32
+    stage.enable_audio = False
     observed: dict[str, object] = {}
 
     def prep(self, blob, sample):
@@ -80,6 +82,126 @@ def test_leo2_predict_noise_at_step_forwards_batch_one() -> None:
     }
 
 
+def test_leo2_av_single_step_uses_shifted_deterministic_audio_prior() -> None:
+    stage = object.__new__(Leo2DiffusionStage)
+    stage.bundle = SimpleNamespace(device=torch.device("cpu"))
+    stage.trajectory_dtype = torch.float32
+    stage.enable_audio = True
+    stage.video_shift = 9.0
+    stage.audio_shift = 3.0
+    stage._prep_channel_cond = MethodType(
+        lambda self, blob, sample: (None, None),
+        stage,
+    )
+    stage._autocast = MethodType(lambda self: nullcontext(), stage)
+    observed = {}
+
+    def predict_joint(
+        self,
+        blob,
+        *,
+        sample,
+        sigma,
+        channel_cond,
+        audio_sample,
+        audio_sigma,
+    ):
+        observed["audio_sample"] = audio_sample
+        observed["audio_sigma"] = float(audio_sigma)
+        return torch.ones_like(sample), torch.zeros_like(audio_sample)
+
+    stage.predict_joint_noise = MethodType(predict_joint, stage)
+    output = stage.predict_noise_at_step(
+        SimpleNamespace(
+            hymm=[
+                {
+                    "training_audio_noise": torch.ones(1, 96, 4),
+                }
+            ]
+        ),
+        sample=torch.zeros(1, 48, 2, 3, 4),
+        sigma=torch.tensor([0.9]),
+        params=SimpleNamespace(guidance_scale=1.0),
+    )
+
+    assert observed["audio_sigma"] == pytest.approx(0.75)
+    torch.testing.assert_close(
+        observed["audio_sample"],
+        torch.full((1, 96, 4), 0.75),
+    )
+    torch.testing.assert_close(output, torch.ones_like(output))
+
+
+def test_leo2_audio_decode_returns_length_first_stereo() -> None:
+    class FakeAudioVAE:
+        def to(self, device):
+            return self
+
+        def decode(self, latents):
+            assert tuple(latents.shape) == (1, 96, 4)
+            return torch.arange(16, dtype=torch.float32).reshape(1, 2, 8)
+
+    bundle = SimpleNamespace(
+        device=torch.device("cpu"),
+        config=SimpleNamespace(audio_vae_on_gpu=True),
+        model=SimpleNamespace(model_dict={"audio_vae": FakeAudioVAE()}),
+    )
+    decoded = Leo2AudioDecodeStage(bundle).decode(torch.zeros(1, 96, 4))
+
+    items = decoded.to_list()
+    assert len(items) == 1
+    assert tuple(items[0].waveform.shape) == (8, 2)
+
+
+def test_leo2_av_generate_stores_audio_trajectory() -> None:
+    class FakeModel:
+        training = False
+
+        @staticmethod
+        def cache_context(name):
+            return nullcontext()
+
+        @staticmethod
+        def cache_stats():
+            return {"method": "none"}
+
+    stage = object.__new__(Leo2DiffusionStage)
+    stage.bundle = SimpleNamespace(device=torch.device("cpu"), model=FakeModel())
+    stage.strategy = SimpleNamespace(
+        denoise=lambda **kwargs: (kwargs["sample"], None, None),
+    )
+    stage.trajectory_dtype = torch.float32
+    stage.logprob_dtype = torch.float32
+    stage.enable_audio = True
+    stage.audio_joint_sde = False
+    stage.video_shift = 9.0
+    stage.audio_shift = 3.0
+    stage._mem_reported = True
+    stage._autocast = MethodType(lambda self: nullcontext(), stage)
+    stage._prep_channel_cond = MethodType(
+        lambda self, blob, sample: (None, None),
+        stage,
+    )
+    stage.predict_joint_noise = MethodType(
+        lambda self, blob, **kwargs: (
+            torch.zeros_like(kwargs["sample"]),
+            torch.zeros_like(kwargs["audio_sample"]),
+        ),
+        stage,
+    )
+    segment = stage.generate(
+        SimpleNamespace(hymm=[{}]),
+        params=SimpleNamespace(num_inference_steps=1, eta=0.0),
+        sigmas=torch.tensor([1.0, 0.0]),
+        initial_latents=torch.zeros(1, 48, 2, 3, 4),
+        initial_audio_latents=torch.zeros(1, 96, 5),
+    )
+
+    assert tuple(segment.latents.shape) == (1, 2, 48, 2, 3, 4)
+    assert tuple(segment.aux_latents.shape) == (1, 2, 96, 5)
+    torch.testing.assert_close(segment.aux_latents_at(1), torch.zeros(1, 96, 5))
+
+
 def test_leo2_rollout_enters_request_scoped_cache_context() -> None:
     events: list[str] = []
 
@@ -111,6 +233,7 @@ def test_leo2_rollout_enters_request_scoped_cache_context() -> None:
     )
     stage.trajectory_dtype = torch.float32
     stage.logprob_dtype = torch.float32
+    stage.enable_audio = False
     stage._mem_reported = True
     stage._autocast = MethodType(lambda self: nullcontext(), stage)
     stage._prep_channel_cond = MethodType(lambda self, blob, sample: (None, None), stage)
@@ -201,8 +324,11 @@ def test_leo2_channel_condition_follows_trajectory_dtype() -> None:
     assert cond_mask.dtype == torch.bfloat16
 
 
-def test_leo2_final_layer_casts_fp32_norm_output_to_weight_dtype() -> None:
-    final_layer_type = type("FinalLayer", (nn.Module,), {})
+@pytest.mark.parametrize("layer_name", ["FinalLayer", "AudioFinalLayer"])
+def test_leo2_final_layer_casts_fp32_norm_output_to_weight_dtype(
+    layer_name: str,
+) -> None:
+    final_layer_type = type(layer_name, (nn.Module,), {})
     final_layer = final_layer_type()
     final_layer.linear = nn.Linear(4, 2, dtype=torch.bfloat16)
     model = nn.Module()
@@ -289,6 +415,10 @@ def test_leo2_nft_recipe_matches_requested_contract() -> None:
     assert config.bundle.config.profile_forward is False
     assert config.bundle.config.inference_cache_method == "first_block"
     assert config.bundle.config.inference_cache_threshold == pytest.approx(0.1)
+    assert config.bundle.config.enable_audio is True
+    assert config.bundle.config.audio_shift == pytest.approx(3.0)
+    assert config.bundle.config.audio_joint_sde is False
+    assert config.bundle.config.audio_vae_on_gpu is True
     assert config.backend.fsdp_cfg.sp_size == 2
     assert config.backend.fsdp_cfg.ep_size == 8
 

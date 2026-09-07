@@ -12,6 +12,7 @@ _EXPORTS = {
     "Leo2DiffusionStage": (".diffusion", "Leo2DiffusionStage"),
     "Leo2Pipeline": (".pipeline", "Leo2Pipeline"),
     "Leo2CondStage": (".text_embed", "Leo2CondStage"),
+    "Leo2AudioDecodeStage": (".vae", "Leo2AudioDecodeStage"),
     "Leo2VideoDecodeStage": (".vae", "Leo2VideoDecodeStage"),
     "Leo2PreprocessingCache": (".preprocessing_cache", "Leo2PreprocessingCache"),
     "Leo2CachedSupervisedTrackBuilder": (".sft", "Leo2CachedSupervisedTrackBuilder"),
