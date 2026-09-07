@@ -455,6 +455,9 @@ def test_leo2_motion_bilingual_flowgrpo_recipe_matches_requested_contract() -> N
     assert config.group_size == 8
     assert config.save_interval == 20
     assert config.bundle.config.video_shift == pytest.approx(12.0)
+    assert config.bundle.config.enable_audio is False
+    assert "--use-audio-vae" not in config.bundle.config.extra_hymm_args
+    assert config.bundle.config.extra_hymm_args[:2] == ["--bot-task", "video"]
     assert config.bundle.config.context_parallel_size == 2
     assert config.bundle.config.expert_parallel_size == 1
     assert config.backend.optimizer_cfg.learning_rate == pytest.approx(3e-4)
