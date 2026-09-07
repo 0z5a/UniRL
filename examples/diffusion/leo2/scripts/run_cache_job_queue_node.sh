@@ -5,9 +5,11 @@ set -euo pipefail
 QUEUE="${1:?expected queue TSV as argument 1}"
 STATE_ROOT="${2:?expected shared queue state directory as argument 2}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LAUNCHER="${LEO2_QUEUE_LAUNCHER:-${SCRIPT_DIR}/launch_cache_benchmark_node.sh}"
 WORKER_ID="$(hostname)-$$"
 
 [[ -f "${QUEUE}" ]] || { echo "queue not found: ${QUEUE}" >&2; exit 2; }
+[[ -x "${LAUNCHER}" ]] || { echo "benchmark launcher is not executable: ${LAUNCHER}" >&2; exit 2; }
 mkdir -p "${STATE_ROOT}/claims" "${STATE_ROOT}/done" "${STATE_ROOT}/failed" "${STATE_ROOT}/logs"
 
 failures=0
@@ -18,6 +20,9 @@ while IFS=$'\t' read -r job_id output_root cases_csv prompts_csv steps estimated
     echo "malformed queue row for job_id=${job_id@Q}" >&2
     exit 2
   }
+  if [[ -d "${STATE_ROOT}/done/${job_id}" || -d "${STATE_ROOT}/failed/${job_id}" ]]; then
+    continue
+  fi
   claim="${STATE_ROOT}/claims/${job_id}"
   if ! mkdir "${claim}" 2>/dev/null; then
     continue
@@ -32,7 +37,7 @@ while IFS=$'\t' read -r job_id output_root cases_csv prompts_csv steps estimated
   } >"${claim}/metadata.env"
   echo "[${WORKER_ID}] starting ${job_id} (estimate ${estimated_seconds}s)"
   set +e
-  "${SCRIPT_DIR}/launch_cache_benchmark_node.sh" \
+  "${LAUNCHER}" \
     "${output_root}" "${cases_csv}" "${prompts_csv}" "${steps}" \
     >"${STATE_ROOT}/logs/${job_id}.log" 2>&1
   status=$?
