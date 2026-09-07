@@ -505,6 +505,7 @@ def test_leo2_motion_bilingual_flowgrpo_recipe_matches_requested_contract() -> N
     assert config.backend.lora_cfg.alpha == 256
     assert config.backend.fsdp_cfg.activation_checkpointing is True
     assert config.stack.num_updates_per_batch == 2
+    assert config.algorithm.old_logp_source == "rollout"
     assert config.sampling.guidance_scale == pytest.approx(1.0)
     assert config.sampling.num_inference_steps == 12
     assert config.sampling.num_frames == 9
