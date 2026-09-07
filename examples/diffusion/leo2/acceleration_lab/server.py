@@ -173,11 +173,19 @@ class Handler(BaseHTTPRequestHandler):
         filters = {name: self._single(params, name) for name in allowed}
         if filters["language"] not in {"", "en", "zh"}:
             raise ValueError(f"unsupported language: {filters['language']!r}")
+        try:
+            guidance_filter = (
+                float(filters["guidance"]) if filters["guidance"] else None
+            )
+        except ValueError as exc:
+            raise ValueError(
+                f"guidance must be numeric, got {filters['guidance']!r}"
+            ) from exc
         result = []
         for row in rows:
             if filters["steps"] and str(row.get("steps")) != filters["steps"]:
                 continue
-            if filters["guidance"] and str(row.get("guidance")) != filters["guidance"]:
+            if guidance_filter is not None and float(row.get("guidance")) != guidance_filter:
                 continue
             if filters["language"] and row.get("language") != filters["language"]:
                 continue

@@ -36,7 +36,13 @@ function optionValues(name, values) {
 function applyDeepLink() {
   const params = new URLSearchParams(location.search);
   ["steps", "guidance", "language", "method"].forEach((name) => {
-    if (params.has(name)) $(`[name="${name}"]`).value = params.get(name);
+    if (!params.has(name)) return;
+    const select = $(`[name="${name}"]`);
+    const requested = params.get(name);
+    const numericMatch = [...select.options].find(
+      (option) => name === "guidance" && Number(option.value) === Number(requested)
+    );
+    select.value = numericMatch ? numericMatch.value : requested;
   });
   return params.get("prompt");
 }

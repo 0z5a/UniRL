@@ -46,7 +46,7 @@ class AccelerationLabServerTests(unittest.TestCase):
                         {
                             "method": "off",
                             "steps": 6,
-                            "guidance": 5,
+                            "guidance": 5.0,
                             "language": "en",
                             "latency_seconds": 1,
                             "paired_speedup": 1,
