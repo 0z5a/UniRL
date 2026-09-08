@@ -164,6 +164,33 @@ def test_flowdppo_prepare_segment_uses_matching_single_timestep_geometry() -> No
     torch.testing.assert_close(segment.sde_means.flatten(), torch.tensor([0.4, 0.6]))
 
 
+def test_flowdppo_prepare_segment_reuses_rollout_anchors() -> None:
+    stage = _ReplayStage()
+    segment = _segment()
+    logp = segment.sde_logp.clone()
+    means = segment.sde_means.clone()
+
+    _algorithm(stage, old_logp_source="rollout").prepare_segment(conditions={}, segment=segment)
+
+    assert stage.calls == []
+    torch.testing.assert_close(segment.sde_logp, logp)
+    torch.testing.assert_close(segment.sde_means, means)
+
+
+def test_flowdppo_prepare_segment_replays_only_missing_rollout_means() -> None:
+    stage = _ReplayStage()
+    stage.weight.data.fill_(0.4)
+    segment = _segment()
+    rollout_logp = segment.sde_logp.clone()
+    segment.sde_means = None
+
+    _algorithm(stage, old_logp_source="rollout").prepare_segment(conditions={}, segment=segment)
+
+    assert stage.calls == [(0,), (2,)]
+    torch.testing.assert_close(segment.sde_logp, rollout_logp)
+    torch.testing.assert_close(segment.sde_means.flatten(), torch.tensor([0.4, 0.6]))
+
+
 def test_flowdppo_parity_gate_raises_only_on_first_optimizer_update() -> None:
     stage = _ReplayStage()
     algorithm = _algorithm(

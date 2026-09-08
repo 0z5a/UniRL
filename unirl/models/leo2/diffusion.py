@@ -326,6 +326,7 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
         stored_pairs: List[Tuple[int, torch.Tensor]] = []
         stored_audio: List[torch.Tensor] = []
         sde_logp_list: List[torch.Tensor] = []
+        sde_means_list: List[torch.Tensor] = []
         if 0 in needed:
             stored_pairs.append((0, x.detach().clone()))
             if a is not None:
@@ -367,7 +368,7 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
                         channel_cond=channel_cond,
                     )
                     audio_pred = None
-                x_next, log_prob, _ = self.strategy.denoise(
+                x_next, log_prob, prev_mean = self.strategy.denoise(
                     noise_pred=pred,
                     sample=x,
                     sigma=sigmas[step_idx],
@@ -399,6 +400,7 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
                     if a is not None:
                         stored_audio.append(a.detach().clone())
                 if log_prob is not None:
+                    require(prev_mean is not None, "Leo2 SDE rollout produced log_prob without prev_sample_mean")
                     if self.audio_joint_sde and audio_log_prob is not None and a is not None:
                         log_prob = _combine_modality_logp(
                             log_prob,
@@ -407,6 +409,7 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
                             n_audio=a[0].numel(),
                         )
                     sde_logp_list.append(log_prob.to(dtype=self.logprob_dtype))
+                    sde_means_list.append(prev_mean.detach())
 
         cache_stats_factory = getattr(model, "cache_stats", None)
         if callable(cache_stats_factory):
@@ -428,6 +431,7 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
             indices=torch.tensor(positions, dtype=torch.long, device=device),
             sigmas=sigmas.detach().clone(),
             sde_logp=torch.stack(sde_logp_list, dim=1) if sde_logp_list else None,
+            sde_means=torch.stack(sde_means_list, dim=1) if sde_means_list else None,
             sde_indices=(torch.tensor(sde_sorted, dtype=torch.long, device=device) if sde_sorted else None),
             initial_latents=initial_latents.detach().clone(),
             aux_latents=(

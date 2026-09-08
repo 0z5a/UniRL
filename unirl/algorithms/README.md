@@ -85,9 +85,10 @@ segment, expand advantages per token), keeping `supports_multi_update = False`.
   `prepare_segment`, while `GRPO`/`DRPO` reuse the rollout log-prob as the anchor
   for all N steps (verl `bypass_mode` parity — so the AR ratio also carries the
   rollout-vs-train engine gap, by design).
-- **FlowDPPO isn't fully on-policy under `rollout`** — it always replays `sde_means`
-  (KL = 0) but keeps the engine's `sde_logp`, so its ratio isn't pinned to 1. Use
-  `replay` to also pin the ratio.
+- **FlowDPPO under `rollout` uses both rollout anchors when available** — engines that
+  emit `sde_logp` and `sde_means` avoid a separate anchor replay and expose the true
+  rollout-to-training KL. Engines that omit means retain a no-grad replay fallback; use
+  `old_logp_source: replay` to recompute both anchors at training geometry.
 - **`params` must reuse the rollout `guidance_scale`/`eta`/`shift`** — single-track
   recipes bind `params: ${sampling}`; composed recipes bind the sub-block (e.g.
   `${sampling.diffusion}`). A mismatch silently skews log-probs.

@@ -164,7 +164,7 @@ class FlowDPPO(StageAlgorithm):
         conditions: Mapping[str, "Condition"],
         segment: "LatentSegment",
     ) -> None:
-        """Freeze the π_old anchor and means at pre-update weights, before the ``num_updates_per_batch`` loop."""
+        """Freeze the π_old log-prob and transition-mean anchors before optimizer updates."""
         if segment.sde_indices is None:
             return
         target_steps = self._resolve_target_steps(segment)
@@ -177,6 +177,13 @@ class FlowDPPO(StageAlgorithm):
                 "None). Pin a rollout build that emits trajectory log-probs, or set "
                 "old_logp_source='replay'."
             )
+        if self.old_logp_source == "rollout" and segment.sde_means is not None:
+            if segment.sde_means.shape[1] != len(target_steps):
+                raise RuntimeError(
+                    "FlowDPPO.prepare_segment: rollout sde_means has "
+                    f"{segment.sde_means.shape[1]} steps, expected {len(target_steps)}"
+                )
+            return
         typed_conds = typed_conditions(conditions, self.conditions_cls)
         logp_anchors = []
         mean_anchors = []

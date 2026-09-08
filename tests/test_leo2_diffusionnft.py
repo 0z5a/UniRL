@@ -305,6 +305,8 @@ def test_leo2_bf16_av_rollout_log_probs_match_replay() -> None:
     replay = stage.replay(SimpleNamespace(hymm=[{}]), segment=segment, params=params)
 
     torch.testing.assert_close(replay.log_probs, segment.sde_logp, rtol=0.0, atol=0.0)
+    assert segment.sde_means.dtype is torch.float32
+    torch.testing.assert_close(replay.prev_sample_means, segment.sde_means, rtol=0.0, atol=0.0)
 
 
 def test_leo2_av_sde_noise_is_reproducible_across_worker_rng_states() -> None:
