@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 from dataclasses import field as dc_field
 from typing import Any, Dict, List, Mapping, Optional, Type
@@ -85,8 +86,11 @@ class FlowGRPO(StageAlgorithm):
         self.max_rollout_replay_logp_absdiff = (
             None if max_rollout_replay_logp_absdiff is None else float(max_rollout_replay_logp_absdiff)
         )
-        if self.max_rollout_replay_logp_absdiff is not None and self.max_rollout_replay_logp_absdiff < 0:
-            raise ValueError("FlowGRPO.max_rollout_replay_logp_absdiff must be non-negative")
+        if self.max_rollout_replay_logp_absdiff is not None and (
+            not math.isfinite(self.max_rollout_replay_logp_absdiff)
+            or self.max_rollout_replay_logp_absdiff < 0
+        ):
+            raise ValueError("FlowGRPO.max_rollout_replay_logp_absdiff must be finite and non-negative")
         self.rollout_replay_parity_action = str(rollout_replay_parity_action).strip().lower()
         require(
             self.rollout_replay_parity_action in ("raise", "warn"),
@@ -273,9 +277,17 @@ class FlowGRPO(StageAlgorithm):
                     drift_metrics[f"{prefix}_relative_rms"] = float(
                         (diff_rms / rollout_rms.clamp_min(torch.finfo(torch.float32).eps)).item()
                     )
+        parity_gate_active = self.max_rollout_replay_logp_absdiff is not None and self.is_first_optimizer_update
+        drift_metrics["rollout_replay_parity_gate_active"] = float(parity_gate_active)
+        drift_mean = drift_metrics["rollout_replay_logp_absdiff_mean"]
+        drift_max = drift_metrics["rollout_replay_logp_absdiff_max"]
         if (
-            self.max_rollout_replay_logp_absdiff is not None
-            and drift_metrics["rollout_replay_logp_absdiff_max"] > self.max_rollout_replay_logp_absdiff
+            parity_gate_active
+            and (
+                not math.isfinite(drift_mean)
+                or not math.isfinite(drift_max)
+                or drift_max > self.max_rollout_replay_logp_absdiff
+            )
         ):
             per_step = ", ".join(
                 (
@@ -296,8 +308,8 @@ class FlowGRPO(StageAlgorithm):
             )
             message = (
                 "FlowGRPO rollout/replay parity failed: "
-                f"max |Δlogp|={drift_metrics['rollout_replay_logp_absdiff_max']:.6g} exceeds "
-                f"{self.max_rollout_replay_logp_absdiff:.6g}; "
+                f"mean/max |Δlogp|={drift_mean:.6g}/{drift_max:.6g}; expected finite values and "
+                f"max <= {self.max_rollout_replay_logp_absdiff:.6g}; "
                 f"per-step mean/max |Δlogp|=[{per_step}]"
                 + (f"; per-step velocity diff_rms/relative_rms=[{velocity_detail}]" if velocity_detail else "")
             )

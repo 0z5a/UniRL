@@ -244,6 +244,8 @@ class UnifiedModelTrainStack(Remote):
             image_steps = self._optimizer_step_slices(int(image_part.batch_size))
             per_update: List[Dict[str, TrainStepResult]] = []
             for u in range(self.num_updates_per_batch):
+                self.ar_algorithm.begin_optimizer_update(update_index=u)
+                self.image_algorithm.begin_optimizer_update(update_index=u)
                 per_update.append(
                     self._train_one_step(
                         ar_part,

@@ -369,7 +369,7 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
                     audio_pred = None
                 x_next, log_prob, _ = self.strategy.denoise(
                     noise_pred=pred,
-                    sample=x.to(torch.float32),
+                    sample=x,
                     sigma=sigmas[step_idx],
                     sigma_next=sigmas[step_idx + 1],
                     eta=step_eta,
@@ -385,10 +385,12 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
                     )
                     a_next, audio_log_prob, _ = self.strategy.denoise(
                         noise_pred=audio_pred,
-                        sample=a.to(torch.float32),
+                        sample=a,
                         sigma=audio_sigmas[step_idx],
                         sigma_next=audio_sigmas[step_idx + 1],
                         eta=step_eta if self.audio_joint_sde else 0.0,
+                        # Reuse the request stream so CP replicas sample the same audio transition.
+                        generator=step_generators,
                         step_index=step_idx,
                     )
                     a = a_next.to(dtype=self.trajectory_dtype)
@@ -488,11 +490,11 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
                 )
                 _, log_prob, mean = self.strategy.denoise(
                     noise_pred=pred,
-                    sample=x.to(torch.float32),
+                    sample=x,
                     sigma=sigmas[step_idx],
                     sigma_next=sigmas[step_idx + 1],
                     eta=float(params.eta),
-                    prev_sample=prev_x.to(torch.float32),
+                    prev_sample=prev_x,
                     step_index=step_idx,
                 )
                 if self.audio_joint_sde:
@@ -505,11 +507,11 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
                     prev_a = segment.aux_latents_at(step_idx + 1).to(self.bundle.device)
                     _, audio_log_prob, _ = self.strategy.denoise(
                         noise_pred=audio_pred,
-                        sample=a.to(torch.float32),
+                        sample=a,
                         sigma=audio_sigmas[step_idx],
                         sigma_next=audio_sigmas[step_idx + 1],
                         eta=float(params.eta),
-                        prev_sample=prev_a.to(torch.float32),
+                        prev_sample=prev_a,
                         step_index=step_idx,
                     )
                     log_prob = _combine_modality_logp(

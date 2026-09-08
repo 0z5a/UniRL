@@ -137,6 +137,7 @@ class TrainStack(Remote):
         do_optimizer_step: bool = True,
         loss_weight: float = 1.0,
         prior_backward: bool = False,
+        update_index: int = 0,
     ) -> TrainStepResult:
         """Run the micro ranges of a single update; step unless mid-window."""
         if part.advantages is None and getattr(self.algorithm, "requires_advantages", True):
@@ -148,6 +149,7 @@ class TrainStack(Remote):
         if not micros:
             raise ValueError(f"{type(self).__name__}._run_update: empty micros.")
 
+        self.algorithm.begin_optimizer_update(update_index=update_index)
         bs = int(part.batch_size)
         if zero_grad:
             self.fsdp_backend.zero_grad()
@@ -428,14 +430,21 @@ class TrainStack(Remote):
 
         scope_update = profile_mode() == "one-update"
         results = []
-        for micros in plans:
+        for update_index, micros in enumerate(plans):
             cm = (
                 maybe_profile_update(self, int(getattr(self.fsdp_backend, "_rank", 0)))
                 if scope_update
                 else nullcontext()
             )
             with cm:
-                results.append(self._run_update(part, micros=micros, training_progress=training_progress))
+                results.append(
+                    self._run_update(
+                        part,
+                        micros=micros,
+                        training_progress=training_progress,
+                        update_index=update_index,
+                    )
+                )
         if len(results) == 1:
             return results[0]
         aggregated = _aggregate_update_results(results)

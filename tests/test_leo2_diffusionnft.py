@@ -29,6 +29,7 @@ from unirl.models.leo2.text_embed import Leo2CondStage, _to_transport_tree
 from unirl.models.leo2.vae import Leo2AudioDecodeStage
 from unirl.distributed.group.remote import RankInfo
 from unirl.rollout.engine.trainside.engine import TrainsideRolloutEngine
+from unirl.sde.kernels import FlowSDEStrategy
 from unirl.train.backend.base_backend import BaseFSDP2Backend
 from unirl.train.configs import EmaLoraConfig
 from unirl.train.ema import EMA, Shadow, make_decay_fn
@@ -265,6 +266,98 @@ def test_leo2_av_generate_stores_audio_trajectory() -> None:
     assert tuple(segment.latents.shape) == (1, 2, 48, 2, 3, 4)
     assert tuple(segment.aux_latents.shape) == (1, 2, 96, 5)
     torch.testing.assert_close(segment.aux_latents_at(1), torch.zeros(1, 96, 5))
+
+
+def test_leo2_bf16_av_rollout_log_probs_match_replay() -> None:
+    torch.manual_seed(7)
+    stage = object.__new__(Leo2DiffusionStage)
+    stage.bundle = SimpleNamespace(
+        device=torch.device("cpu"),
+        model=SimpleNamespace(cache_stats=lambda: {"method": "none"}),
+    )
+    stage.strategy = FlowSDEStrategy()
+    stage.trajectory_dtype = torch.bfloat16
+    stage.logprob_dtype = torch.float32
+    stage.enable_audio = True
+    stage.audio_joint_sde = True
+    stage.video_shift = 12.0
+    stage.audio_shift = 3.0
+    stage._mem_reported = True
+    stage._autocast = MethodType(lambda self: nullcontext(), stage)
+    stage._prep_channel_cond = MethodType(lambda self, blob, sample: (None, None), stage)
+    stage.predict_joint_noise = MethodType(
+        lambda self, blob, **kwargs: (
+            kwargs["sample"].float().square() * 0.07 + 0.13,
+            kwargs["audio_sample"].float().square() * 0.03 - 0.09,
+        ),
+        stage,
+    )
+    params = SimpleNamespace(num_inference_steps=2, eta=0.5)
+
+    segment = stage.generate(
+        SimpleNamespace(hymm=[{}]),
+        params=params,
+        sigmas=torch.tensor([0.8, 0.5, 0.2]),
+        initial_latents=torch.randn(1, 3, 2, 2, dtype=torch.bfloat16),
+        initial_audio_latents=torch.randn(1, 2, 3, dtype=torch.bfloat16),
+        sde_indices=[0, 1],
+    )
+    replay = stage.replay(SimpleNamespace(hymm=[{}]), segment=segment, params=params)
+
+    torch.testing.assert_close(replay.log_probs, segment.sde_logp, rtol=0.0, atol=0.0)
+
+
+def test_leo2_av_sde_noise_is_reproducible_across_worker_rng_states() -> None:
+    class FakeModel:
+        training = False
+
+        @staticmethod
+        def cache_context(name):
+            return nullcontext()
+
+        @staticmethod
+        def cache_stats():
+            return {"method": "none"}
+
+    stage = object.__new__(Leo2DiffusionStage)
+    stage.bundle = SimpleNamespace(device=torch.device("cpu"), model=FakeModel())
+    stage.strategy = FlowSDEStrategy()
+    stage.trajectory_dtype = torch.float32
+    stage.logprob_dtype = torch.float32
+    stage.enable_audio = True
+    stage.audio_joint_sde = True
+    stage.video_shift = 12.0
+    stage.audio_shift = 3.0
+    stage._mem_reported = True
+    stage._autocast = MethodType(lambda self: nullcontext(), stage)
+    stage._prep_channel_cond = MethodType(lambda self, blob, sample: (None, None), stage)
+    stage.predict_joint_noise = MethodType(
+        lambda self, blob, **kwargs: (
+            torch.zeros_like(kwargs["sample"]),
+            torch.zeros_like(kwargs["audio_sample"]),
+        ),
+        stage,
+    )
+    params = SimpleNamespace(num_inference_steps=2, eta=0.5)
+    generate_kwargs = dict(
+        conditions=SimpleNamespace(hymm=[{}]),
+        params=params,
+        sigmas=torch.tensor([0.8, 0.5, 0.2]),
+        initial_latents=torch.zeros(1, 3, 2, 2),
+        initial_audio_latents=torch.zeros(1, 2, 3),
+        sde_indices=[0, 1],
+        denoise_seed_keys=["sample-0"],
+        denoise_base_seed=1234,
+    )
+
+    torch.manual_seed(1)
+    first = stage.generate(**generate_kwargs)
+    torch.manual_seed(2)
+    second = stage.generate(**generate_kwargs)
+
+    torch.testing.assert_close(first.latents, second.latents, rtol=0.0, atol=0.0)
+    torch.testing.assert_close(first.aux_latents, second.aux_latents, rtol=0.0, atol=0.0)
+    torch.testing.assert_close(first.sde_logp, second.sde_logp, rtol=0.0, atol=0.0)
 
 
 def test_leo2_rollout_enters_request_scoped_cache_context() -> None:

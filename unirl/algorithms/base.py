@@ -245,6 +245,24 @@ class StageAlgorithm(Remote, ABC):
     requires_advantages: bool = True
     loss_weighting: str = "sample"
     anchor_fields: Tuple[str, ...] = ()
+    _optimizer_update_index: int = 0
+
+    def begin_optimizer_update(self, *, update_index: int) -> None:
+        """Record the zero-based optimizer-update index for this train-track call."""
+        index = int(update_index)
+        if index < 0:
+            raise ValueError(f"update_index must be >= 0, got {index}")
+        self._optimizer_update_index = index
+
+    @property
+    def optimizer_update_index(self) -> int:
+        """Zero-based optimizer-update index within the current train-track call."""
+        return self._optimizer_update_index
+
+    @property
+    def is_first_optimizer_update(self) -> bool:
+        """Whether this is the first planned optimizer update for the train-track call."""
+        return self._optimizer_update_index == 0
 
     def recomputes_anchor(self) -> bool:
         """Whether the anchor must be recomputed at the exact ``(mini, micro)`` geometry training uses."""
