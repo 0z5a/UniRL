@@ -175,6 +175,30 @@ def _reference_replay_means(
     return result.prev_sample_means.detach()
 
 
+def _reference_replay_velocities(
+    stage: Any,
+    ref_model: Any,
+    *,
+    conditions: Any,
+    segment: "Segment",
+    params: Any,
+    target_steps: List[int],
+) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+    """Replay and return detached primary and auxiliary flow velocities."""
+    from unirl.train.lora import adapters_disabled
+
+    with torch.no_grad(), adapters_disabled(ref_model):
+        result = stage.replay(conditions, segment=segment, params=params, step_indices=target_steps)
+    model_outputs = getattr(result, "model_outputs", None)
+    if model_outputs is None:
+        raise RuntimeError(
+            "_reference_replay_velocities: stage.replay() returned model_outputs=None "
+            "for the adapter-disabled reference forward."
+        )
+    aux = getattr(result, "aux_model_outputs", None)
+    return model_outputs.detach(), None if aux is None else aux.detach()
+
+
 def _reference_kl_loss(
     new_means: torch.Tensor,
     ref_means: torch.Tensor,
@@ -184,6 +208,86 @@ def _reference_kl_loss(
     kl_per_elem = _gaussian_kl_div(new_means, ref_means, sigma_t)
     kl_per_sample = kl_per_elem.mean(dim=tuple(range(2, kl_per_elem.ndim)))
     return kl_per_sample.mean()
+
+
+def _reference_velocity_mse(
+    velocity: torch.Tensor,
+    ref_velocity: torch.Tensor,
+    aux_velocity: Optional[torch.Tensor] = None,
+    ref_aux_velocity: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """Element-weighted MSE between policy and reference flow velocities."""
+    if velocity.shape != ref_velocity.shape:
+        raise ValueError(
+            f"reference velocity shape mismatch: policy={tuple(velocity.shape)} reference={tuple(ref_velocity.shape)}"
+        )
+    if velocity.numel() == 0:
+        raise ValueError("reference velocity MSE requires a non-empty primary velocity tensor")
+    if (aux_velocity is None) != (ref_aux_velocity is None):
+        raise ValueError("policy and reference must either both provide auxiliary velocities or both omit them")
+    diff = velocity.float() - ref_velocity.detach().to(device=velocity.device, dtype=torch.float32)
+    squared_sum = diff.square().sum()
+    numel = diff.numel()
+    if aux_velocity is not None and ref_aux_velocity is not None:
+        if aux_velocity.shape != ref_aux_velocity.shape:
+            raise ValueError(
+                "reference auxiliary velocity shape mismatch: "
+                f"policy={tuple(aux_velocity.shape)} reference={tuple(ref_aux_velocity.shape)}"
+            )
+        aux_diff = aux_velocity.float() - ref_aux_velocity.detach().to(
+            device=aux_velocity.device,
+            dtype=torch.float32,
+        )
+        squared_sum = squared_sum + aux_diff.square().sum()
+        numel += aux_diff.numel()
+    return squared_sum / numel
+
+
+def _reference_velocity_loss(
+    *,
+    replay_result: Any,
+    stage: Any,
+    ref_model: Any,
+    conditions: Any,
+    segment: "Segment",
+    params: Any,
+    target_steps: List[int],
+) -> Tuple[torch.Tensor, Dict[str, float]]:
+    """Compute direct velocity MSE against the adapter-disabled reference replay."""
+    model_outputs = getattr(replay_result, "model_outputs", None)
+    aux_model_outputs = getattr(replay_result, "aux_model_outputs", None)
+    if model_outputs is None:
+        raise RuntimeError("velocity_mse requires stage.replay() to return model_outputs, but got None")
+    ref_velocity, ref_aux_velocity = _reference_replay_velocities(
+        stage,
+        ref_model,
+        conditions=conditions,
+        segment=segment,
+        params=params,
+        target_steps=target_steps,
+    )
+    loss = _reference_velocity_mse(
+        model_outputs,
+        ref_velocity,
+        aux_model_outputs,
+        ref_aux_velocity,
+    )
+    metrics = {"reference_velocity_mse": float(loss.detach().item())}
+    with torch.no_grad():
+        metrics["reference_velocity_mse_primary"] = float(_reference_velocity_mse(model_outputs, ref_velocity).item())
+        if aux_model_outputs is not None and ref_aux_velocity is not None:
+            metrics["reference_velocity_mse_aux"] = float(
+                _reference_velocity_mse(aux_model_outputs, ref_aux_velocity).item()
+            )
+    return loss, metrics
+
+
+def _normalize_reference_loss_type(value: str, *, algo: str) -> str:
+    """Validate the reference regularizer selected for a flow algorithm."""
+    normalized = str(value).strip().lower()
+    if normalized not in ("transition_kl", "velocity_mse"):
+        raise ValueError(f"{algo}.reference_loss_type must be 'transition_kl' or 'velocity_mse'; got {value!r}")
+    return normalized
 
 
 def _resolve_reference_model(backend: Any, *, beta: float, algo: str) -> Any:

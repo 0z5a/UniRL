@@ -19,8 +19,10 @@ from .base import (
     BaseAlgorithmConfig,
     StageAlgorithm,
     _grpo_clip_loss,
+    _normalize_reference_loss_type,
     _reference_kl_loss,
     _reference_replay_means,
+    _reference_velocity_loss,
     _resolve_clip_range_from_schedule,
     _resolve_reference_model,
     _transition_sigma,
@@ -39,6 +41,7 @@ class FlowGRPOConfig(BaseAlgorithmConfig):
     clip_range: float = 1e-4
     clip_schedule: str = "constant"
     beta: float = 0.0
+    reference_loss_type: str = "transition_kl"
     old_logp_source: str = "rollout"
     max_rollout_replay_logp_absdiff: Optional[float] = None
     rollout_replay_parity_action: str = "raise"
@@ -65,6 +68,7 @@ class FlowGRPO(StageAlgorithm):
         clip_range: float = 1e-4,
         clip_schedule: str = "constant",
         beta: float = 0.0,
+        reference_loss_type: str = "transition_kl",
         old_logp_source: str = "rollout",
         max_rollout_replay_logp_absdiff: Optional[float] = None,
         rollout_replay_parity_action: str = "raise",
@@ -81,6 +85,7 @@ class FlowGRPO(StageAlgorithm):
         self.clip_range = float(clip_range)
         self.clip_schedule = str(clip_schedule)
         self.beta = float(beta)
+        self.reference_loss_type = _normalize_reference_loss_type(reference_loss_type, algo="FlowGRPO")
         self._ref_model = _resolve_reference_model(backend, beta=self.beta, algo="FlowGRPO")
         self.old_logp_source = str(old_logp_source).strip().lower()
         self.max_rollout_replay_logp_absdiff = (
@@ -332,7 +337,21 @@ class FlowGRPO(StageAlgorithm):
             **{k: float(v.item()) for k, v in ratio_metrics.items()},
         }
 
-        if self.beta > 0.0:
+        if self.beta > 0.0 and self.reference_loss_type == "velocity_mse":
+            reference_loss, reference_metrics = _reference_velocity_loss(
+                replay_result=replay_result,
+                stage=self.stage,
+                ref_model=self._ref_model,
+                conditions=typed_conds,
+                segment=segment,
+                params=self.params,
+                target_steps=target_steps,
+            )
+            loss = loss + self.beta * reference_loss
+            metrics.update(reference_metrics)
+            metrics["beta"] = float(self.beta)
+            metrics["reference_loss"] = float(reference_loss.detach().item())
+        elif self.beta > 0.0:
             if new_means is None:
                 raise RuntimeError(
                     "FlowGRPO: beta>0 requires stage.replay() to return prev_sample_means, "

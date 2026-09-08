@@ -19,8 +19,10 @@ from .base import (
     BaseAlgorithmConfig,
     StageAlgorithm,
     _gaussian_kl_div,
+    _normalize_reference_loss_type,
     _reference_kl_loss,
     _reference_replay_means,
+    _reference_velocity_loss,
     _resolve_reference_model,
     _transition_sigma,
     gather_sde_field,
@@ -38,6 +40,7 @@ class FlowDPPOConfig(BaseAlgorithmConfig):
     kl_mask_threshold: float = 1e-5
     add_kl_coefficient: bool = True
     beta: float = 0.0
+    reference_loss_type: str = "transition_kl"
     old_logp_source: str = "rollout"
     max_rollout_replay_logp_absdiff: Optional[float] = None
     rollout_replay_parity_action: str = "raise"
@@ -116,6 +119,7 @@ class FlowDPPO(StageAlgorithm):
         kl_mask_threshold: float = 1e-5,
         add_kl_coefficient: bool = True,
         beta: float = 0.0,
+        reference_loss_type: str = "transition_kl",
         old_logp_source: str = "rollout",
         max_rollout_replay_logp_absdiff: Optional[float] = None,
         rollout_replay_parity_action: str = "raise",
@@ -132,6 +136,7 @@ class FlowDPPO(StageAlgorithm):
         self.kl_mask_threshold = float(kl_mask_threshold)
         self.add_kl_coefficient = bool(add_kl_coefficient)
         self.beta = float(beta)
+        self.reference_loss_type = _normalize_reference_loss_type(reference_loss_type, algo="FlowDPPO")
         self._ref_model = _resolve_reference_model(backend, beta=self.beta, algo="FlowDPPO")
         self.old_logp_source = str(old_logp_source).strip().lower()
         self.max_rollout_replay_logp_absdiff = (
@@ -398,7 +403,21 @@ class FlowDPPO(StageAlgorithm):
             **{key: float(value.item()) for key, value in ratio_metrics.items()},
         }
 
-        if self.beta > 0.0:
+        if self.beta > 0.0 and self.reference_loss_type == "velocity_mse":
+            reference_loss, reference_metrics = _reference_velocity_loss(
+                replay_result=replay_result,
+                stage=self.stage,
+                ref_model=self._ref_model,
+                conditions=typed_conds,
+                segment=segment,
+                params=self.params,
+                target_steps=target_steps,
+            )
+            loss = loss + self.beta * reference_loss
+            metrics.update(reference_metrics)
+            metrics["beta"] = float(self.beta)
+            metrics["reference_loss"] = float(reference_loss.detach().item())
+        elif self.beta > 0.0:
             ref_means = _reference_replay_means(
                 self.stage,
                 self._ref_model,

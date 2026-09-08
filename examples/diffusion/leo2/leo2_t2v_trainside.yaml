@@ -120,6 +120,8 @@ algorithm:
   stage_attr: diffusion
   clip_range: 1.0e-4
   clip_schedule: constant
+  beta: 0.0
+  reference_loss_type: transition_kl
   old_logp_source: replay
   max_rollout_replay_logp_absdiff: 1.0e-2
   rollout_replay_parity_action: warn

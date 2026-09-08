@@ -31,5 +31,11 @@ class ReplayResult:
     """Per-token critic predictions ``V_t``. Packed ``[total_tokens]`` for AR.
     ``None`` when replay did not request a value head."""
 
+    model_outputs: Optional[torch.Tensor] = None
+    """Raw model predictions aligned with replayed steps as ``[B, S', ...]``."""
+
+    aux_model_outputs: Optional[torch.Tensor] = None
+    """Optional auxiliary-modality predictions aligned with replayed steps."""
+
 
 __all__ = ["ReplayResult"]

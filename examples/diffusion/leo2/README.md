@@ -158,5 +158,7 @@ text encoder (`scripts/unirl_longrun_v3b.sh`) ~495 s/step. Per-GPU peak ~52 GB.
   structureless videos while PickScore still reports ~0.73 — always eyeball
   rollout media next to the reward curve (R17, R26).
 * LoRA lr 1e-4 without KL reward-hacks into stripe textures by rollout ~50;
-  2.5e-5 stays clean. `algorithm.beta>0` (KL against the adapter-disabled base
-  model) is the intended fix (R26–R27, `scripts/unirl_longrun_v4.sh`).
+  2.5e-5 stays clean. `algorithm.beta>0` regularizes against the adapter-disabled
+  base model. `algorithm.reference_loss_type` selects the existing
+  `transition_kl` or direct joint audio-video `velocity_mse`; retune `beta` when
+  switching because their scales differ (R26–R27, `scripts/unirl_longrun_v4.sh`).

@@ -469,6 +469,8 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
         channel_cond = None
         log_probs: List[torch.Tensor] = []
         means: List[torch.Tensor] = []
+        model_outputs: List[torch.Tensor] = []
+        aux_model_outputs: List[torch.Tensor] = []
         with self._autocast():
             for step_idx in targets:
                 x = segment.latents_at(step_idx).to(self.bundle.device)
@@ -488,6 +490,9 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
                     audio_sample=a,
                     audio_sigma=audio_sigmas[step_idx] if audio_sigmas is not None else None,
                 )
+                model_outputs.append(pred)
+                if audio_pred is not None:
+                    aux_model_outputs.append(audio_pred)
                 _, log_prob, mean = self.strategy.denoise(
                     noise_pred=pred,
                     sample=x,
@@ -526,6 +531,8 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
         return ReplayResult(
             log_probs=torch.stack(log_probs, dim=1),
             prev_sample_means=torch.stack(means, dim=1) if means else None,
+            model_outputs=torch.stack(model_outputs, dim=1) if model_outputs else None,
+            aux_model_outputs=torch.stack(aux_model_outputs, dim=1) if aux_model_outputs else None,
         )
 
     def predict_noise_at_step(
