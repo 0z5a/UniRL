@@ -39,7 +39,7 @@ backend:
 sampling:
   num_inference_steps: 12
   guidance_scale: 1.0
-  eta: 0.5
+  eta: 0.9
   sde_indices: null
   scheduler:
     _target_: unirl.sde.index_schedule.AllSDEScheduler
