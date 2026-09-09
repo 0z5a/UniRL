@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-09-09
+
+### Changed
+
+- Increased the Leo2 motion-bilingual recipe's group size from 8 to 16, yielding 512 samples from 32 prompt groups per rollout.
+
 ## 2026-09-08
 
 ### Added

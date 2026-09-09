@@ -6,7 +6,7 @@ defaults:
 
 num_devices: 64
 num_groups: 32
-group_size: 8
+group_size: 16
 batch_size: ${num_groups}
 rollout_chunk_prompts: ${num_groups}
 num_rollouts: 300
