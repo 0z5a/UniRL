@@ -85,6 +85,23 @@ def _repeat_interleave(
     *,
     output_size=None,
 ):
+    # A shared timestep produces singleton [1, 1, H] modulation.  It broadcasts
+    # over every logical sample and every local CP token, so both B=1 and B>1
+    # avoid materializing a full per-token tensor.  Distinct per-sample
+    # timesteps retain the native repeat/interleave path below.
+    if (
+        dim == 1
+        and inputs.ndim == 3
+        and repeats.ndim == 1
+    ):
+        if inputs.size(1) == 1:
+            return inputs.float()
+        if inputs.size(1) != repeats.numel():
+            raise ValueError(
+                "Packed timestep modulation requires one shared state or one state per sample; "
+                f"got states={inputs.size(1)}, samples={repeats.numel()}"
+            )
+
     if get_parallel_state().cp_size > 1 and dim == 1 and inputs.ndim == 3 and repeats.ndim == 1:
         sample_indices = torch.repeat_interleave(
             torch.arange(inputs.size(dim), device=inputs.device),
@@ -98,6 +115,15 @@ def _repeat_interleave(
     if get_parallel_state().cp_size > 1:
         ret = maybe_scatter_seq(ret)
     return ret
+
+
+def _select_ragged_timestep_state(states, index, count):
+    """Select one media timestep, or retain a scalar state shared by the row."""
+    if states.size(0) == 1:
+        return states
+    assert states.size(0) == count, \
+        f"Expected one shared timestep or {count} media timesteps, got {states.size(0)}"
+    return states[index:index + 1]
 
 
 def _apply_cond_zero_timestep_mod(gen_mod, gen_mod_t0, gen_cond_token_mask, gen_lengths_for_mod):
@@ -2013,7 +2039,10 @@ class LeoModelBase(HunyuanMultimodalState):
                         media_ij = media_i[j].unsqueeze(0)
                         assert media_ij.ndim in allowed_dims, \
                             f"image_ij should have size of (1, C, H, W) or (1, C, D, H, W), got {list(media_ij.size())}"
-                        media_ij_seq, *_ = patch_embed(media_ij, ts_state_i[j:j + 1])  # (1, num_patches, n_embd)
+                        media_ij_seq, *_ = patch_embed(
+                            media_ij,
+                            _select_ragged_timestep_state(ts_state_i, j, len(media_i)),
+                        )  # (1, num_patches, n_embd)
                         media_i_seq_list.append(media_ij_seq)
                     media_i_seq = torch.cat(media_i_seq_list, dim=1)  # (1, Σj num_patches_j, n_embd)
 
@@ -2093,7 +2122,10 @@ class LeoModelBase(HunyuanMultimodalState):
                         media_ij = media_i[j].unsqueeze(0)
                         assert media_ij.ndim in allowed_dims, \
                             f"image_ij should have size of {allowed_dims}-D tensor, got {list(media_ij.size())}"
-                        media_ij_seq, *_ = patch_embed(media_ij, t_i_emb[j:j + 1])  # (1, num_patches, n_embd)
+                        media_ij_seq, *_ = patch_embed(
+                            media_ij,
+                            _select_ragged_timestep_state(t_i_emb, j, len(media_i)),
+                        )  # (1, num_patches, n_embd)
                         media_i_seq_list.append(media_ij_seq)
                     media_i_seq = torch.cat(media_i_seq_list, dim=1)    # (1, Σj num_patches_j, n_embd)
 
@@ -2293,7 +2325,11 @@ class LeoModelBase(HunyuanMultimodalState):
                 assert len(media_out_i) == len(rope_info_i), \
                     f"Length of media outputs ({len(media_out_i)}) should match length of rope_media_info ({len(rope_info_i)})"
                 for j, (media_out_ij, rope_info_ij) in enumerate(zip(media_out_i, rope_info_i)):
-                    diff_pred_ij = final_layer(media_out_ij, ts_state_i[j:j+1], *rope_info_ij[1])
+                    diff_pred_ij = final_layer(
+                        media_out_ij,
+                        _select_ragged_timestep_state(ts_state_i, j, len(media_out_i)),
+                        *rope_info_ij[1],
+                    )
                     diff_preds.append(diff_pred_ij)
                 diff_pred_list.append(diff_preds)
             diff_pred = diff_pred_list
@@ -2337,7 +2373,11 @@ class LeoModelBase(HunyuanMultimodalState):
                 media_output_i = media_output_i.split(subsections)
                 pred_i = []
                 for j, media_output_ij in enumerate(media_output_i):
-                    pred_ij = final_layer(media_output_ij[None], t_emb_i[j:j+1], *info_i[j][1])
+                    pred_ij = final_layer(
+                        media_output_ij[None],
+                        _select_ragged_timestep_state(t_emb_i, j, len(media_output_i)),
+                        *info_i[j][1],
+                    )
                     pred_i.append(pred_ij)
                 pred.append(pred_i) # a list of list of 4-D tensors [B x (N_i x [1, C, H_ij, W_ij])]
         return pred
@@ -2606,9 +2646,12 @@ class LeoModelBase(HunyuanMultimodalState):
                 seqlen, device, rope_media_info=rope_media_info, sample_offsets=sample_offsets,
             )
 
-        if attention_mask is not None and self._config.attn_impl in ["flash", "flash_packed", "flash3", "flash3_packed"]:
+        attn_impl = self._config.attn_impl
+        if not torch.is_grad_enabled() and not self.training and self._config.inference_attn_impl is not None:
+            attn_impl = self._config.inference_attn_impl
+        if attention_mask is not None and attn_impl in ["flash", "flash_packed", "flash3", "flash3_packed"]:
             from hy_parallelism.models.modules.attentions.flash import FlashAttnMaskInfo
-            attention_mask = FlashAttnMaskInfo.from_attention_mask(attention_mask, pack="packed" in self._config.attn_impl)
+            attention_mask = FlashAttnMaskInfo.from_attention_mask(attention_mask, pack="packed" in attn_impl)
 
         # Prepare transformer block inputs
         middle_layer_hidden_states = None
@@ -2628,6 +2671,8 @@ class LeoModelBase(HunyuanMultimodalState):
             and not self.training
             and len(self.layers) > 1
         )
+        # Cache controllers consume timestep values rather than the physical media container.
+        cache_timesteps = timesteps[0] if isinstance(timesteps, list) and len(timesteps) == 1 else timesteps
         if self._audio_config is not None:
             block_head_inputs = (hidden_states, audio_hidden_states, txt_hidden_states)
         else:
@@ -2638,7 +2683,7 @@ class LeoModelBase(HunyuanMultimodalState):
         if magcache_active and cache_controller.should_reuse(
             block_head_inputs,
             leader_block=self.layers[0],
-            timestep=timesteps,
+            timestep=cache_timesteps,
         ):
             cached_outputs = cache_controller.apply_full(block_head_inputs)
             if self._audio_config is not None:
@@ -2709,7 +2754,7 @@ class LeoModelBase(HunyuanMultimodalState):
                     block_head_inputs,
                     block_head_outputs,
                     leader_block=layer,
-                    timestep=timesteps,
+                    timestep=cache_timesteps,
                 ):
                     cached_outputs = cache_controller.apply_tail(block_head_outputs)
                     if self._audio_config is not None:
@@ -2737,7 +2782,7 @@ class LeoModelBase(HunyuanMultimodalState):
             if magcache_active:
                 cache_controller.update_full(block_head_inputs, block_outputs)
             else:
-                cache_controller.update_tail(block_head_outputs, block_outputs, timestep=timesteps)
+                cache_controller.update_tail(block_head_outputs, block_outputs, timestep=cache_timesteps)
 
         if get_parallel_state().cp_size > 1:
             hidden_states = maybe_gather_seq(hidden_states, cp_info=get_cp_info(LEO_MEDIA_CP_INFO))

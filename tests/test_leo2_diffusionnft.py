@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import os
 from collections import OrderedDict
 from contextlib import nullcontext
-import os
 from pathlib import Path
 from types import MethodType, SimpleNamespace
 
@@ -15,6 +15,7 @@ from hydra.utils import instantiate
 from omegaconf import OmegaConf
 
 from unirl.algorithms.diffusionnft import DiffusionNFT
+from unirl.distributed.group.remote import RankInfo
 from unirl.models.leo2.bundle import (
     _configure_grouped_gemm_fallback,
     _dcp_load_into,
@@ -27,7 +28,6 @@ from unirl.models.leo2.pipeline import Leo2Pipeline
 from unirl.models.leo2.preprocess import _records
 from unirl.models.leo2.text_embed import Leo2CondStage, _to_transport_tree
 from unirl.models.leo2.vae import Leo2AudioDecodeStage
-from unirl.distributed.group.remote import RankInfo
 from unirl.rollout.engine.trainside.engine import TrainsideRolloutEngine
 from unirl.sde.kernels import FlowSDEStrategy
 from unirl.train.backend.base_backend import BaseFSDP2Backend
@@ -83,7 +83,7 @@ def test_leo2_predict_noise_at_step_forwards_batch_one() -> None:
     assert observed == {
         "blob": blob,
         "prep_shape": tuple(sample.shape),
-        "predict_blob": blob,
+        "predict_blob": [blob],
         "sigma": 0.5,
         "channel_cond": ("cond", "mask"),
     }
@@ -135,6 +135,46 @@ def test_leo2_av_single_step_uses_shifted_deterministic_audio_prior() -> None:
     torch.testing.assert_close(
         observed["audio_sample"],
         torch.full((1, 96, 4), 0.75),
+    )
+    torch.testing.assert_close(output, torch.ones_like(output))
+
+
+def test_leo2_av_single_step_packs_per_sample_sigmas_and_audio_priors() -> None:
+    stage = object.__new__(Leo2DiffusionStage)
+    stage.bundle = SimpleNamespace(device=torch.device("cpu"))
+    stage.trajectory_dtype = torch.float32
+    stage.enable_audio = True
+    stage.video_shift = 9.0
+    stage.audio_shift = 3.0
+    stage._prep_channel_cond = MethodType(lambda self, blob, sample: (None, None), stage)
+    stage._autocast = MethodType(lambda self: nullcontext(), stage)
+    observed = {}
+
+    def predict_joint(self, blobs, **kwargs):
+        observed["blobs"] = blobs
+        observed["sigma"] = kwargs["sigma"]
+        observed["audio_sigma"] = kwargs["audio_sigma"]
+        observed["audio_sample"] = kwargs["audio_sample"]
+        return torch.ones_like(kwargs["sample"]), torch.zeros_like(kwargs["audio_sample"])
+
+    stage.predict_joint_noise = MethodType(predict_joint, stage)
+    blobs = [
+        {"training_audio_noise": torch.ones(1, 2, 3)},
+        {"training_audio_noise": torch.full((1, 2, 3), 2.0)},
+    ]
+    output = stage.predict_noise_at_step(
+        SimpleNamespace(hymm=blobs),
+        sample=torch.zeros(2, 4, 1, 2, 2),
+        sigma=torch.tensor([0.9, 0.5]),
+        params=SimpleNamespace(guidance_scale=1.0),
+    )
+
+    assert observed["blobs"] is blobs
+    torch.testing.assert_close(observed["sigma"], torch.tensor([0.9, 0.5]))
+    torch.testing.assert_close(observed["audio_sigma"], torch.tensor([0.75, 0.25]))
+    torch.testing.assert_close(
+        observed["audio_sample"],
+        torch.stack([torch.full((2, 3), 0.75), torch.full((2, 3), 0.5)]),
     )
     torch.testing.assert_close(output, torch.ones_like(output))
 
@@ -295,14 +335,14 @@ def test_leo2_bf16_av_rollout_log_probs_match_replay() -> None:
     params = SimpleNamespace(num_inference_steps=2, eta=0.5)
 
     segment = stage.generate(
-        SimpleNamespace(hymm=[{}]),
+        SimpleNamespace(hymm=[{}, {}]),
         params=params,
         sigmas=torch.tensor([0.8, 0.5, 0.2]),
-        initial_latents=torch.randn(1, 3, 2, 2, dtype=torch.bfloat16),
-        initial_audio_latents=torch.randn(1, 2, 3, dtype=torch.bfloat16),
+        initial_latents=torch.randn(2, 3, 2, 2, dtype=torch.bfloat16),
+        initial_audio_latents=torch.randn(2, 2, 3, dtype=torch.bfloat16),
         sde_indices=[0, 1],
     )
-    replay = stage.replay(SimpleNamespace(hymm=[{}]), segment=segment, params=params)
+    replay = stage.replay(SimpleNamespace(hymm=[{}, {}]), segment=segment, params=params)
 
     torch.testing.assert_close(replay.log_probs, segment.sde_logp, rtol=0.0, atol=0.0)
     assert segment.sde_means.dtype is torch.float32
@@ -422,14 +462,14 @@ def test_leo2_rollout_enters_request_scoped_cache_context() -> None:
             torch.zeros(2, 48, 2, 3, 4),
             torch.tensor([0.5, 0.6]),
             1.0,
-            "batch-1",
+            "one condition per sample",
         ),
         (
             SimpleNamespace(hymm=[{}]),
             torch.zeros(1, 48, 2, 3, 4),
             torch.tensor([0.5, 0.6]),
             1.0,
-            "one sigma",
+            "one shared sigma or one per sample",
         ),
         (
             SimpleNamespace(hymm=[{}]),
@@ -612,7 +652,7 @@ def test_leo2_motion_bilingual_flowgrpo_recipe_matches_requested_contract() -> N
 
     assert config.num_devices == 64
     assert config.num_groups == 32
-    assert config.group_size == 8
+    assert config.group_size == 16
     assert config.save_interval == 20
     assert config.bundle.config.video_shift == pytest.approx(12.0)
     assert config.bundle.config.enable_audio is True
@@ -698,9 +738,7 @@ def test_rollout_end_ema_uses_last_committed_optimizer_index() -> None:
 
 def test_chunked_global_advantages_match_full_batch() -> None:
     branch = 4
-    rewards = torch.tensor(
-        [0.0, 1.0, 2.0, 3.0, 2.0, 3.0, 4.0, 5.0, 1.0, 4.0, 2.0, 6.0, 8.0, 5.0, 7.0, 9.0]
-    )
+    rewards = torch.tensor([0.0, 1.0, 2.0, 3.0, 2.0, 3.0, 4.0, 5.0, 1.0, 4.0, 2.0, 6.0, 8.0, 5.0, 7.0, 9.0])
     sample_ids = [f"group-{group}/{sample}" for group in range(4) for sample in range(branch)]
     full = Part(sample_ids=sample_ids, rewards=rewards)
     expected = full.compute_advantages(normalize=True, use_global_std=True)
