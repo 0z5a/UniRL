@@ -53,7 +53,34 @@ RL 生成的视频随策略变化，不能把固定缓存的 x0 替代在线 rol
 只读模式从 bundle 构建阶段就跳过 Qwen 和 tokenizer 的加载，不创建依赖冻结组件的原生 diffusion pipeline。
 DiT 前向改为独立生成 T2V 的零 channel conditions，并递归搬运缓存中的所有 tensor。
 缓存 SFT 配方使用 `Leo2CachedSupervisedTrackBuilder`，走现有 `FlowMatchSFT → predict_noise_at_step` 链路。
-当前配方是 DiT **LoRA** 训练，不是默认全参数训练；`stack.micro_batch_size: 1` 保留原生 batch-1 前向约束。
+当前配方是 DiT **LoRA** 训练，不是默认全参数训练；rollout 和训练 micro-batch 均可使用 packed batch。
+
+## Packed sequence forward
+
+每个样本仍由原生预处理产生完整的单行 token 序列。前向时将多个序列拼成一个物理行，并通过
+segment-length attention mask 和 `sample_offsets` 保留样本边界；FA3 因而只在各样本内部计算 attention。
+视频和音频 latent 保留逻辑 batch 维；共享 timestep 保持 scalar，不同 timestep 保留 B 个值。
+patch projection 后再沿 token 轴拼接。
+B=1 和 B>1 使用同一条路径，避免两套 timestep 与输出拆分逻辑产生偏差。
+
+Leo2 pipeline 为每次真实 generate call 记录该 pack 的完整有序 sample ids；CountPlanner 将该 pack
+作为不可拆分的 replay micro。pack 数不能整除 optimizer update 数时会在训练前报错。
+
+`und/gen/audio_token_indices` 会按样本 offset 平移。使用 CP 时，每个分支独立补齐到 CP size 的倍数，
+padding 通过 mask 从 attention 和输出 projection 中排除。该路径要求 `flash_packed` 或
+`flash3_packed`，且当前 B>1 仅支持 `linear` text projection；dense attention backend 无法表达拼接
+序列的隔离边界。B=1 的 timestep modulation
+保持 `[1,1,H]` 并由逐元素运算广播，避免每层重复物化完整 token 长度的 modulation tensor。
+
+模型边界已经接受同一任务内不同 H/W/F、不同音频长度的 ragged latent，并在一次 packed forward 后
+按原始顺序和 shape 拆回预测。当前在线 rollout、trajectory、SDE 和 decoder 仍使用矩形 batch，正式
+Flow-GRPO 配方因此先支持同分辨率的 T2V/T2VA。端到端异构训练还需逐样本生成 noise/trajectory、逐行
+执行 SDE transition，并按 shape 分桶解码；不能用 `Videos.from_list` 把输出缩放到共同分辨率。
+
+原生 Leo2 还定义了 T2I、I2VA、FL2VA 和 T2A。I2VA/FL2VA 需要逐样本 channel condition，T2I/T2A
+使用不同 scheduler，缺失模态则由原生 dummy branch 补齐。跨任务 packed batch 因而还需要逐样本 task
+spec、modality presence 和 scheduler，并在 decoder/reward 边界按任务拆分后恢复原始顺序。原生训练器本身
+也只在同一 dataset/task 的 buffer 内组 pack；多任务是在不同 step 间抽样，并未直接提供跨任务 pack。
 
 ## 使用方法
 
@@ -136,7 +163,7 @@ bash examples/run_experiment_single_node.sh diffusion/leo2/leo2_t2v_cached
 配方见 `examples/diffusion/leo2/leo2_t2v_flowgrpo_separate.yaml`；默认将 GPU 对半分配。
 Rollout 侧复用 FSDP 权重分片和 LoRA 注入，关闭 activation checkpointing，不执行 optimizer step。
 `RemoteLoraWeightSync` 发布完整 adapter，写入现有参数并校验回读；训练与 rollout 的 LoRA rank/alpha 必须一致。
-当前只接受 readonly 条件缓存、单个无 bias/dropout 的 default adapter，单次 forward 为一个视频。
+当前只接受 readonly 条件缓存、单个无 bias/dropout 的 default adapter；单次 forward 可包含多个 packed 视频。
 CPU 配置与 adapter 往返已验证；16 GPU 同卡独立进程模式也已通过两次更新、参数同步回读与跨拓扑 replay 检查，性能结果见运行报告。
 
 `leo2_t2v_flowgrpo_colocated.yaml` 使用同一批物理 GPU 上的两个 worker slot，分别构建训练和 rollout 进程组。

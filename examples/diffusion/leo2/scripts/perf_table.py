@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Summarise ``[leo2 perf]`` and ``[leo2 mem]`` lines from a UniRL smoke log."""
+"""Summarise displayed ``[leo2 perf]``/``[leo2 mem]`` log measurements."""
 
 import re
 import statistics
 import sys
 
 PERF = re.compile(
-    r"\[leo2 perf\] fwd#(\d+) grad=(\w+) tokens=(\d+) dt=([\d.]+)s "
+    r"\[leo2 perf\] fwd#(\d+) grad=(\w+) "
+    r"(?:bsz=(\d+) packed=(\w+) )?tokens=(\d+) dt=([\d.]+)s "
     r"before=([\d.]+)GB after=([\d.]+)GB peak=([\d.]+)GB"
 )
 PRE = re.compile(r"\[leo2 mem\] pre-rollout alloc=([\d.]+)GB.*local GPU param bytes=([\d.]+)GB")
@@ -27,11 +28,13 @@ def main(path: str) -> None:
                         {
                             "idx": int(m[1]),
                             "grad": m[2] == "True",
-                            "tokens": int(m[3]),
-                            "dt": float(m[4]),
-                            "before": float(m[5]),
-                            "after": float(m[6]),
-                            "peak": float(m[7]),
+                            "bsz": int(m[3]) if m[3] else 1,
+                            "packed": m[4] == "True" if m[4] else False,
+                            "tokens": int(m[5]),
+                            "dt": float(m[6]),
+                            "before": float(m[7]),
+                            "after": float(m[8]),
+                            "peak": float(m[9]),
                             "rep": int(rep[1]) if rep else 1,
                         }
                     )
@@ -45,12 +48,17 @@ def main(path: str) -> None:
         if not sel:
             continue
         dts = [r["dt"] for r in sel]
+        rank_events = sum(r["rep"] for r in sel)
+        sample_rates = [r["bsz"] / r["dt"] for r in sel]
         print(
             f"{'train (grad)' if grad else 'rollout/replay (no_grad)':>26}: "
-            f"n_lines={len(sel)} (x{sum(r['rep'] for r in sel)} incl. dedup) "
+            f"n_lines={len(sel)} (~{rank_events} rank-events incl. Ray dedup) "
+            f"bsz~{statistics.median(r['bsz'] for r in sel):.0f} "
+            f"packed={any(r['packed'] for r in sel)} "
             f"tokens~{statistics.median(r['tokens'] for r in sel):.0f} "
-            f"dt median={statistics.median(dts):.2f}s min={min(dts):.2f}s max={max(dts):.2f}s "
-            f"peak max={max(r['peak'] for r in sel):.1f}GB "
+            f"displayed dt median={statistics.median(dts):.2f}s min={min(dts):.2f}s max={max(dts):.2f}s "
+            f"displayed rank-local sample-step/s median={statistics.median(sample_rates):.3f} "
+            f"displayed peak max={max(r['peak'] for r in sel):.1f}GB "
             f"resident after={max(r['after'] for r in sel):.1f}GB"
         )
 
