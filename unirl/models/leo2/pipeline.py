@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import os
 from typing import Any, Tuple
 
@@ -30,7 +31,7 @@ from .vae import Leo2AudioDecodeStage, Leo2VideoDecodeStage
 
 
 class Leo2Pipeline(Pipeline):
-    """Text -> video through one unpacked-latent denoising loop."""
+    """Text -> video through a sequence-packed denoising loop."""
 
     def __init__(
         self,
@@ -198,12 +199,14 @@ class Leo2Pipeline(Pipeline):
         )
         audio_noise = None
         if self.config.enable_audio:
-            blob = conditions.hymm[0]
-            audio_token_length = blob.get("audio_token_length")
+            audio_token_lengths = [blob.get("audio_token_length") for blob in conditions.hymm]
             require(
-                type(audio_token_length) is int and audio_token_length > 0,
-                "Leo2Pipeline.generate: AV conditions carry no positive audio_token_length",
+                all(type(length) is int and length > 0 for length in audio_token_lengths)
+                and len(set(audio_token_lengths)) == 1,
+                "Leo2Pipeline.generate: packed AV conditions require one shared positive "
+                f"audio_token_length, got {audio_token_lengths}",
             )
+            audio_token_length = audio_token_lengths[0]
             audio_noise = recipe.resolve(
                 device=self.bundle.device,
                 salt="audio",
@@ -234,9 +237,7 @@ class Leo2Pipeline(Pipeline):
                 self.audio_decode is not None and segment.aux_latents is not None,
                 "Leo2Pipeline.generate: AV rollout produced no audio decoder/trajectory",
             )
-            final_audio_latents = segment.aux_latents_at(
-                int(params.num_inference_steps)
-            )
+            final_audio_latents = segment.aux_latents_at(int(params.num_inference_steps))
             primitives["audio"] = self.audio_decode.decode(final_audio_latents)
             primitive_metadata["audio"] = {"sample_rate": LEO2_AUDIO_SAMPLE_RATE}
 
@@ -245,6 +246,11 @@ class Leo2Pipeline(Pipeline):
             primitives=primitives,
             primitive_metadata=primitive_metadata,
             conditions=conditions.to_dict(),
+        )
+        forward_pack = tuple(gen.sample_ids)
+        filled = dataclasses.replace(
+            filled,
+            forward_pack_sample_ids=[forward_pack] * gen.batch_size,
         )
         return Sample(parts=[*sample.parts[:-1], filled], reward_compute_s=sample.reward_compute_s)
 

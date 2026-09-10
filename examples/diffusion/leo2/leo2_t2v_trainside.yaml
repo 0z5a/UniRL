@@ -2,7 +2,7 @@
 # Leo2 (HYVideo 2.0 MoE-A12B) T2V FlowGRPO -- in-process (trainside) smoke.
 #
 # Stack (mirrors hunyuan_video_t2v_trainside + minimax_h3 trainside):
-#   - rollout: TrainsideRolloutEngine, forward_batch_size=1 (hymm blobs are batch-1)
+#   - rollout: TrainsideRolloutEngine, forward_batch_size=2 (one packed forward)
 #   - backend: FSDPBackend full-shard over Leo{,Dual,Triple}Layer; LoRA r64/a256
 #     on attention (video+text streams) + shared/dense MLPs; MoE experts frozen
 #   - strategy: FlowSDE (Leo2 velocity feeds noise_pred UN-negated)
@@ -101,7 +101,9 @@ backend:
 rollout:
   _target_: unirl.rollout.engine.trainside.engine.TrainsideRolloutEngine
   stage_attrs: [diffusion]
-  forward_batch_size: 1
+  # Flow-GRPO replay uses the same contiguous B=2 boundaries below. Keep the
+  # rollout-created pack intact; do not independently repack its samples.
+  forward_batch_size: 2
 
 reward:
   _target_: unirl.reward.service.RewardService
@@ -132,9 +134,13 @@ algorithm:
 
 stack:
   _target_: unirl.train.stack.TrainStack
-  micro_batch_size: 1
+  micro_batch_size: 2
   max_grad_norm: 1.0
   num_updates_per_batch: 1
+  # CountPlanner replays recorded rollout packs without changing their members,
+  # inner order, or boundary; complete packs may still be reordered.
+  micro_planner:
+    _target_: unirl.train.stack.CountPlanner
 
 data_source:
   _target_: unirl.data.data_source.MultimodalRLDataSource

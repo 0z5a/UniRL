@@ -41,8 +41,10 @@ class Leo2RolloutEngine(TrainsideRolloutEngine):
             or fsdp_cfg.ep_size != bundle_config.expert_parallel_size
         ):
             raise ValueError("Leo2 rollout FSDP and bundle CP/EP settings must agree.")
-        if tuple(stage_attrs) != ("diffusion",) or forward_batch_size != 1:
-            raise ValueError("Leo2 rollout requires the diffusion stage and forward_batch_size=1.")
+        if tuple(stage_attrs) != ("diffusion",):
+            raise ValueError("Leo2 rollout requires the diffusion stage.")
+        if isinstance(forward_batch_size, bool) or not isinstance(forward_batch_size, int) or forward_batch_size <= 0:
+            raise ValueError(f"Leo2 rollout forward_batch_size must be a positive integer, got {forward_batch_size!r}.")
         if fsdp_cfg.activation_checkpointing:
             raise ValueError("Leo2 rollout does not use activation checkpointing.")
         if lora_cfg.dropout or lora_cfg.bias != "none" or lora_cfg.frozen_adapters:
@@ -61,7 +63,7 @@ class Leo2RolloutEngine(TrainsideRolloutEngine):
         )
         self._lora_cfg = lora_cfg
         pipeline = Leo2Pipeline.from_bundle(bundle, config=bundle_config, strategy=strategy)
-        super().__init__(pipeline=pipeline, forward_batch_size=1)
+        super().__init__(pipeline=pipeline, forward_batch_size=forward_batch_size)
         self._offload_on_sleep = bool(offload_on_sleep)
         self._offloaded = False
 

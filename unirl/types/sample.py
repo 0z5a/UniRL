@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from dataclasses import fields as dc_fields
-from typing import Any, Callable, Dict, List, Literal, Optional, Sequence
+from typing import Any, Callable, Dict, List, Literal, Optional, Sequence, Tuple
 
 import torch
 
@@ -75,6 +75,7 @@ class Part(Batch):
     output_version: Optional[int] = shared_field(default=None)
     harness_status: Optional[str] = shared_field(default=None)
     init_noise_group_ids: List[str] = concat_field(default_factory=list)
+    forward_pack_sample_ids: List[Tuple[str, ...]] = concat_field(default_factory=list)
 
     def __post_init__(self) -> None:
         expected_batch = len(self.sample_ids)
@@ -109,6 +110,11 @@ class Part(Batch):
             raise ValueError(
                 "Part.init_noise_group_ids must be empty or aligned with sample_ids; "
                 f"got {len(self.init_noise_group_ids)} keys for {expected_batch} samples."
+            )
+        if self.forward_pack_sample_ids and len(self.forward_pack_sample_ids) != expected_batch:
+            raise ValueError(
+                "Part.forward_pack_sample_ids must be empty or aligned with sample_ids; "
+                f"got {len(self.forward_pack_sample_ids)} entries for {expected_batch} samples."
             )
 
     @classmethod
