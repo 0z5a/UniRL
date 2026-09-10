@@ -5,6 +5,8 @@ defaults:
 
 layout: separate
 train_fraction: 0.5
+# Pipeline eval-chunk reward RPCs with generation on the disjoint rollout slab.
+eval_reward_async: true
 rollout_cp: 2
 rollout_ep: 8
 

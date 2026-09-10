@@ -58,6 +58,7 @@ def main(cfg: DictConfig) -> None:
         eval_samples_per_prompt=cfg.get("eval_samples_per_prompt", 4),
         eval_chunk_prompts=cfg.get("eval_chunk_prompts", 16),
         eval_eta=cfg.get("eval_eta", 0.0),
+        eval_reward_async=cfg.get("eval_reward_async", False),
         # Any DiffusionSamplingParams field; everything it omits inherits `sampling`.
         eval_sampling_cfg=cfg.get("eval_sampling"),
         eval_rewards_cfg=cfg.get("eval_rewards"),

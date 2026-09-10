@@ -14,6 +14,11 @@ The cached 121-frame recipe is [leo2_t2v_flowgrpo_cached.yaml](leo2_t2v_flowgrpo
 [leo2_t2v_flowgrpo_separate.yaml](leo2_t2v_flowgrpo_separate.yaml) instead assigns independent GPU slabs to native
 Leo2 rollout and FSDP training, with separate CP/EP settings and verified LoRA synchronization.
 See the topology report for its current GPU validation status and measured communication costs.
+With `python -m unirl.train_async_diffusion`, the separate trainer launches the
+next rollout before scoring the completed one, so rollout and reward overlap.
+Its `eval_reward_async: true` setting similarly pipelines each eval chunk's
+reward RPCs with generation of the following chunk; failures remain ordered and
+are propagated when the pending call is resolved.
 
 ## Layout
 

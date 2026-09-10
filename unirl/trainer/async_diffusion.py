@@ -121,5 +121,9 @@ class AsyncDiffusionTrainer(AsyncRolloutTrainerMixin, DiffusionTrainer):
     def _async_wandb_extra(self) -> Dict[str, object]:
         return {"train_fraction": self._train_fraction}
 
+    def _refill_before_score(self) -> bool:
+        """Launch the next rollout before scoring the completed batch."""
+        return True
+
     def _boundary_evaluate(self, rollout_id: int, *, initial: bool) -> None:
         self.evaluate(rollout_id if initial else rollout_id + 1, sync_weights=False, sleep_after=False)

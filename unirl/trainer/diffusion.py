@@ -403,6 +403,7 @@ class DiffusionTrainer(BaseTrainer):
         eval_samples_per_prompt: int = 4,
         eval_chunk_prompts: int = 16,
         eval_eta: float = 0.0,
+        eval_reward_async: bool = False,
         eval_sampling_cfg: Optional[Any] = None,
         eval_rewards_cfg: Optional[Any] = None,
         task_config: Optional[Dict[str, Any]] = None,
@@ -442,6 +443,12 @@ class DiffusionTrainer(BaseTrainer):
         self.eval_samples_per_prompt = int(eval_samples_per_prompt)
         self.eval_chunk_prompts = int(eval_chunk_prompts)
         self.eval_eta = float(eval_eta)
+        if not isinstance(eval_reward_async, bool):
+            raise TypeError(
+                "eval_reward_async must be bool, got "
+                f"{type(eval_reward_async).__name__}: {eval_reward_async!r}"
+            )
+        self.eval_reward_async = eval_reward_async
         self._eval_rewards_cfg = eval_rewards_cfg
         self._eval_suites: List[EvalRewardSuite] = []
         self._task_config: Dict[str, Any] = dict(task_config) if task_config else {}
@@ -520,6 +527,23 @@ class DiffusionTrainer(BaseTrainer):
                 "has no `reward:` block — drop reward_fraction or configure a reward."
             )
         self._reward_is_separate = reward_separate
+        if self.eval_reward_async:
+            if reward_cfg is None:
+                raise ValueError(
+                    "eval_reward_async=True requires a configured reward"
+                )
+            if self._layout != "separate" and not reward_separate:
+                raise ValueError(
+                    "eval_reward_async=True requires either layout='separate' "
+                    "or reward_fraction > 0 so generation and scoring use "
+                    "different GPU slabs"
+                )
+            if self._offload_train_during_reward:
+                raise ValueError(
+                    "eval_reward_async=True is incompatible with "
+                    "offload_train_during_reward: the train slab must remain "
+                    "stable while reward RPCs are in flight"
+                )
 
         train_cfgs = dict(
             bundle_cfg=bundle_cfg,
@@ -1175,6 +1199,87 @@ class DiffusionTrainer(BaseTrainer):
             if sleep_rollout or not prepare_succeeded:
                 _run_cleanup_steps([("empty evaluation rollout sleep", self.rollout.sleep)])
 
+    @staticmethod
+    def _accumulate_eval_score(
+        generated: Sample,
+        name: str,
+        scored_rows: Sample,
+        sums: Dict[str, float],
+        counts: Dict[str, int],
+    ) -> Sample:
+        scored = _restore_reward_rows(generated, scored_rows)
+        rewards = scored.parts[-1].rewards
+        if rewards is not None:
+            hydrated = hydrate(rewards).to(torch.float32)
+            scored.parts[-1].rewards = hydrated
+            sums[name] += float(hydrated.sum().item())
+            counts[name] += int(hydrated.numel())
+        return scored
+
+    @staticmethod
+    def _wait_eval_reward_calls(calls: List[Tuple[str, Any]]) -> None:
+        for _name, call in calls:
+            call.wait()
+
+    def _launch_eval_reward_calls(
+        self,
+        generated: Sample,
+        scorers: List[Tuple[str, Any]],
+    ) -> List[Tuple[str, Any]]:
+        calls: List[Tuple[str, Any]] = []
+        try:
+            for name, reward in scorers:
+                calls.append(
+                    (
+                        name,
+                        reward.launch_nowait(
+                            "score_and_attach",
+                            _flatten_reward_rows(generated),
+                        ),
+                    )
+                )
+        except BaseException:
+            _run_cleanup_steps(
+                [
+                    (
+                        "partially launched eval reward RPCs",
+                        lambda: self._wait_eval_reward_calls(calls),
+                    )
+                ]
+            )
+            raise
+        return calls
+
+    def _resolve_eval_reward_calls(
+        self,
+        pending: Tuple[
+            Sample,
+            List[Tuple[str, Any]],
+            Optional[str],
+        ],
+        *,
+        sums: Dict[str, float],
+        counts: Dict[str, int],
+        step: int,
+    ) -> float:
+        generated, calls, media_prefix = pending
+        wait_started = time.perf_counter()
+        first_scored: Optional[Sample] = None
+        for name, call in calls:
+            scored = self._accumulate_eval_score(
+                generated,
+                name,
+                call.result(),
+                sums,
+                counts,
+            )
+            if first_scored is None:
+                first_scored = scored
+        wait_seconds = time.perf_counter() - wait_started
+        if media_prefix and first_scored is not None:
+            self._log_eval_media(first_scored, step, prefix=media_prefix)
+        return wait_seconds
+
     def _eval_pass(
         self,
         data_source: Any,
@@ -1188,13 +1293,19 @@ class DiffusionTrainer(BaseTrainer):
         sleep_rollout: bool,
         media_prefix: Optional[str] = None,
     ) -> Tuple[Dict[str, float], bool, bool]:
-        """One generate→score sweep, pending-sync state, and whether it generated."""
+        """One generate→score sweep, optionally pipelined across eval chunks."""
         all_inputs = data_source.get_eval_samples(num_prompts)
         n_prompts = all_inputs.batch_size
         chunk = max(1, self.eval_chunk_prompts)
         sums = {name: 0.0 for name, _ in scorers}
         counts = {name: 0 for name, _ in scorers}
         sync_pending = bool(sync_weights)
+        pending: Optional[
+            Tuple[Sample, List[Tuple[str, Any]], Optional[str]]
+        ] = None
+        generation_seconds = 0.0
+        reward_wait_seconds = 0.0
+        pass_started = time.perf_counter()
         for start in range(0, n_prompts, chunk):
             sub = all_inputs.slice(start, min(start + chunk, n_prompts))
             _validate_prompt_tree_dp_geometry(
@@ -1205,34 +1316,102 @@ class DiffusionTrainer(BaseTrainer):
                 context=f"evaluation chunk [{start}:{start + sub.batch_size}]",
             )
             request = self._build_request_sample(sub, step, sampling=eval_sp)
-            generated = self._generate_with_residency(
-                request,
-                # Engines whose sleep releases the adapter (e.g. SGLang) need
-                # the requested policy re-pushed after every eval-chunk wake.
-                sync_weights=sync_pending or resync_after_sleep,
-                sleep_rollout=sleep_rollout,
-            )
+            generation_started = time.perf_counter()
+            try:
+                generated = self._generate_with_residency(
+                    request,
+                    # Engines whose sleep releases the adapter (e.g. SGLang) need
+                    # the requested policy re-pushed after every eval-chunk wake.
+                    sync_weights=sync_pending or resync_after_sleep,
+                    sleep_rollout=sleep_rollout,
+                )
+            except BaseException:
+                if pending is not None:
+                    _run_cleanup_steps(
+                        [
+                            (
+                                "pending eval reward RPCs after generation failure",
+                                lambda: self._wait_eval_reward_calls(pending[1]),
+                            )
+                        ]
+                    )
+                raise
+            generation_seconds += time.perf_counter() - generation_started
             sync_pending = False
+            chunk_media_prefix = media_prefix if start == 0 else None
+            if self.eval_reward_async:
+                current = (
+                    generated,
+                    self._launch_eval_reward_calls(generated, scorers),
+                    chunk_media_prefix,
+                )
+                # The previous chunk's reward RPCs ran while this chunk was
+                # generated. Resolve them only after launching the current
+                # chunk, retaining at most two decoded chunks on the driver.
+                previous = pending
+                pending = current
+                if previous is not None:
+                    try:
+                        reward_wait_seconds += self._resolve_eval_reward_calls(
+                            previous,
+                            sums=sums,
+                            counts=counts,
+                            step=step,
+                        )
+                    except BaseException:
+                        _run_cleanup_steps(
+                            [
+                                (
+                                    "current eval reward RPCs after prior failure",
+                                    lambda: self._wait_eval_reward_calls(
+                                        current[1]
+                                    ),
+                                )
+                            ]
+                        )
+                        raise
+                continue
+
             first_scored: Optional[Sample] = None
             with self._reward_phase():
                 for name, reward in scorers:
-                    scored_rows = reward.score_and_attach(_flatten_reward_rows(generated))
-                    scored = _restore_reward_rows(generated, scored_rows)
+                    scored = self._accumulate_eval_score(
+                        generated,
+                        name,
+                        reward.score_and_attach(
+                            _flatten_reward_rows(generated)
+                        ),
+                        sums,
+                        counts,
+                    )
                     if first_scored is None:
                         first_scored = scored
-                    rewards = scored.parts[-1].rewards
-                    if rewards is not None:
-                        r = hydrate(rewards).to(torch.float32)
-                        if scored is first_scored:
-                            # Captions read part.rewards, which remote scoring returns dehydrated.
-                            scored.parts[-1].rewards = r
-                        sums[name] += float(r.sum().item())
-                        counts[name] += int(r.numel())
-            # Outside _reward_phase: the driver-side media upload must not hold
-            # the train-offload window open.
-            if media_prefix and start == 0 and first_scored is not None:
-                self._log_eval_media(first_scored, step, prefix=media_prefix)
+            # Outside _reward_phase: driver-side media upload must not hold the
+            # train-offload window open.
+            if chunk_media_prefix and first_scored is not None:
+                self._log_eval_media(
+                    first_scored,
+                    step,
+                    prefix=chunk_media_prefix,
+                )
+        if pending is not None:
+            reward_wait_seconds += self._resolve_eval_reward_calls(
+                pending,
+                sums=sums,
+                counts=counts,
+                step=step,
+            )
         metrics = {name: sums[name] / max(1, counts[name]) for name, _ in scorers}
+        timing_prefix = (
+            ""
+            if media_prefix in (None, "eval")
+            else f"{str(media_prefix).removeprefix('eval/').replace('/', '_')}_"
+        )
+        metrics[f"{timing_prefix}generation_time_s"] = generation_seconds
+        metrics[f"{timing_prefix}reward_wait_time_s"] = reward_wait_seconds
+        metrics[f"{timing_prefix}total_time_s"] = (
+            time.perf_counter() - pass_started
+        )
         return metrics, sync_pending, n_prompts > 0
 
     def train(
