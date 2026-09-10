@@ -5,6 +5,7 @@ import asyncio
 from unirl.reward.vllm_router import (
     BackendLoad,
     LiveVLLMBackendPool,
+    create_app,
     parse_vllm_load,
     select_backend_index,
 )
@@ -63,3 +64,13 @@ def test_pool_reserves_equal_load_backends_without_pin() -> None:
         await pool.release(second[0])
 
     asyncio.run(run())
+
+
+def test_chat_request_is_not_misclassified_as_query_parameter() -> None:
+    app = create_app(LiveVLLMBackendPool(["http://judge-a:8000"]))
+    operation = app.openapi()["paths"]["/v1/chat/completions"]["post"]
+
+    assert all(
+        parameter.get("name") != "request"
+        for parameter in operation.get("parameters", [])
+    )

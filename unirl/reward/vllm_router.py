@@ -7,8 +7,12 @@ import asyncio
 import json
 import logging
 import math
+from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
 from typing import Any, Iterable, Sequence
+
+from fastapi import FastAPI, Request, Response
+from fastapi.responses import StreamingResponse
 
 LOGGER = logging.getLogger("unirl.vllm_router")
 
@@ -224,18 +228,15 @@ class LiveVLLMBackendPool:
 
 
 def create_app(pool: LiveVLLMBackendPool) -> Any:
-    from fastapi import FastAPI, Request, Response
-    from fastapi.responses import StreamingResponse
-
-    app = FastAPI()
-
-    @app.on_event("startup")
-    async def _startup() -> None:
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
         await pool.start()
+        try:
+            yield
+        finally:
+            await pool.close()
 
-    @app.on_event("shutdown")
-    async def _shutdown() -> None:
-        await pool.close()
+    app = FastAPI(lifespan=lifespan)
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
