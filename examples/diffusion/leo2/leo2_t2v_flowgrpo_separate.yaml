@@ -20,7 +20,7 @@ rollout:
     _target_: unirl.models.leo2.config.Leo2PipelineConfig
     model_precision: bf16
     autocast_precision: bf16
-    trajectory_precision: bf16
+    trajectory_precision: fp32
     logprob_precision: fp32
     ckpt_path: ${oc.env:LEO2_CKPT_DIR}
     assets_base: ${oc.env:LEO2_ASSETS_BASE}

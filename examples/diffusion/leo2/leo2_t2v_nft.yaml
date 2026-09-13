@@ -26,14 +26,16 @@ bundle:
     _target_: unirl.models.leo2.config.Leo2PipelineConfig
     model_precision: bf16
     autocast_precision: bf16
-    trajectory_precision: bf16
+    trajectory_precision: fp32
     logprob_precision: fp32
     ckpt_path: ${oc.env:LEO2_CKPT_DIR}
     assets_base: ${oc.env:LEO2_ASSETS_BASE}
     video_shift: 9.0
     audio_shift: 3.0
     enable_audio: true
+    audio_stochastic_rollout: true
     audio_joint_sde: false
+    native_rng_compat: true
     audio_vae_on_gpu: true
     text_encoder_gpu_transient: false
     condition_cache_size: 1
@@ -48,7 +50,7 @@ pipeline:
   _target_: unirl.models.leo2.pipeline.Leo2Pipeline.from_bundle
   config: ${bundle.config}
   strategy:
-    _target_: unirl.sde.kernels.FlowSDEStrategy
+    _target_: unirl.models.leo2.sde.Leo2FlowSDEStrategy
 
 backend:
   _target_: unirl.train.backend.fsdp.FSDPBackend
@@ -187,7 +189,7 @@ sampling:
   seed: 42
   init_same_noise: false
   autocast_precision: bf16
-  trajectory_precision: bf16
+  trajectory_precision: fp32
   logprob_precision: fp32
   scheduler:
     _target_: unirl.sde.index_schedule.AllSDEScheduler

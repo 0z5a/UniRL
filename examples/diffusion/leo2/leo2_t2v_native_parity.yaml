@@ -1,0 +1,91 @@
+# @package _global_
+# Native Leo2 rollout/replay parity profile: 32×H20, CP4, 480×848×121, 30 steps.
+# This profile also switches training to the native full-model Muon/AdamW policy.
+defaults:
+  - leo2_t2v_cached
+  - _self_
+
+num_devices: 32
+num_groups: 8
+group_size: 8
+batch_size: ${num_groups}
+rollout_chunk_prompts: ${num_groups}
+
+bundle:
+  config:
+    video_shift: 7.0
+    audio_shift: 1.0
+    context_parallel_size: 4
+    expert_parallel_size: 1
+    enable_deepep: false
+    audio_stochastic_rollout: true
+    audio_joint_sde: false
+    native_rng_compat: true
+    reproduce: true
+    attention_impl: flash_packed
+    inference_cache_method: none
+    uniform_bf16: false
+    full_model_training: true
+
+backend:
+  lora_cfg: null
+  optimizer_cfg:
+    type: leo2_native_muon
+    learning_rate: 1.0e-5
+    adam_beta1: 0.9
+    adam_beta2: 0.999
+    adam_epsilon: 1.0e-8
+    weight_decay: 0.01
+    momentum: 0.95
+    special_adamw_params:
+      - "*embed_tokens*"
+      - "*lm_head*"
+      - "*final_layer*"
+      - "*time_embed*"
+      - "*timestep_emb*"
+      - "*patch_embed*"
+      - "*embedding*"
+  fsdp_cfg:
+    fsdp_mode: full
+    sp_size: ${bundle.config.context_parallel_size}
+    ep_size: ${bundle.config.expert_parallel_size}
+    activation_checkpointing: true
+    master_dtype: fp32
+    fp32_module_suffixes: [mlp.gate]
+    checkpoint_format: dcp
+
+rollout:
+  forward_batch_size: 2
+
+stack:
+  micro_batch_size: 2
+  max_grad_norm: 1.0
+  num_updates_per_batch: 1
+
+sampling:
+  num_inference_steps: 30
+  guidance_scale: 1.0
+  height: 480
+  width: 848
+  num_frames: 121
+  eta: 0.5
+  sde_indices: [0, 1, 2, 3, 4]
+  samples_per_prompt: ${group_size}
+  seed: 42
+  init_same_noise: true
+  autocast_precision: bf16
+  trajectory_precision: fp32
+  logprob_precision: fp32
+
+algorithm:
+  clip_range: 1.0e-4
+  beta: 0.001
+  use_grpo_guard: true
+  adv_clip_max: 5.0
+  old_logp_source: rollout
+  max_rollout_replay_logp_absdiff: 0.0
+  rollout_replay_parity_action: raise
+
+logging:
+  run_name: leo2_t2v_native_parity
+  tags: [leo2, flowgrpo, native-parity, 32gpu, cp4]
