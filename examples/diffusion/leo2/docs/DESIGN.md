@@ -15,7 +15,7 @@ FlowGRPO 跑通 t2v，最初验证于 32×H20 节点。
 1. **UniRL 模型合同**：bundle（纯权重容器，`trainable_module()`）/ pipeline（`generate(sample)->sample`）/
    DiffusionStage（`generate()` 存轨迹+SDE logp → LatentSegment；`replay()` 重算 logp → ReplayResult）/
    Conditions（typed）。rollout 与训练共享同一 `bundle.transformer`（FSDP 原地改造）。
-2. **符号约定**：FlowSDEStrategy 在 eta=0 时 `x_next = x + noise_pred·(σ_next−σ)`，与 Leo2
+2. **符号约定**：Leo2FlowSDEStrategy 在 eta=0 时 `x_next = x + noise_pred·(σ_next−σ)`，与 Leo2
    FlowMatchDiscreteScheduler 的 Euler 完全一致 → **Leo2 的 `diffusion_prediction` 直接作 noise_pred，无需变号**
    （H3 的负号是它自己的数据向约定，勿抄）。
 3. **Leo2 侧对接点**（全部在 leo_hf.py / pipeline_leo.py，已验证 6 模式推理可用）：

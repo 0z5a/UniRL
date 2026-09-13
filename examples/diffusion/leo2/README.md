@@ -24,8 +24,9 @@ are propagated when the pending call is resolved.
 
 | Path | What |
 |---|---|
-| `unirl/models/leo2/` | model package and vendored gen-ar runtime: `bundle.py` (hymm bootstrap, DCP load, FSDP-ready placement), `vendor/`, `text_embed.py`, `diffusion.py`, `vae.py`, `pipeline.py`, `conditions.py`, `config.py` |
+| `unirl/models/leo2/` | model package and vendored gen-ar runtime: `bundle.py` (hymm bootstrap, DCP load, FSDP-ready placement), `sde.py`, `optimizer.py`, `vendor/`, `text_embed.py`, `diffusion.py`, `vae.py`, `pipeline.py`, `conditions.py`, `config.py` |
 | `examples/diffusion/leo2/leo2_t2v_trainside.yaml` | base recipe (FSDP2 + LoRA r64, FlowSDE, PickScore, FlowGRPO) |
+| `examples/diffusion/leo2/leo2_t2v_native_parity.yaml` | deterministic 32×H20 CP4 profile matching the native MoE GRPO rollout geometry and schedule |
 | `examples/diffusion/leo2/scripts/` | portable launchers (`unirl_longrun*.sh`, `unirl_smoke.sh`), probes, artifact validation and performance helpers |
 | `examples/diffusion/leo2/docs/DESIGN.md` | decision log R1–R27 (every pitfall and its fix) |
 | `examples/diffusion/leo2/docs/R15_perf_report.html` | timing / memory / deployment measurements (with erratum) |
@@ -137,7 +138,7 @@ supported.
 ## Recipe that learns (v3, mirrors the native pure-torch GRPO run)
 
 ```
-FlowSDEStrategy · 30 inference steps · eta 0.5 · SDE noise + training only on
+Leo2FlowSDEStrategy · 30 inference steps · eta 0.5 · SDE noise + training only on
 transitions [0..4] (highest sigma; the rest are ODE)
 samples_per_prompt 8 · shared x_T per prompt group · batch 8 prompts (64/step)
 guidance 1.0 · video_shift 3.0 · 192x336 · 49 frames · seed 42
@@ -145,6 +146,15 @@ LoRA r64 a256 on attention (video+text streams), shared MLP, text MLP · AdamW 2
 FlowGRPO clip 1e-4 · old_logp replay · 2 updates/batch · per-group advantage std
 PickScore mean over 4 uniformly spaced frames
 ```
+
+For strict implementation comparison, use `leo2_t2v_native_parity.yaml`. It
+pins the native rollout settings (`480×848×121`, shift `7/1`, 30 steps,
+`eta=0.5`, SDE transitions `0..4`, eight samples per prompt, shared initial
+noise, CP4) and selects deterministic FA2 (`flash_packed` + `reproduce=true`).
+It also disables LoRA, retains the checkpoint's mixed BF16/FP32 layout, and
+selects the native full-model Muon/AdamW parameter split. FA3 remains the
+production-speed comparison mode because its backward kernel is not bitwise
+reproducible even across two native reruns.
 
 `scripts/unirl_longrun_v3.sh` is the exact launcher. Measured on 8×H20: ~630 s/step
 (rollout 400 s + train 225 s); with `old_logp_source=rollout` and a GPU-resident

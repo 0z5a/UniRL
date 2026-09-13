@@ -49,6 +49,10 @@ RL 生成的视频随策略变化，不能把固定缓存的 x0 替代在线 rol
 | `load_video_vae` | `true` | 缓存 SFT 可设 `false`；生成像素视频必须为 `true` |
 | `vae_on_gpu` | `true` | `false` 时 VAE 常驻 CPU，codec 调用期间进入 GPU |
 | `condition_cache_size` | `1` | 原有在线条件 LRU，缓存 tensor 放 CPU；不控制磁盘缓存 |
+| `native_rng_compat` | `true` | 按原生 CSV seed 与分支序号生成 FP32 初始噪声；SDE 沿用原生进程级 CUDA RNG 流 |
+| `audio_stochastic_rollout` | `true` | 原生 AV rollout 始终用相同 eta 推进音频，与是否训练 audio log-prob 无关 |
+| `reproduce` | `false` | 对齐原生 `--reproduce`：固定全局 RNG、启用 PyTorch deterministic，并打开 attention deterministic |
+| `attention_impl` | `null` | 可覆盖 hymm 配置；逐 bit backward 验证使用 `flash_packed`，性能基线使用原生 `flash3_packed` |
 
 只读模式从 bundle 构建阶段就跳过 Qwen 和 tokenizer 的加载，不创建依赖冻结组件的原生 diffusion pipeline。
 DiT 前向改为独立生成 T2V 的零 channel conditions，并递归搬运缓存中的所有 tensor。
@@ -173,6 +177,17 @@ CPU 配置与 adapter 往返已验证；16 GPU 同卡独立进程模式也已通
 
 ## Gotchas
 
+- 原生 FlowGRPO 的轨迹状态是 FP32，首步 `sigma==1` 时用完整 schedule 的第二个 sigma
+  作为有限上界，且 transition mean/log-prob 的浮点运算顺序会影响 bitwise 结果；
+  Leo2 配方必须使用 `Leo2FlowSDEStrategy` 和 `trajectory_precision=fp32`。
+- `audio_joint_sde=true` 对应原生 `grpo_use_audio=true`，联合策略 log-prob 是 video 与
+  audio 各自按元素取均值后的直接相加，不再按两种 latent 的元素数二次加权。
+- FA3 backward 在相同输入上不是逐 bit 可复现；需要逐层 backward bitwise 验证时，
+  两侧都使用 `flash_packed` 并开启 hymm `--reproduce`。FA3 可用于同配置性能对比。
+- 原生全量训练使用 Muon，并按参数名/维度把特殊层与 bias/norm 分给 AdamW。
+  `leo2_t2v_native_parity.yaml` 关闭 LoRA、保留 router FP32 独立 FSDP 单元并复用
+  vendored `hy_parallelism` 的 Muon 实现；该模式只支持 DCP optimizer checkpoint，
+  普通 Leo2 配方仍保持 LoRA+AdamW。
 - 原生 `hymm` / `hy_parallelism` 的 CP/EP 是进程级全局状态。不同拓扑的训练和 rollout 必须使用独立进程组；不能在同一 worker 中切换两个模型的全局拓扑。
 - 原生 VAE、tokenizer 和文本编码器也使用全局单例。预处理 builder 应在独立进程初始化；已加载完整 bundle 的进程应复用组件，不能再次构建同一个单例。
 - 独立 rollout 的 `fsdp_cfg.sp_size` 同时决定 UniRL prompt scatter 的 CP 分组，必须与 `bundle_config.context_parallel_size` 一致。两侧 DP 必须满足 prompt / generated sample 的整除约束。
