@@ -36,7 +36,8 @@ def _call_flash_attn_varlen_v3(
 ):
     """Call both the legacy and current FlashAttention-3 varlen APIs."""
     parameters = inspect.signature(flash_attn_varlen_func_v3).parameters
-    if "seqused_q" in parameters:
+    names = list(parameters)
+    if "seqused_q" in parameters and names.index("seqused_q") < names.index("max_seqlen_q"):
         result = flash_attn_varlen_func_v3(
             query,
             key,

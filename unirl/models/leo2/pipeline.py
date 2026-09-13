@@ -7,6 +7,7 @@ import os
 from typing import Any, Tuple
 
 import torch
+from diffusers.utils.torch_utils import randn_tensor
 
 from unirl.config.require import require
 from unirl.models.types.pipeline import Pipeline
@@ -15,6 +16,7 @@ from unirl.sde.runtime import FlowMatchSchedulePolicy
 from unirl.types.noise_recipe import NoiseRecipe
 from unirl.types.primitives import Texts
 from unirl.types.sample import Sample
+from unirl.types.sample_id import branch_of
 
 from .bundle import Leo2Bundle
 from .config import (
@@ -76,6 +78,7 @@ class Leo2Pipeline(Pipeline):
                 enable_audio=config.enable_audio,
                 video_shift=config.video_shift,
                 audio_shift=config.audio_shift,
+                audio_stochastic_rollout=config.audio_stochastic_rollout,
                 audio_joint_sde=config.audio_joint_sde,
             ),
             video_decode=Leo2VideoDecodeStage(bundle),
@@ -164,6 +167,28 @@ class Leo2Pipeline(Pipeline):
         except Exception as exc:
             print(f"[leo2 hymm-ab] failed: {exc!r}", flush=True)
 
+    @staticmethod
+    def _native_seeds(sample: Sample, *, base_seed: int, same_noise: bool) -> list[int]:
+        """Reproduce Hymm's per-row seed expansion."""
+        frontier = sample.parts[-1]
+        metadata = sample.root_metadata(-1)
+        seeds = []
+        for sample_id, row in zip(frontier.sample_ids, metadata):
+            seed = int((row or {}).get("seed", base_seed))
+            if not same_noise:
+                seed += int(branch_of(sample_id) or 0)
+            seeds.append(seed)
+        return seeds
+
+    @classmethod
+    def _native_generators(cls, sample: Sample, *, base_seed: int, same_noise: bool, device: torch.device):
+        """Build Hymm-compatible per-row CUDA generators."""
+        generators = [
+            torch.Generator(device=device).manual_seed(seed)
+            for seed in cls._native_seeds(sample, base_seed=base_seed, same_noise=same_noise)
+        ]
+        return generators[0] if len(generators) == 1 else generators
+
     def generate(self, sample: Sample) -> Sample:
         gen = sample.parts[-1]
         params = gen.sampling_params
@@ -178,12 +203,17 @@ class Leo2Pipeline(Pipeline):
         require(texts is not None, "Leo2Pipeline.generate: no text prompt in the sample conditioning")
 
         base_seed = int(params.seed) if params.seed is not None else 0
+        native_seeds = (
+            self._native_seeds(sample, base_seed=base_seed, same_noise=bool(params.init_same_noise))
+            if self.config.native_rng_compat
+            else [base_seed] * len(list(texts.texts))
+        )
         conditions = self.cond_stage.build(
             texts,
             height=int(params.height),
             width=int(params.width),
             num_frames=int(params.num_frames),
-            seeds=[base_seed] * len(list(texts.texts)),
+            seeds=native_seeds,
         )
 
         if os.environ.get("LEO2_DEBUG_HYMM_SAMPLE") and not getattr(self, "_hymm_ab_done", False):
@@ -192,7 +222,28 @@ class Leo2Pipeline(Pipeline):
 
         recipe = NoiseRecipe.from_sample(sample)
         shape = self._latent_shape_from_conditions(conditions)
-        video_noise = recipe.resolve(device=self.bundle.device, latent_shape=shape)
+        native_generators = None
+        if self.config.native_rng_compat and recipe.initial_latents is None:
+            native_generators = self._native_generators(
+                sample,
+                base_seed=base_seed,
+                same_noise=bool(params.init_same_noise),
+                device=self.bundle.device,
+            )
+            audio_generators = (
+                [generator.clone_state() for generator in native_generators]
+                if isinstance(native_generators, list)
+                else native_generators.clone_state()
+            )
+            video_noise = randn_tensor(
+                (gen.batch_size, *shape),
+                generator=native_generators,
+                device=self.bundle.device,
+                dtype=torch.float32,
+            )
+        else:
+            audio_generators = None
+            video_noise = recipe.resolve(device=self.bundle.device, latent_shape=shape)
         require(
             video_noise is not None,
             "Leo2Pipeline.generate: no initial latents from the driver x_T recipe.",
@@ -207,11 +258,19 @@ class Leo2Pipeline(Pipeline):
                 f"audio_token_length, got {audio_token_lengths}",
             )
             audio_token_length = audio_token_lengths[0]
-            audio_noise = recipe.resolve(
-                device=self.bundle.device,
-                salt="audio",
-                latent_shape=(LEO2_AUDIO_LATENT_CHANNELS, audio_token_length),
-            )
+            if audio_generators is not None:
+                audio_noise = randn_tensor(
+                    (gen.batch_size, LEO2_AUDIO_LATENT_CHANNELS, audio_token_length),
+                    generator=audio_generators,
+                    device=self.bundle.device,
+                    dtype=torch.float32,
+                )
+            else:
+                audio_noise = recipe.resolve(
+                    device=self.bundle.device,
+                    salt="audio",
+                    latent_shape=(LEO2_AUDIO_LATENT_CHANNELS, audio_token_length),
+                )
             require(
                 audio_noise is not None,
                 "Leo2Pipeline.generate: no initial audio latents from the driver noise recipe",
@@ -220,11 +279,15 @@ class Leo2Pipeline(Pipeline):
         segment = self.diffusion.generate(
             conditions,
             params=params,
-            sigmas=params.sigmas.to(self.bundle.device),
+            sigmas=params.sigmas.to(dtype=torch.float32, device="cpu"),
             initial_latents=video_noise,
             initial_audio_latents=audio_noise,
             sde_indices=list(params.sde_indices) if params.sde_indices is not None else None,
-            denoise_seed_keys=[str(sample_id) for sample_id in gen.sample_ids],
+            denoise_seed_keys=(
+                None
+                if self.config.native_rng_compat
+                else [str(sample_id) for sample_id in gen.sample_ids]
+            ),
             denoise_base_seed=base_seed,
         )
 

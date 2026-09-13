@@ -85,16 +85,15 @@ def _repeat_interleave(
     *,
     output_size=None,
 ):
-    # A shared timestep produces singleton [1, 1, H] modulation.  It broadcasts
-    # over every logical sample and every local CP token, so both B=1 and B>1
-    # avoid materializing a full per-token tensor.  Distinct per-sample
-    # timesteps retain the native repeat/interleave path below.
+    # A shared timestep for multiple packed samples produces singleton
+    # [1, 1, H] modulation and broadcasts over the physical row. B=1 retains
+    # native repeat_interleave so its backward accumulation stays bitwise.
     if (
         dim == 1
         and inputs.ndim == 3
         and repeats.ndim == 1
     ):
-        if inputs.size(1) == 1:
+        if inputs.size(1) == 1 and repeats.numel() > 1:
             return inputs.float()
         if inputs.size(1) != repeats.numel():
             raise ValueError(

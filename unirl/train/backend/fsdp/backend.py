@@ -92,6 +92,7 @@ class FSDPBackend(BaseFSDP2Backend):
             master_dtype=getattr(fsdp_cfg, "master_dtype", None),
             root_wrap=getattr(fsdp_cfg, "root_wrap", True),
             ignored_params=ignored_expert_params or None,
+            fp32_module_suffixes=tuple(getattr(fsdp_cfg, "fp32_module_suffixes", ()) or ()),
         )
 
         load_trainable_weights(

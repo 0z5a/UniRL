@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 
 @dataclass
 class OptimizerConfig:
-    """AdamW-style optimizer hyperparameters consumed by the training actor."""
+    """Optimizer hyperparameters consumed by the training actor."""
 
     learning_rate: float
     adam_beta1: float
@@ -16,6 +16,10 @@ class OptimizerConfig:
     adam_epsilon: float
     weight_decay: float
     param_group_lrs: Optional[Dict[str, float]] = None
+    type: str = "adamw"
+    momentum: float = 0.95
+    special_adamw_params: Tuple[str, ...] = ()
+    special_weight_decay_params: Tuple[str, ...] = ()
 
 
 @dataclass

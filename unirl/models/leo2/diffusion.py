@@ -22,6 +22,7 @@ from unirl.utils.dtypes import parse_torch_dtype
 from .conditions import Leo2Conditions
 from .config import LEO2_TIMESTEP_SCALE
 from .packing import (
+    PackedLeo2Conditions,
     as_packed_media,
     pack_hymm_conditions,
     unpack_packed_prediction,
@@ -91,7 +92,7 @@ def _combine_modality_logp(
     n_video: int,
     n_audio: int,
 ) -> torch.Tensor:
-    """Combine per-modality means by generated scalar degrees of freedom."""
+    """Match native Leo2's sum of per-modality mean log-probabilities."""
     for name, value in (("n_video", n_video), ("n_audio", n_audio)):
         if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
             raise ValueError(f"Leo2 joint log-prob expected positive int {name}, got {type(value).__name__}: {value!r}")
@@ -105,8 +106,7 @@ def _combine_modality_logp(
             "Leo2 joint log-prob expected matching per-sample tensors shaped [B], "
             f"got video={tuple(video_logp.shape)}, audio={tuple(audio_logp.shape)}"
         )
-    total = n_video + n_audio
-    return (video_logp * n_video + audio_logp * n_audio) / total
+    return video_logp + audio_logp
 
 
 class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
@@ -120,12 +120,13 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
         strategy: StepStrategy,
         *,
         autocast_precision: str = "bf16",
-        trajectory_precision: str = "bf16",
+        trajectory_precision: str = "fp32",
         logprob_precision: str = "fp32",
         profile_forward: bool = False,
         enable_audio: bool = True,
         video_shift: float = 3.0,
         audio_shift: float = 3.0,
+        audio_stochastic_rollout: bool = True,
         audio_joint_sde: bool = False,
     ) -> None:
         if type(profile_forward) is not bool:
@@ -133,10 +134,14 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
                 "Leo2DiffusionStage expected bool for profile_forward, "
                 f"got {type(profile_forward).__name__}: {profile_forward!r}"
             )
-        if type(enable_audio) is not bool or type(audio_joint_sde) is not bool:
+        if (
+            type(enable_audio) is not bool
+            or type(audio_stochastic_rollout) is not bool
+            or type(audio_joint_sde) is not bool
+        ):
             raise TypeError(
-                "Leo2DiffusionStage enable_audio/audio_joint_sde must be bool, "
-                f"got {enable_audio!r}/{audio_joint_sde!r}"
+                "Leo2DiffusionStage enable_audio/audio_stochastic_rollout/audio_joint_sde must be bool, "
+                f"got {enable_audio!r}/{audio_stochastic_rollout!r}/{audio_joint_sde!r}"
             )
         if (
             not isinstance(video_shift, (int, float))
@@ -157,6 +162,7 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
         self.enable_audio = bool(enable_audio)
         self.video_shift = float(video_shift)
         self.audio_shift = float(audio_shift)
+        self.audio_stochastic_rollout = bool(audio_stochastic_rollout)
         self.audio_joint_sde = bool(audio_joint_sde)
 
     def audio_schedule(self, video_schedule: torch.Tensor) -> torch.Tensor:
@@ -234,6 +240,16 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
         )
         if getattr(self, "_packed_condition_cache_key", None) == cache_key:
             packed = self._packed_condition_cache
+        elif len(blobs) == 1:
+            packed = PackedLeo2Conditions(
+                input_ids=blobs[0]["input_ids"],
+                model_kwargs=blobs[0]["model_kwargs"],
+                packing_kwargs={},
+                batch_size=1,
+                sequence_lengths=(int(blobs[0]["input_ids"].shape[1]),),
+            )
+            self._packed_condition_cache_key = cache_key
+            self._packed_condition_cache = packed
         else:
             packed = pack_hymm_conditions(
                 blobs,
@@ -325,13 +341,19 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
         )
 
         # Shared timesteps stay scalar; distinct per-sample timesteps retain logical batch cardinality.
-        model_latents = as_packed_media(latent_model_input)
-        model_timesteps = [t_expand]
-        model_audio_latents = as_packed_media(audio_sample) if audio_sample is not None else None
-        model_audio_timesteps = [audio_t_expand] if audio_t_expand is not None else None
+        if batch_size == 1:
+            model_latents = latent_model_input
+            model_timesteps = t_expand
+            model_audio_latents = audio_sample
+            model_audio_timesteps = audio_t_expand
+        else:
+            model_latents = as_packed_media(latent_model_input)
+            model_timesteps = [t_expand]
+            model_audio_latents = as_packed_media(audio_sample) if audio_sample is not None else None
+            model_audio_timesteps = [audio_t_expand] if audio_t_expand is not None else None
 
         model_inputs = model.prepare_inputs_for_generation(
-            input_ids,
+            None if batch_size == 1 else input_ids,
             latents=model_latents,
             timesteps=model_timesteps,
             audio_latents=model_audio_latents,
@@ -467,6 +489,10 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
                 f"got keys={len(denoise_seed_keys)}, conditions={len(blobs)}",
             )
         audio_sigmas = self.audio_schedule(sigmas) if self.enable_audio else None
+        video_sigma_max = sigmas[1] if int(sigmas.shape[0]) > 1 else sigmas.new_tensor(0.99)
+        audio_sigma_max = (
+            audio_sigmas[1] if audio_sigmas is not None and int(audio_sigmas.shape[0]) > 1 else None
+        )
         if self.enable_audio:
             require(
                 initial_audio_latents is not None,
@@ -537,6 +563,7 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
                     sigma_next=sigmas[step_idx + 1],
                     eta=step_eta,
                     generator=step_generators,
+                    sigma_max=video_sigma_max,
                     step_index=step_idx,
                 )
                 x = x_next.to(dtype=self.trajectory_dtype)
@@ -551,9 +578,13 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
                         sample=a,
                         sigma=audio_sigmas[step_idx],
                         sigma_next=audio_sigmas[step_idx + 1],
-                        eta=step_eta if self.audio_joint_sde else 0.0,
-                        # Reuse the request stream so CP replicas sample the same audio transition.
+                        eta=(
+                            step_eta
+                            if getattr(self, "audio_stochastic_rollout", self.audio_joint_sde)
+                            else 0.0
+                        ),
                         generator=step_generators,
+                        sigma_max=audio_sigma_max,
                         step_index=step_idx,
                     )
                     a = a_next.to(dtype=self.trajectory_dtype)
@@ -623,8 +654,12 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
             f"got trajectory batch={segment.latents.shape[0]}, conditions={len(blobs)}",
         )
 
-        sigmas = segment.sigmas.to(self.bundle.device)
+        sigmas = segment.sigmas.to(device=self.bundle.device, dtype=torch.float32)
         audio_sigmas = self.audio_schedule(sigmas) if self.enable_audio else None
+        video_sigma_max = sigmas[1] if int(sigmas.shape[0]) > 1 else sigmas.new_tensor(0.99)
+        audio_sigma_max = (
+            audio_sigmas[1] if audio_sigmas is not None and int(audio_sigmas.shape[0]) > 1 else None
+        )
         if self.enable_audio:
             require(
                 segment.aux_latents is not None,
@@ -663,6 +698,7 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
                     sigma_next=sigmas[step_idx + 1],
                     eta=float(params.eta),
                     prev_sample=prev_x,
+                    sigma_max=video_sigma_max,
                     step_index=step_idx,
                 )
                 if self.audio_joint_sde:
@@ -678,6 +714,7 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
                         sigma_next=audio_sigmas[step_idx + 1],
                         eta=float(params.eta),
                         prev_sample=prev_a,
+                        sigma_max=audio_sigma_max,
                         step_index=step_idx,
                     )
                     log_prob = _combine_modality_logp(

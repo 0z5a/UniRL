@@ -55,6 +55,8 @@ def load_model_state_dict(
 
 def gather_optimizer_state_dict(model: nn.Module, optimizer: torch.optim.Optimizer) -> StateDict:
     """Rank-0 DCP gather of optimizer state.  Full state on rank 0, empty on others."""
+    if getattr(optimizer, "_unirl_native_optimizer_container", False):
+        raise RuntimeError("Native multi-optimizer state requires checkpoint_format='dcp'.")
     from torch.distributed.checkpoint.state_dict import get_optimizer_state_dict
 
     options = _build_state_dict_options(full_state_dict=True, cpu_offload=True)
@@ -94,6 +96,8 @@ def load_optimizer_state_dict(
     broadcast_from_rank0: bool = True,
 ) -> None:
     """Load a full optimizer state dict and reshard it into ``optimizer``."""
+    if getattr(optimizer, "_unirl_native_optimizer_container", False):
+        raise RuntimeError("Native multi-optimizer state requires checkpoint_format='dcp'.")
     from torch.distributed.checkpoint.state_dict import set_optimizer_state_dict
 
     options = _build_state_dict_options(
@@ -120,6 +124,8 @@ def sharded_model_state_dict(model: nn.Module) -> StateDict:
 
 def sharded_optimizer_state_dict(model: nn.Module, optimizer: torch.optim.Optimizer) -> StateDict:
     """Per-rank sharded optimizer state for DCP (symmetric with"""
+    if getattr(optimizer, "_unirl_native_optimizer_container", False):
+        return dict(optimizer.state_dict())
     from torch.distributed.checkpoint.state_dict import get_optimizer_state_dict
 
     options = _build_state_dict_options(full_state_dict=False)
@@ -144,6 +150,9 @@ def load_sharded_optimizer_state_dict(
     model: nn.Module, optimizer: torch.optim.Optimizer, state_dict: StateDict
 ) -> None:
     """Load a per-rank sharded optimizer state read by ``dcp.load`` in place."""
+    if getattr(optimizer, "_unirl_native_optimizer_container", False):
+        optimizer.load_state_dict(state_dict)
+        return
     from torch.distributed.checkpoint.state_dict import set_optimizer_state_dict
 
     options = _build_state_dict_options(full_state_dict=False)
@@ -166,6 +175,12 @@ def drop_meta_entries(state_dict: StateDict) -> StateDict:
 
 def move_optimizer_state(optimizer: torch.optim.Optimizer, device: object) -> None:
     """Move every tensor in the optimizer state to ``device`` (the on/offload loop)."""
+    nested = getattr(optimizer, "optimizers", None)
+    if nested is not None:
+        for optimizer_group in nested:
+            for child in optimizer_group:
+                move_optimizer_state(child, device)
+        return
     for state in optimizer.state.values():
         for k, v in state.items():
             if isinstance(v, torch.Tensor):

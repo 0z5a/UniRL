@@ -10,6 +10,7 @@ _EXPORTS = {
     "Leo2Conditions": (".conditions", "Leo2Conditions"),
     "Leo2PipelineConfig": (".config", "Leo2PipelineConfig"),
     "Leo2DiffusionStage": (".diffusion", "Leo2DiffusionStage"),
+    "Leo2FlowSDEStrategy": (".sde", "Leo2FlowSDEStrategy"),
     "Leo2Pipeline": (".pipeline", "Leo2Pipeline"),
     "Leo2CondStage": (".text_embed", "Leo2CondStage"),
     "Leo2AudioDecodeStage": (".vae", "Leo2AudioDecodeStage"),

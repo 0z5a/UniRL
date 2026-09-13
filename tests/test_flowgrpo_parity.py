@@ -7,6 +7,7 @@ import torch
 
 from unirl.algorithms.base import AlgorithmStepResult, StageAlgorithm
 from unirl.algorithms.flowgrpo import FlowGRPO
+from unirl.sde.kernels import FlowSDEStrategy
 from unirl.train.stack.base import TrainStack, TrainStepResult
 from unirl.train.unified_model_stack import UnifiedModelTrainStack
 from unirl.types.sample import Part
@@ -29,6 +30,17 @@ class _DriftingReplayStage:
             ),
             prev_sample_means=None,
         )
+
+
+class _GuardReplayStage:
+    def __init__(self, logp: torch.Tensor, means: torch.Tensor) -> None:
+        self.logp = logp
+        self.means = means
+        self.strategy = FlowSDEStrategy()
+
+    def replay(self, _conditions, *, segment, params, step_indices):
+        del segment, params, step_indices
+        return SimpleNamespace(log_probs=self.logp, prev_sample_means=self.means)
 
 
 def _compute(algorithm: FlowGRPO, segment: LatentSegment) -> AlgorithmStepResult:
@@ -107,6 +119,64 @@ def test_flowgrpo_first_update_parity_gate_fails_closed_on_non_finite_drift(
         with caplog.at_level("WARNING", logger="unirl.algorithms.flowgrpo"):
             _compute(algorithm, segment)
         assert "FlowGRPO rollout/replay parity failed" in caplog.text
+
+
+def test_flowgrpo_guard_matches_native_ratio_and_advantage_clamp() -> None:
+    new_logp = torch.tensor([[0.15], [-0.1]], requires_grad=True)
+    new_means = torch.tensor([[[1.0, 2.0]], [[-1.0, 0.5]]], requires_grad=True)
+    stage = _GuardReplayStage(new_logp, new_means)
+    algorithm = FlowGRPO(
+        params=SimpleNamespace(eta=0.5),
+        stage=stage,
+        clip_range=1.0e-4,
+        use_grpo_guard=True,
+        adv_clip_max=5.0,
+    )
+    old_logp = torch.tensor([[0.1], [-0.2]])
+    old_means = torch.zeros_like(new_means)
+    segment = LatentSegment(
+        sigmas=torch.tensor([0.8, 0.5]),
+        sde_indices=torch.tensor([0]),
+        sde_logp=old_logp,
+        sde_means=old_means,
+        latents=torch.zeros(2, 2, 1, 2),
+    )
+    advantages = torch.tensor([8.0, -9.0])
+
+    result = algorithm.compute_loss_and_backward(
+        conditions={},
+        segment=segment,
+        advantages=advantages,
+        training_progress=0.0,
+        loss_scale=1.0,
+    )
+
+    sigma, sigma_next = segment.sigmas
+    transition_std = stage.strategy.transition_std(
+        sigma=sigma,
+        sigma_next=sigma_next,
+        eta=0.5,
+        sigma_max=segment.sigmas[1],
+    )
+    jacobian = torch.abs(
+        (sigma_next - sigma)
+        - 0.5 * transition_std.square() * ((1 - sigma) / sigma)
+    )
+    mean_bias = (new_means.detach() - old_means).square().mean(dim=2)
+    mean_bias = mean_bias / (2 * transition_std.clamp(min=1e-6).square())
+    ratio = torch.exp((new_logp.detach() - old_logp + mean_bias) * transition_std.clamp(min=1e-6))
+    adv = advantages.clamp(-5.0, 5.0).reshape(-1, 1)
+    expected = (
+        torch.maximum(
+            -adv * ratio,
+            -adv * torch.clamp(ratio, 1.0 - 1.0e-4, 1.0 + 1.0e-4),
+        )
+        * jacobian.reciprocal()
+    ).mean()
+
+    assert result.loss == pytest.approx(float(expected))
+    assert new_logp.grad is not None
+    assert new_means.grad is not None
 
 
 class _RecordingAlgorithm(StageAlgorithm):

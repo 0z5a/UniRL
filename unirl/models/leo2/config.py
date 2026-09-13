@@ -88,14 +88,18 @@ class Leo2PipelineConfig:
     # --- precisions (H3-shaped knobs) ---
     model_precision: str = "bf16"  # pinned native DCP tensor profile
     autocast_precision: str = "bf16"
-    trajectory_precision: str = "bf16"
+    trajectory_precision: str = "fp32"
     logprob_precision: str = "fp32"
 
     # --- schedule ---
     video_shift: float = 3.0
     audio_shift: float = 3.0
     enable_audio: bool = True
+    audio_stochastic_rollout: bool = True
     audio_joint_sde: bool = False
+    native_rng_compat: bool = True
+    reproduce: bool = False
+    attention_impl: Optional[str] = None
 
     # --- native inference acceleration ---
     # The UniRL rollout stage enters the request-scoped model cache context;
@@ -145,6 +149,7 @@ class Leo2PipelineConfig:
     # FSDP2 needs one dtype per shard group; hymm keeps the MoE router fp32
     # inside blocks. True casts the whole DiT to bf16 (smoke trade-off).
     uniform_bf16: bool = True
+    full_model_training: bool = False
 
     device: Optional[str] = None
 
@@ -158,8 +163,12 @@ class Leo2PipelineConfig:
             "load_video_vae",
             "vae_on_gpu",
             "enable_audio",
+            "audio_stochastic_rollout",
             "audio_joint_sde",
             "audio_vae_on_gpu",
+            "native_rng_compat",
+            "reproduce",
+            "full_model_training",
         ):
             value = getattr(self, name)
             if type(value) is not bool:
@@ -197,6 +206,16 @@ class Leo2PipelineConfig:
             raise TypeError(
                 f"Leo2 enable_deepep must be bool, got {type(self.enable_deepep).__name__}: {self.enable_deepep!r}."
             )
+        if self.attention_impl is not None and self.attention_impl not in (
+            "flash",
+            "flash_packed",
+            "flash3",
+            "flash3_packed",
+            "flex",
+            "sdpa",
+            "sageattn",
+        ):
+            raise ValueError(f"Leo2 attention_impl is unsupported: {self.attention_impl!r}.")
         if self.enable_deepep and self.expert_parallel_size == 1:
             raise ValueError(
                 "Leo2 enable_deepep=true requires expert_parallel_size > 1, "

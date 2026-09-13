@@ -45,6 +45,8 @@ class FlowGRPOConfig(BaseAlgorithmConfig):
     old_logp_source: str = "rollout"
     max_rollout_replay_logp_absdiff: Optional[float] = None
     rollout_replay_parity_action: str = "raise"
+    use_grpo_guard: bool = False
+    adv_clip_max: Optional[float] = None
     params: Any = dc_field(default=None)
 
 
@@ -72,6 +74,8 @@ class FlowGRPO(StageAlgorithm):
         old_logp_source: str = "rollout",
         max_rollout_replay_logp_absdiff: Optional[float] = None,
         rollout_replay_parity_action: str = "raise",
+        use_grpo_guard: bool = False,
+        adv_clip_max: Optional[float] = None,
         backend: Any = None,
         conditions_cls: Optional[Type[Any]] = None,
     ) -> None:
@@ -97,6 +101,14 @@ class FlowGRPO(StageAlgorithm):
         ):
             raise ValueError("FlowGRPO.max_rollout_replay_logp_absdiff must be finite and non-negative")
         self.rollout_replay_parity_action = str(rollout_replay_parity_action).strip().lower()
+        if type(use_grpo_guard) is not bool:
+            raise TypeError(f"FlowGRPO.use_grpo_guard must be bool, got {type(use_grpo_guard).__name__}.")
+        self.use_grpo_guard = use_grpo_guard
+        self.adv_clip_max = None if adv_clip_max is None else float(adv_clip_max)
+        if self.adv_clip_max is not None and (
+            not math.isfinite(self.adv_clip_max) or self.adv_clip_max <= 0
+        ):
+            raise ValueError("FlowGRPO.adv_clip_max must be finite and positive")
         require(
             self.rollout_replay_parity_action in ("raise", "warn"),
             f"FlowGRPO.rollout_replay_parity_action must be 'raise' or 'warn'; got {rollout_replay_parity_action!r}",
@@ -178,15 +190,16 @@ class FlowGRPO(StageAlgorithm):
                     metrics[key] = min(metrics.get(key, value), value)
                 else:
                     metrics[key] = metrics.get(key, 0.0) + value / len(target_steps)
-        new_logp = torch.cat(new_logps, dim=1)
-        old_logp = torch.cat(old_logps, dim=1)
-        _, ratio_metrics = _grpo_clip_loss(
-            new_logp=new_logp,
-            old_logp=old_logp,
-            advantages=advantages.detach().to(new_logp).reshape(-1, 1).expand_as(new_logp),
-            clip_range=metrics["clip_range"],
-        )
-        metrics.update({key: float(value.item()) for key, value in ratio_metrics.items()})
+        if not self.use_grpo_guard:
+            new_logp = torch.cat(new_logps, dim=1)
+            old_logp = torch.cat(old_logps, dim=1)
+            _, ratio_metrics = _grpo_clip_loss(
+                new_logp=new_logp,
+                old_logp=old_logp,
+                advantages=advantages.detach().to(new_logp).reshape(-1, 1).expand_as(new_logp),
+                clip_range=metrics["clip_range"],
+            )
+            metrics.update({key: float(value.item()) for key, value in ratio_metrics.items()})
         return AlgorithmStepResult(
             loss=sum(result.loss for result in step_results) / len(target_steps),
             metrics=metrics,
@@ -221,7 +234,10 @@ class FlowGRPO(StageAlgorithm):
 
         clip_range = _resolve_clip_range_from_schedule(self.clip_range, self.clip_schedule, training_progress)
         adv_b = advantages.detach().to(dtype=new_logp.dtype, device=new_logp.device).reshape(-1, 1).expand_as(new_logp)
+        if self.adv_clip_max is not None:
+            adv_b = torch.clamp(adv_b, -self.adv_clip_max, self.adv_clip_max)
         drift_metrics = rollout_replay_logp_absdiff(new_logp, old_logp)
+        old_means = None
         for column, step_index in enumerate(target_steps):
             step_drift = rollout_replay_logp_absdiff(new_logp[:, column], old_logp[:, column])
             drift_metrics[f"rollout_replay_logp_absdiff_step_{step_index}_mean"] = step_drift[
@@ -322,12 +338,56 @@ class FlowGRPO(StageAlgorithm):
                 raise RuntimeError(message)
             logger.warning(message)
 
-        loss_per_elem, ratio_metrics = _grpo_clip_loss(
-            new_logp=new_logp,
-            old_logp=old_logp,
-            advantages=adv_b,
-            clip_range=clip_range,
-        )
+        if self.use_grpo_guard:
+            if new_means is None or old_means is None:
+                raise RuntimeError("FlowGRPO.use_grpo_guard requires rollout and replay transition means.")
+            sigmas = segment.sigmas.to(device=new_logp.device, dtype=torch.float32)
+            sigma = sigmas[step_index]
+            sigma_next = sigmas[step_index + 1]
+            transition_std = self.stage.strategy.transition_std(
+                sigma=sigma,
+                sigma_next=sigma_next,
+                eta=float(self.params.eta),
+                sigma_max=sigmas[1] if int(sigmas.shape[0]) > 1 else 0.99,
+            ).to(new_logp.dtype)
+            jacobian = torch.abs(
+                (sigma_next - sigma)
+                - 0.5 * transition_std.square() * ((1 - sigma) / sigma)
+            ).to(new_logp.dtype)
+            ratio_coefficient = transition_std.clamp(min=1e-6)
+            loss_coefficient = jacobian.reciprocal()
+            mean_bias = (new_means - old_means).square().mean(
+                dim=tuple(range(2, new_means.ndim))
+            )
+            mean_bias = mean_bias / (2 * ratio_coefficient.square())
+            log_diff = new_logp - old_logp
+            ratio = torch.exp((log_diff + mean_bias) * ratio_coefficient)
+            unclipped = -adv_b * ratio
+            clipped = -adv_b * torch.clamp(ratio, 1.0 - clip_range, 1.0 + clip_range)
+            loss_per_elem = torch.maximum(unclipped, clipped) * loss_coefficient
+            gt = (ratio - 1.0 > clip_range).float()
+            lt = (1.0 - ratio > clip_range).float()
+            ratio_metrics = {
+                "ratio_mean": ratio.mean().detach(),
+                "ratio_std": (
+                    ratio.std()
+                    if ratio.numel() > 1
+                    else torch.zeros((), dtype=ratio.dtype, device=ratio.device)
+                ).detach(),
+                "ratio_min": ratio.min().detach(),
+                "ratio_max": ratio.max().detach(),
+                "clip_fraction": torch.maximum(gt, lt).mean().detach(),
+                "clipfrac_gt_one": gt.mean().detach(),
+                "clipfrac_lt_one": lt.mean().detach(),
+                "approx_kl": (0.5 * log_diff.pow(2)).mean().detach(),
+            }
+        else:
+            loss_per_elem, ratio_metrics = _grpo_clip_loss(
+                new_logp=new_logp,
+                old_logp=old_logp,
+                advantages=adv_b,
+                clip_range=clip_range,
+            )
         policy_loss = loss_per_elem.mean()
         loss = policy_loss
         metrics: Dict[str, Any] = {
@@ -373,7 +433,11 @@ class FlowGRPO(StageAlgorithm):
                 params=self.params,
                 target_steps=target_steps,
             ).to(dtype=new_means.dtype, device=new_means.device)
-            kl_ref = _reference_kl_loss(new_means, ref_means, sigma_t)
+            kl_ref = (
+                (new_means - ref_means).square().mean(dim=tuple(range(2, new_means.ndim))).mean()
+                if self.use_grpo_guard
+                else _reference_kl_loss(new_means, ref_means, sigma_t)
+            )
             loss = loss + self.beta * kl_ref
             metrics["beta"] = float(self.beta)
             metrics["kl_ref_mean"] = float(kl_ref.detach().item())

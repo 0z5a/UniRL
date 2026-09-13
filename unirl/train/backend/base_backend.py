@@ -223,10 +223,13 @@ class BaseFSDP2Backend(Remote):
             optimizer_cfg,
             params=list(trainable_params(model)),
             named_params=list(model.named_parameters()),
+            actor=self._bundle,
+            model=model,
         )
         self.scheduler = build_lr_scheduler(
             scheduler_cfg,
             optimizer=self.optimizer,
+            actor=self._bundle,
         )
 
         self._optimizer_step_count: int = 0
@@ -287,6 +290,9 @@ class BaseFSDP2Backend(Remote):
 
     def optimizer_step(self, *, max_grad_norm: float) -> float:
         """Clip (via the engine hook), optimizer step, scheduler step, EMA step."""
+        materialize_missing_grads = getattr(self.optimizer, "materialize_missing_grads", None)
+        if callable(materialize_missing_grads):
+            materialize_missing_grads()
         clipped = self._clip_grad_norm(float(max_grad_norm))
         grad_norm = float(clipped.item()) if isinstance(clipped, torch.Tensor) else float(clipped or 0.0)
 

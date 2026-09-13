@@ -15,7 +15,7 @@ def _load_vendor_leo(monkeypatch):
     return importlib.import_module("hymm.models.diffusion.leo")
 
 
-@pytest.mark.parametrize("repeats", [[17], [5, 12]])
+@pytest.mark.parametrize("repeats", [[5, 12]])
 def test_shared_timestep_uses_broadcast_with_equal_value_and_gradient(
     monkeypatch,
     repeats,
@@ -44,6 +44,17 @@ def test_shared_timestep_uses_broadcast_with_equal_value_and_gradient(
     timestep_mod.grad = None
     expected.backward()
     torch.testing.assert_close(timestep_mod.grad, actual_grad)
+
+
+def test_single_sample_timestep_uses_native_repeat_interleave(monkeypatch) -> None:
+    leo = _load_vendor_leo(monkeypatch)
+    monkeypatch.setattr(leo, "get_parallel_state", lambda: SimpleNamespace(cp_size=1))
+    timestep_mod = torch.randn(1, 1, 8, requires_grad=True)
+
+    result = leo._repeat_interleave(timestep_mod, torch.tensor([17]), dim=1)
+
+    torch.testing.assert_close(result, torch.repeat_interleave(timestep_mod.float(), torch.tensor([17]), dim=1))
+    assert result.shape == (1, 17, 8)
 
 
 def test_multiple_timesteps_still_materialize_distinct_token_modulation(monkeypatch) -> None:

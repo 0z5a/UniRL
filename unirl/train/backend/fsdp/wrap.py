@@ -58,6 +58,7 @@ def fsdp_wrap(
     master_dtype: Optional[str] = None,
     root_wrap: bool = True,
     ignored_params: Optional[set[nn.Parameter]] = None,
+    fp32_module_suffixes: Tuple[str, ...] = (),
 ) -> None:
     """Apply FSDP2 wrapping to the model.  No handle returned — DTensors"""
     from torch.distributed.fsdp import (
@@ -109,6 +110,21 @@ def fsdp_wrap(
     mesh = _create_device_mesh(fsdp_mode)
     if mesh is not None:
         fsdp_kwargs["mesh"] = mesh
+
+    fp32_wrapped = 0
+    if fp32_module_suffixes:
+        fp32_kwargs = dict(fsdp_kwargs)
+        fp32_kwargs.pop("ignored_params", None)
+        fp32_kwargs["mp_policy"] = MixedPrecisionPolicy(
+            param_dtype=torch.float32,
+            reduce_dtype=torch.float32,
+            output_dtype=torch.float32,
+        )
+        suffixes = tuple(str(suffix) for suffix in fp32_module_suffixes)
+        for name, module in model.named_modules():
+            if name and name.endswith(suffixes):
+                fully_shard(module, **fp32_kwargs)
+                fp32_wrapped += 1
 
     if block_class_names is None:
         block_class_names = _discover_block_classes(model, stage)
@@ -221,6 +237,8 @@ def fsdp_wrap(
             master_dtype,
             root_wrap,
         )
+        if fp32_wrapped:
+            logger.info("fsdp_wrap: wrapped %d nested fp32 module(s): %r", fp32_wrapped, fp32_module_suffixes)
 
 
 def _discover_block_classes(model: nn.Module, stage: object) -> Tuple[str, ...]:

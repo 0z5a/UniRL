@@ -58,13 +58,20 @@ def build_optimizer(
     backend: Any = None,
     actor: Any = None,
     named_params: Optional[Iterable[Tuple[str, torch.nn.Parameter]]] = None,
+    model: Optional[torch.nn.Module] = None,
 ) -> OptimizerProtocol:
     """Build an optimizer from a typed :class:`OptimizerConfig`."""
-    del actor
     if backend is not None:
         backend_optimizer = backend.build_optimizer(config)
         if backend_optimizer is not None:
             return backend_optimizer
+    actor_builder = getattr(actor, "build_optimizer", None)
+    if callable(actor_builder):
+        actor_optimizer = actor_builder(config=config, model=model)
+        if actor_optimizer is not None:
+            return actor_optimizer
+    if str(getattr(config, "type", "adamw")).strip().lower() != "adamw":
+        raise ValueError(f"Unsupported optimizer type: {config.type!r}")
 
     adam_kwargs = dict(
         betas=(float(config.adam_beta1), float(config.adam_beta2)),
@@ -95,11 +102,15 @@ def build_lr_scheduler(
     actor: Any = None,
 ) -> Optional[LRSchedulerProtocol]:
     """Build an LR scheduler from a typed :class:`LrSchedulerConfig`."""
-    del actor
     if backend is not None:
         backend_scheduler = backend.build_scheduler(config, optimizer)
         if backend_scheduler is not None:
             return backend_scheduler
+    actor_builder = getattr(actor, "build_lr_scheduler", None)
+    if callable(actor_builder):
+        actor_scheduler = actor_builder(config=config, optimizer=optimizer)
+        if actor_scheduler is not None:
+            return actor_scheduler
 
     scheduler_type = str(config.type)
     warmup_steps = int(config.warmup_steps)

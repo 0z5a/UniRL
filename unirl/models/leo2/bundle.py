@@ -156,6 +156,10 @@ def _bootstrap_hymm(config: Leo2PipelineConfig):
     finally:
         sys.argv = saved_argv
     args = validate_args(args, frozen)
+    if config.attention_impl is not None:
+        args.attn_impl = config.attention_impl
+    if config.reproduce:
+        args.reproduce = True
     if not args.model_structure.endswith("HF"):
         args.model_structure += "HF"
 
@@ -514,6 +518,10 @@ class Leo2Bundle(Bundle):
         local_rank = int(os.environ.get("LOCAL_RANK", os.environ.get("RAY_LOCAL_RANK", 0)))
         if torch.cuda.is_available():
             torch.cuda.set_device(local_rank % max(1, torch.cuda.device_count()))
+        from hymm.utils.torch_utils import set_manual_seed, set_reproducibility
+
+        set_manual_seed(args.seed)
+        set_reproducibility(args.reproduce, args.seed, args.benchmark)
         device = (
             torch.device(config.device)
             if config.device
@@ -528,6 +536,8 @@ class Leo2Bundle(Bundle):
         if dtype != torch.bfloat16:
             raise ValueError(f"Leo2's pinned DCP checkpoint requires model_precision='bf16', got {dtype}.")
         model, _model_config = build_model(args, dtype=dtype, device="cpu", initialize_weights=False)
+        if args.reproduce and hasattr(model, "enable_deterministic"):
+            model.enable_deterministic()
 
         expert_parallel_rank = int(os.environ.get("RANK", "0")) % config.expert_parallel_size
         _dcp_load_into(
@@ -559,6 +569,15 @@ class Leo2Bundle(Bundle):
         # whole transformer, impossible for a 150GB model). Move the non-block
         # root children now -- they are small.
         _move_non_block_to_device(model, device)
+        if config.full_model_training:
+            model.requires_grad_(True)
+            last_layer = model.layers[-1]
+            for module in (
+                getattr(last_layer.self_attn, "o_proj_txt", None),
+                getattr(last_layer, "mlp_txt", None),
+            ):
+                if module is not None:
+                    module.requires_grad_(False)
 
         # tokenizer + frozen aux models + the hymm pipeline object
         from hymm.core.extra_model_provider import (
@@ -602,6 +621,22 @@ class Leo2Bundle(Bundle):
 
     def trainable_module(self) -> nn.Module:
         return self.model
+
+    def build_optimizer(self, *, config, model):
+        """Build the native Leo2 Muon/AdamW optimizer when requested."""
+        if str(getattr(config, "type", "adamw")).strip().lower() != "leo2_native_muon":
+            return None
+        from .optimizer import build_native_muon_optimizer
+
+        return build_native_muon_optimizer(model=model, config=config)
+
+    def build_lr_scheduler(self, *, config, optimizer):
+        """Build schedulers over each native Leo2 optimizer child."""
+        if not hasattr(optimizer, "optimizers"):
+            return None
+        from .optimizer import build_native_lr_scheduler
+
+        return build_native_lr_scheduler(config=config, optimizer=optimizer)
 
     @contextlib.contextmanager
     def text_encoder_ctx(self):

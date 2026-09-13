@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import math
 import os
+import sys
 from collections import OrderedDict
 from contextlib import nullcontext
 from pathlib import Path
-from types import MethodType, SimpleNamespace
+from types import MethodType, ModuleType, SimpleNamespace
 
 import numpy as np
 import pytest
@@ -26,8 +28,9 @@ from unirl.models.leo2.conditions import Leo2Conditions
 from unirl.models.leo2.diffusion import Leo2DiffusionStage, _combine_modality_logp
 from unirl.models.leo2.pipeline import Leo2Pipeline
 from unirl.models.leo2.preprocess import _records
+from unirl.models.leo2.sde import Leo2FlowSDEStrategy
 from unirl.models.leo2.text_embed import Leo2CondStage, _to_transport_tree
-from unirl.models.leo2.vae import Leo2AudioDecodeStage
+from unirl.models.leo2.vae import Leo2AudioDecodeStage, Leo2VideoDecodeStage
 from unirl.rollout.engine.trainside.engine import TrainsideRolloutEngine
 from unirl.sde.kernels import FlowSDEStrategy
 from unirl.train.backend.base_backend import BaseFSDP2Backend
@@ -200,7 +203,50 @@ def test_leo2_audio_decode_returns_length_first_stereo() -> None:
     assert tuple(items[0].waveform.shape) == (8, 2)
 
 
-def test_leo2_joint_log_prob_matches_flow_factory_element_weighting() -> None:
+def test_leo2_video_decode_preserves_native_output_dtype(monkeypatch) -> None:
+    autoencoders = ModuleType("hymm.models.autoencoders")
+    autoencoders.denormalize_vae_latents = lambda vae, latents: latents
+    monkeypatch.setitem(sys.modules, "hymm", ModuleType("hymm"))
+    monkeypatch.setitem(sys.modules, "hymm.models", ModuleType("hymm.models"))
+    monkeypatch.setitem(sys.modules, "hymm.models.autoencoders", autoencoders)
+
+    class FakeVideoVAE:
+        def to(self, device):
+            return self
+
+        def decode(self, latents, return_dict=False):
+            assert not return_dict
+            return (latents.to(torch.float16),)
+
+    class FakeVideoProcessor:
+        @staticmethod
+        def postprocess_video(visuals, output_type):
+            assert output_type == "pt"
+            return (visuals * 0.5 + 0.5).clamp(0, 1).permute(0, 2, 1, 3, 4)
+
+    bundle = SimpleNamespace(
+        device=torch.device("cpu"),
+        config=SimpleNamespace(vae_on_gpu=True),
+        model=SimpleNamespace(
+            model_dict={"vae": FakeVideoVAE()},
+            diffusion_pipeline=SimpleNamespace(
+                vae_autocast_dtype=torch.float16,
+                video_processor=FakeVideoProcessor(),
+            ),
+        ),
+    )
+    decoded = Leo2VideoDecodeStage(bundle).decode_to_tensor(
+        torch.full((1, 3, 1, 2, 2), 0.1),
+    )
+
+    assert decoded.dtype is torch.float16
+    torch.testing.assert_close(
+        decoded,
+        (torch.full_like(decoded, 0.1) * 0.5 + 0.5).clamp(0, 1),
+    )
+
+
+def test_leo2_joint_log_prob_matches_native_modality_sum() -> None:
     video = torch.tensor([2.0, 4.0])
     audio = torch.tensor([8.0, 10.0])
 
@@ -211,7 +257,7 @@ def test_leo2_joint_log_prob_matches_flow_factory_element_weighting() -> None:
         n_audio=4,
     )
 
-    torch.testing.assert_close(actual, (video * 12 + audio * 4) / 16)
+    torch.testing.assert_close(actual, video + audio)
 
 
 def test_leo2_grouped_gemm_fallback_defaults_inside_ray_worker(monkeypatch) -> None:
@@ -347,6 +393,81 @@ def test_leo2_bf16_av_rollout_log_probs_match_replay() -> None:
     torch.testing.assert_close(replay.log_probs, segment.sde_logp, rtol=0.0, atol=0.0)
     assert segment.sde_means.dtype is torch.float32
     torch.testing.assert_close(replay.prev_sample_means, segment.sde_means, rtol=0.0, atol=0.0)
+
+
+def test_flow_sde_matches_native_leo2_transition_order() -> None:
+    strategy = Leo2FlowSDEStrategy()
+    sample = torch.randn(2, 4, 3, 5, dtype=torch.bfloat16)
+    prediction = torch.randn_like(sample)
+    previous = torch.randn_like(sample).float()
+    sigma = torch.tensor(1.0)
+    sigma_next = torch.tensor(0.9950980544090271)
+    sigma_max = sigma_next
+    eta = 0.5
+
+    actual_previous, actual_logp, actual_mean = strategy.denoise(
+        noise_pred=prediction,
+        sample=sample,
+        sigma=sigma,
+        sigma_next=sigma_next,
+        eta=eta,
+        prev_sample=previous,
+        sigma_max=sigma_max,
+    )
+
+    prediction_fp32 = prediction.float()
+    sample_fp32 = sample.float()
+    dt = sigma_next - sigma
+    base_std = torch.sqrt(sigma / (1 - torch.where(sigma == 1, sigma_max, sigma))) * eta
+    std = torch.clamp(base_std * torch.sqrt(-dt), min=1e-6)
+    original = sample_fp32 - sigma * prediction_fp32
+    score = -(sample_fp32 - original * (1 - sigma)) / (sigma**2)
+    expected_mean = sample_fp32 + dt * prediction_fp32 + 0.5 * (std**2) * score
+    expected_previous = previous.float()
+    expected_logp = (
+        -((expected_previous.detach() - expected_mean) ** 2) / (2 * (std**2))
+        - torch.log(std)
+        - torch.log(torch.sqrt(2 * torch.as_tensor(math.pi)))
+    ).mean(dim=tuple(range(1, previous.ndim)))
+
+    torch.testing.assert_close(actual_previous, expected_previous, rtol=0.0, atol=0.0)
+    torch.testing.assert_close(actual_mean, expected_mean, rtol=0.0, atol=0.0)
+    torch.testing.assert_close(actual_logp, expected_logp, rtol=0.0, atol=0.0)
+
+
+def test_leo2_flow_sde_batches_distinct_timesteps_like_native_row_loop() -> None:
+    strategy = Leo2FlowSDEStrategy()
+    sample = torch.randn(3, 4, 3, 5, dtype=torch.bfloat16)
+    prediction = torch.randn_like(sample)
+    previous = torch.randn(3, 4, 3, 5, dtype=torch.float32)
+    sigma = torch.tensor([1.0, 0.8, 0.4])
+    sigma_next = torch.tensor([0.95, 0.7, 0.2])
+
+    actual = strategy.denoise(
+        noise_pred=prediction,
+        sample=sample,
+        sigma=sigma,
+        sigma_next=sigma_next,
+        eta=0.5,
+        prev_sample=previous,
+        sigma_max=sigma_next[0],
+    )
+    expected_rows = [
+        strategy.denoise(
+            noise_pred=prediction[index : index + 1],
+            sample=sample[index : index + 1],
+            sigma=sigma[index],
+            sigma_next=sigma_next[index],
+            eta=0.5,
+            prev_sample=previous[index : index + 1],
+            sigma_max=sigma_next[0],
+        )
+        for index in range(sample.shape[0])
+    ]
+    expected = tuple(torch.cat([row[field] for row in expected_rows]) for field in range(3))
+
+    for actual_tensor, expected_tensor in zip(actual, expected):
+        torch.testing.assert_close(actual_tensor, expected_tensor, rtol=0.0, atol=0.0)
 
 
 def test_leo2_av_sde_noise_is_reproducible_across_worker_rng_states() -> None:
@@ -675,6 +796,110 @@ def test_leo2_motion_bilingual_flowgrpo_recipe_matches_requested_contract() -> N
         selected = scheduler.get_sde_indices(rollout_id)
         assert len(selected) == 2
         assert selected <= set(range(5))
+
+
+def test_leo2_native_parity_recipe_matches_native_grpo_contract() -> None:
+    path = Path(__file__).parents[1] / "examples/diffusion/leo2/leo2_t2v_native_parity.yaml"
+    config = OmegaConf.load(path)
+
+    assert config.num_devices == 32
+    assert config.num_groups == 8
+    assert config.group_size == 8
+    assert config.batch_size == 8
+    assert config.rollout.forward_batch_size == 2
+    assert config.bundle.config.video_shift == pytest.approx(7.0)
+    assert config.bundle.config.audio_shift == pytest.approx(1.0)
+    assert config.bundle.config.context_parallel_size == 4
+    assert config.bundle.config.expert_parallel_size == 1
+    assert config.bundle.config.audio_stochastic_rollout is True
+    assert config.bundle.config.audio_joint_sde is False
+    assert config.bundle.config.native_rng_compat is True
+    assert config.bundle.config.reproduce is True
+    assert config.bundle.config.attention_impl == "flash_packed"
+    assert config.bundle.config.uniform_bf16 is False
+    assert config.bundle.config.full_model_training is True
+    assert config.backend.lora_cfg is None
+    assert config.backend.optimizer_cfg.type == "leo2_native_muon"
+    assert config.backend.optimizer_cfg.momentum == pytest.approx(0.95)
+    assert "*final_layer*" in config.backend.optimizer_cfg.special_adamw_params
+    assert config.backend.fsdp_cfg.fsdp_mode == "full"
+    assert config.backend.fsdp_cfg.sp_size == 4
+    assert config.backend.fsdp_cfg.master_dtype == "fp32"
+    assert list(config.backend.fsdp_cfg.fp32_module_suffixes) == ["mlp.gate"]
+    assert config.backend.fsdp_cfg.checkpoint_format == "dcp"
+    assert config.sampling.num_inference_steps == 30
+    assert config.sampling.guidance_scale == pytest.approx(1.0)
+    assert (config.sampling.height, config.sampling.width, config.sampling.num_frames) == (480, 848, 121)
+    assert config.sampling.eta == pytest.approx(0.5)
+    assert list(config.sampling.sde_indices) == [0, 1, 2, 3, 4]
+    assert config.sampling.samples_per_prompt == 8
+    assert config.sampling.init_same_noise is True
+    assert config.algorithm.clip_range == pytest.approx(1.0e-4)
+    assert config.algorithm.use_grpo_guard is True
+    assert config.algorithm.adv_clip_max == pytest.approx(5.0)
+    assert config.algorithm.old_logp_source == "rollout"
+    assert config.algorithm.max_rollout_replay_logp_absdiff == pytest.approx(0.0)
+
+
+def test_leo2_native_optimizer_spec_matches_muon_adamw_partition() -> None:
+    from unirl.models.leo2.optimizer import _native_optimizer_spec
+
+    class FakeMuon:
+        pass
+
+    config = SimpleNamespace(
+        learning_rate=1.0e-5,
+        adam_beta1=0.9,
+        adam_beta2=0.999,
+        adam_epsilon=1.0e-8,
+        weight_decay=0.01,
+        momentum=0.95,
+        special_adamw_params=("*final_layer*", "*embedding*"),
+        special_weight_decay_params=(),
+    )
+    matrix = torch.nn.Parameter(torch.zeros(8, 4))
+    bias = torch.nn.Parameter(torch.zeros(8))
+
+    optimizer_cls, kwargs = _native_optimizer_spec("layers.0.self_attn.q_proj.weight", matrix, config, FakeMuon)
+    assert optimizer_cls is FakeMuon
+    assert kwargs == {
+        "lr": pytest.approx(1.0e-5),
+        "weight_decay": pytest.approx(0.01),
+        "momentum": pytest.approx(0.95),
+    }
+
+    optimizer_cls, kwargs = _native_optimizer_spec("final_layer.linear.weight", matrix, config, FakeMuon)
+    assert optimizer_cls is torch.optim.AdamW
+    assert kwargs["weight_decay"] == pytest.approx(0.01)
+    assert kwargs["betas"] == pytest.approx((0.9, 0.999))
+    assert kwargs["eps"] == pytest.approx(1.0e-8)
+
+    optimizer_cls, kwargs = _native_optimizer_spec("layers.0.self_attn.q_proj.bias", bias, config, FakeMuon)
+    assert optimizer_cls is torch.optim.AdamW
+    assert kwargs["weight_decay"] == pytest.approx(0.0)
+
+
+def test_optimizer_factory_delegates_to_model_bundle() -> None:
+    from unirl.train.backend.base import OptimizerConfig
+    from unirl.train.optim import build_optimizer
+
+    sentinel = object()
+
+    class Bundle:
+        def build_optimizer(self, *, config, model):
+            assert config.learning_rate == pytest.approx(1.0e-5)
+            assert model == "model"
+            return sentinel
+
+    config = OptimizerConfig(
+        learning_rate=1.0e-5,
+        adam_beta1=0.9,
+        adam_beta2=0.999,
+        adam_epsilon=1.0e-8,
+        weight_decay=0.01,
+    )
+
+    assert build_optimizer(config, params=(), actor=Bundle(), model="model") is sentinel
 
 
 def test_leo2_preprocess_preserves_multiline_prompt_jsonl(tmp_path: Path) -> None:
@@ -1030,3 +1255,52 @@ def test_leo2_pipeline_rejects_mixed_effective_geometry() -> None:
 
     with pytest.raises(ValueError, match="one effective media geometry"):
         Leo2Pipeline._latent_shape_from_conditions(conditions)
+
+
+def test_leo2_single_condition_preserves_native_layout() -> None:
+    stage = object.__new__(Leo2DiffusionStage)
+    stage.bundle = SimpleNamespace(
+        config=SimpleNamespace(context_parallel_size=4),
+    )
+    input_ids = torch.arange(12).reshape(1, 12)
+    model_kwargs = {"attention_mask": torch.tensor([[12, *([0] * 11)]])}
+    blob = {"input_ids": input_ids, "model_kwargs": model_kwargs}
+
+    packed_ids, packed_kwargs, packing_kwargs = stage._model_conditions(
+        [blob],
+        device=torch.device("cpu"),
+    )
+
+    assert packed_ids is input_ids
+    torch.testing.assert_close(packed_kwargs["attention_mask"], model_kwargs["attention_mask"])
+    assert packed_ids.shape[1] == 12
+    assert packing_kwargs == {}
+
+
+def test_leo2_native_seed_expansion_matches_group_branch_order() -> None:
+    root = Part.input(
+        ["prompt-0", "prompt-1"],
+        primitives={"text": Texts(texts=["a", "b"])},
+        metadata=[{"seed": 100}, {"seed": 200}],
+    )
+    sample = Sample.request(root).fork(
+        3,
+        sampling_params=SimpleNamespace(init_same_noise=False),
+    )
+
+    assert Leo2Pipeline._native_seeds(sample, base_seed=42, same_noise=False) == [
+        100,
+        101,
+        102,
+        200,
+        201,
+        202,
+    ]
+    assert Leo2Pipeline._native_seeds(sample, base_seed=42, same_noise=True) == [
+        100,
+        100,
+        100,
+        200,
+        200,
+        200,
+    ]

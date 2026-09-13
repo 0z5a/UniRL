@@ -112,6 +112,7 @@ class FSDPConfig:
     checkpoint_async: bool = False
     sp_size: int = 1
     ep_size: int = 1
+    fp32_module_suffixes: Tuple[str, ...] = ()
 
 
 __all__ = [

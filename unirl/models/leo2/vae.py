@@ -125,7 +125,10 @@ class Leo2VideoDecodeStage:
                 enabled=vae_dtype is not None and vae_dtype != torch.float32,
             ):
                 visuals = vae.decode(latents, return_dict=False)[0]
-        return (visuals.float() / 2 + 0.5).clamp(0, 1)
+        return pipeline.video_processor.postprocess_video(
+            visuals,
+            output_type="pt",
+        ).permute(0, 2, 1, 3, 4).contiguous()
 
     @torch.no_grad()
     def decode(self, latents: torch.Tensor) -> Videos:
