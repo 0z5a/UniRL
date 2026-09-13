@@ -115,6 +115,14 @@ class Leo2VideoDecodeStage:
         from hymm.models.autoencoders import denormalize_vae_latents
 
         pipeline = self.bundle.model.diffusion_pipeline
+        if pipeline is None:
+            from diffusers.video_processor import VideoProcessor
+
+            processor = VideoProcessor(
+                vae_scale_factor=int(self.bundle.model.config.vae_spatial_downsample_factor)
+            )
+        else:
+            processor = pipeline.video_processor
         vae_dtype = getattr(pipeline, "vae_autocast_dtype", None)
         with video_vae_ctx(self.bundle) as vae:
             latents = latents.to(device=self.bundle.device, dtype=torch.float32)
@@ -125,7 +133,7 @@ class Leo2VideoDecodeStage:
                 enabled=vae_dtype is not None and vae_dtype != torch.float32,
             ):
                 visuals = vae.decode(latents, return_dict=False)[0]
-        return pipeline.video_processor.postprocess_video(
+        return processor.postprocess_video(
             visuals,
             output_type="pt",
         ).permute(0, 2, 1, 3, 4).contiguous()

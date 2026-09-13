@@ -12,7 +12,10 @@ try:
     from colt5_attention import topk as maybe_differentiable_topk
 except Exception as e:
     print(f"Warning: Colt5 attention is not available: {e}")
-    maybe_differentiable_topk = None
+    def maybe_differentiable_topk(tensor, k, non_differentiable=True, fused=False):
+        if not non_differentiable:
+            raise RuntimeError("colt5_attention is required for differentiable top-k")
+        return torch.topk(tensor, k)
 from einops import rearrange, reduce
 
 import warnings
@@ -1227,7 +1230,10 @@ class ExpertParallelMoE(nn.Module):
         ENABLE_GROUPED_GEMM = os.getenv('ENABLE_GROUPED_GEMM', '1').lower() in ('true', '1')
         if ENABLE_GROUPED_GEMM:
             from hy_parallelism.models.modules.moe.moe_utils import permute, unpermute, generate_weights_idx, permute_no_sync
-            enable_fused_unpermute = not self.moe_drop_token_enabled
+            enable_fused_unpermute = (
+                not self.moe_drop_token_enabled
+                and os.getenv("LEO2_DISABLE_FUSED_UNPERMUTE", "0").lower() not in ("true", "1")
+            )
 
             num_global_sum_tokens_per_local_expert = expert_mask.sum(dim=(1, 2)).to(
                 torch.device("cpu"), non_blocking=True

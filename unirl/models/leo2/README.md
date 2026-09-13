@@ -49,6 +49,8 @@ RL 生成的视频随策略变化，不能把固定缓存的 x0 替代在线 rol
 | `load_video_vae` | `true` | 缓存 SFT 可设 `false`；生成像素视频必须为 `true` |
 | `vae_on_gpu` | `true` | `false` 时 VAE 常驻 CPU，codec 调用期间进入 GPU |
 | `condition_cache_size` | `1` | 原有在线条件 LRU，缓存 tensor 放 CPU；不控制磁盘缓存 |
+| `store_sde_means` | `true` | 保存 rollout transition mean；GRPO-Guard、reference KL 和严格 drift 分析需要，普通 `beta=0` FlowGRPO 可关闭 |
+| `store_initial_latents` | `true` | 在返回 trajectory 中保留一份初始噪声；不需要下游复用时可关闭 |
 | `native_rng_compat` | `true` | 按原生 CSV seed 与分支序号生成 FP32 初始噪声；SDE 沿用原生进程级 CUDA RNG 流 |
 | `audio_stochastic_rollout` | `true` | 原生 AV rollout 始终用相同 eta 推进音频，与是否训练 audio log-prob 无关 |
 | `reproduce` | `false` | 对齐原生 `--reproduce`：固定全局 RNG、启用 PyTorch deterministic，并打开 attention deterministic |

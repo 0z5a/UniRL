@@ -10,6 +10,7 @@ import torch
 from unirl.reward.base import BaseRewardComponentSpec
 from unirl.types.reward import RewardRequest
 from unirl.utils.media import tensor_frame_to_pil
+from unirl.utils.profiling import profile_region
 
 from .pickscore import PickScoreRewardScorer
 
@@ -83,9 +84,11 @@ class VideoPickScoreScorer(PickScoreRewardScorer):
 
             from unirl.types.primitives import Images
 
-            per_video = [
-                self._extract_frames(video, self.frame_selection, self.num_score_frames) for video in request.videos
-            ]
+            with profile_region("reward.videopickscore.extract_frames", batch_size=request.batch_size):
+                per_video = [
+                    self._extract_frames(video, self.frame_selection, self.num_score_frames)
+                    for video in request.videos
+                ]
             score_count = len(per_video[0])
             if any(len(frames) != score_count for frames in per_video):
                 raise RuntimeError("VideoPickScoreScorer sampled inconsistent frame counts")
@@ -102,7 +105,12 @@ class VideoPickScoreScorer(PickScoreRewardScorer):
                     reward_types=request.reward_types,
                     return_components=request.return_components,
                 )
-                totals += torch.tensor(super()._compute_model_rewards(frame_request), dtype=torch.float32)
+                with profile_region(
+                    "reward.videopickscore.frame_score",
+                    frame_index=frame_index,
+                    batch_size=request.batch_size,
+                ):
+                    totals += torch.tensor(super()._compute_model_rewards(frame_request), dtype=torch.float32)
             return (totals / score_count).tolist()
         return super()._compute_model_rewards(request)
 

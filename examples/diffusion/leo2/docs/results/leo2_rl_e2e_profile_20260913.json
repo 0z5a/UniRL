@@ -1,0 +1,96 @@
+{
+  "date": "2026-09-13",
+  "instance_id": "8b1d818da08afca801a097b6c46b163f",
+  "hardware": {
+    "nodes": 8,
+    "gpus_per_node": 8,
+    "gpu": "NVIDIA H20",
+    "memory_mib_per_gpu": 97871
+  },
+  "environment": {
+    "python": "3.12.3",
+    "torch": "2.13.0+cu130",
+    "ray": "2.58.0",
+    "transformers": "5.12.1"
+  },
+  "workload": {
+    "topology": "CP2/EP1/HSDP8",
+    "videos": 64,
+    "height": 464,
+    "width": 848,
+    "frames": 121,
+    "rollout_steps": 4,
+    "sde_steps": [0, 1],
+    "note": "Bounded A/B workload; historical production evidence covers 30 rollout steps and 512 videos."
+  },
+  "successful_runs": {
+    "baseline_fbs2": {
+      "rollout_s": 159.398,
+      "reward_s": 6.205,
+      "train_s": 233.0,
+      "peak_memory_mib": 97283,
+      "active_mean_gpu_util_pct": 84.89,
+      "reward": 0.6948,
+      "max_logp_absdiff": 0.00000639,
+      "trajectory_bytes_per_pack": 128465364,
+      "decoded_bytes_per_pack": 1146544176
+    },
+    "vae_resident_fbs2": {
+      "rollout_s": 154.680,
+      "reward_s": 6.284,
+      "train_s": 243.0,
+      "peak_memory_mib": 97283,
+      "reward": 0.6949,
+      "max_logp_absdiff": 0.00000079
+    },
+    "fbs1": {
+      "rollout_s": 163.645,
+      "reward_s": 6.237,
+      "train_s": 225.4,
+      "peak_memory_mib": 70449,
+      "active_mean_gpu_util_pct": 86.69,
+      "reward": 0.6948,
+      "max_logp_absdiff": 0.00000870,
+      "trajectory_bytes_per_pack": 64232716,
+      "decoded_bytes_per_pack": 573272096
+    },
+    "fbs1_trimmed_trajectory": {
+      "rollout_s": 163.510,
+      "reward_s": 6.272,
+      "train_s": 223.2,
+      "peak_memory_mib": 70449,
+      "reward": 0.6948,
+      "max_logp_absdiff": 0.00000831,
+      "trajectory_bytes_per_pack": 36788044,
+      "trajectory_reduction_pct": 42.72
+    }
+  },
+  "failed_or_bounded_runs": {
+    "forward_prefetch": {
+      "status": "oom",
+      "peak_memory_mib": 97283
+    },
+    "activation_checkpointing_off_cp2": {
+      "status": "oom",
+      "peak_memory_mib": 97179,
+      "message": "Tried to allocate 748 MiB with 94.28 GiB already used."
+    },
+    "activation_checkpointing_off_cp4": {
+      "status": "oom",
+      "peak_memory_mib": 97283,
+      "message": "Tried to allocate 1.46 GiB with 93.65 GiB already used."
+    },
+    "fbs4": {
+      "status": "manually_stopped_after_bounded_window",
+      "peak_memory_mib": 92681
+    },
+    "full30_fbs1_trimmed": {
+      "status": "manually_stopped_after_bounded_window",
+      "observed_rollout_forward_records": 3272,
+      "expected_rollout_forward_records": 3840,
+      "peak_memory_mib": 50073,
+      "active_mean_gpu_util_pct": 95.50
+    }
+  },
+  "artifact_root": "/apdcephfs_gz44/share_305110755/aimicahchen/leo2-rl-e2e-profile-20260913-v2"
+}

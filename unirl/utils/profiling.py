@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import logging
 import os
+import socket
+import time
 from contextlib import contextmanager
-from typing import Iterator, Optional
+from pathlib import Path
+from typing import Any, Dict, Iterator, Optional
 
 import torch
 
@@ -63,6 +66,115 @@ def profile_enabled() -> bool:
 def _out_dir() -> str:
     """Trace output dir."""
     return os.environ.get("UNIRL_PROFILE_DIR", "").strip() or "outputs/profiler"
+
+
+def tensor_tree_nbytes(value: Any) -> int:
+    """Return unique tensor payload bytes reachable from a builtin container tree."""
+    seen: set[int] = set()
+
+    def visit(item: Any) -> int:
+        if isinstance(item, torch.Tensor):
+            storage = item.untyped_storage()
+            key = int(storage.data_ptr())
+            if key in seen:
+                return 0
+            seen.add(key)
+            return int(storage.nbytes())
+        if isinstance(item, dict):
+            return sum(visit(v) for v in item.values())
+        if isinstance(item, (tuple, list)):
+            return sum(visit(v) for v in item)
+        if hasattr(item, "__dict__"):
+            return visit(vars(item))
+        return 0
+
+    return visit(value)
+
+
+def _phase_profile_dir() -> Optional[Path]:
+    raw = os.environ.get("UNIRL_PHASE_PROFILE_DIR", "").strip()
+    return Path(raw) if raw else None
+
+
+def _phase_rank() -> int:
+    for name in ("RANK", "RAY_WORKER_RANK", "LOCAL_RANK"):
+        raw = os.environ.get(name)
+        if raw is not None:
+            try:
+                return int(raw)
+            except ValueError:
+                pass
+    return 0
+
+
+def _cuda_memory() -> Dict[str, float]:
+    if not torch.cuda.is_available():
+        return {}
+    free, total = torch.cuda.mem_get_info()
+    return {
+        "allocated_gib": torch.cuda.memory_allocated() / 2**30,
+        "reserved_gib": torch.cuda.memory_reserved() / 2**30,
+        "max_allocated_gib": torch.cuda.max_memory_allocated() / 2**30,
+        "max_reserved_gib": torch.cuda.max_memory_reserved() / 2**30,
+        "device_used_gib": (total - free) / 2**30,
+    }
+
+
+def emit_phase_profile(name: str, **fields: Any) -> None:
+    """Append one rank-local JSONL profiling record when phase profiling is enabled."""
+    out_dir = _phase_profile_dir()
+    if out_dir is None:
+        return
+    import json
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    rank = _phase_rank()
+    record = {
+        "time_unix": time.time(),
+        "name": name,
+        "rank": rank,
+        "local_rank": int(os.environ.get("LOCAL_RANK", os.environ.get("RAY_LOCAL_RANK", "0"))),
+        "pid": os.getpid(),
+        "host": socket.gethostname(),
+        **fields,
+    }
+    path = out_dir / f"rank{rank}_pid{os.getpid()}.jsonl"
+    fd = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o644)
+    try:
+        os.write(fd, (json.dumps(record, sort_keys=True, default=str) + "\n").encode())
+    finally:
+        os.close(fd)
+
+
+@contextmanager
+def profile_region(name: str, **fields: Any) -> Iterator[None]:
+    """Record a low-overhead NVTX/JSONL phase with CUDA allocator boundaries."""
+    out_dir = _phase_profile_dir()
+    if out_dir is None:
+        if profile_enabled():
+            with torch.profiler.record_function(name):
+                yield
+        else:
+            yield
+        return
+    sync = _truthy(os.environ.get("UNIRL_PHASE_PROFILE_SYNC"))
+    if sync and torch.cuda.is_available():
+        torch.cuda.synchronize()
+    before = _cuda_memory()
+    started = time.perf_counter()
+    with torch.profiler.record_function(name):
+        try:
+            yield
+        finally:
+            if sync and torch.cuda.is_available():
+                torch.cuda.synchronize()
+            emit_phase_profile(
+                name,
+                elapsed_s=time.perf_counter() - started,
+                before=before,
+                after=_cuda_memory(),
+                **fields,
+            )
 
 
 class TrainStepProfiler:
@@ -215,8 +327,11 @@ def maybe_profile_update(owner, rank: int) -> Iterator[None]:
 
 __all__ = [
     "TrainStepProfiler",
+    "emit_phase_profile",
     "maybe_build_train_profiler",
     "maybe_profile_update",
+    "profile_region",
     "profile_mode",
     "profile_enabled",
+    "tensor_tree_nbytes",
 ]

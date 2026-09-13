@@ -18,6 +18,7 @@ from unirl.sde.runtime import get_sigma_schedule
 from unirl.types.sampling import DiffusionSamplingParams, compute_trajectory_positions
 from unirl.types.segments.latent import LatentSegment, make_video_segment
 from unirl.utils.dtypes import parse_torch_dtype
+from unirl.utils.profiling import profile_region
 
 from .conditions import Leo2Conditions
 from .config import LEO2_TIMESTEP_SCALE
@@ -128,6 +129,8 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
         audio_shift: float = 3.0,
         audio_stochastic_rollout: bool = True,
         audio_joint_sde: bool = False,
+        store_sde_means: bool = True,
+        store_initial_latents: bool = True,
     ) -> None:
         if type(profile_forward) is not bool:
             raise TypeError(
@@ -164,6 +167,8 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
         self.audio_shift = float(audio_shift)
         self.audio_stochastic_rollout = bool(audio_stochastic_rollout)
         self.audio_joint_sde = bool(audio_joint_sde)
+        self.store_sde_means = bool(store_sde_means)
+        self.store_initial_latents = bool(store_initial_latents)
 
     def audio_schedule(self, video_schedule: torch.Tensor) -> torch.Tensor:
         """Build Leo2's independent audio sigma grid."""
@@ -539,33 +544,35 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
                     if step_eta > 0.0 and denoise_seed_keys is not None
                     else None
                 )
-                if self.enable_audio:
-                    pred, audio_pred = self.predict_joint_noise(
-                        blobs,
+                with profile_region("leo2.rollout.model_forward", step=step_idx, batch_size=len(blobs)):
+                    if self.enable_audio:
+                        pred, audio_pred = self.predict_joint_noise(
+                            blobs,
+                            sample=x,
+                            sigma=sigmas[step_idx],
+                            channel_cond=channel_cond,
+                            audio_sample=a,
+                            audio_sigma=(audio_sigmas[step_idx] if audio_sigmas is not None else None),
+                        )
+                    else:
+                        pred = self.predict_noise(
+                            blobs,
+                            sample=x,
+                            sigma=sigmas[step_idx],
+                            channel_cond=channel_cond,
+                        )
+                        audio_pred = None
+                with profile_region("leo2.rollout.transition", step=step_idx, stochastic=step_eta > 0.0):
+                    x_next, log_prob, prev_mean = self.strategy.denoise(
+                        noise_pred=pred,
                         sample=x,
                         sigma=sigmas[step_idx],
-                        channel_cond=channel_cond,
-                        audio_sample=a,
-                        audio_sigma=(audio_sigmas[step_idx] if audio_sigmas is not None else None),
+                        sigma_next=sigmas[step_idx + 1],
+                        eta=step_eta,
+                        generator=step_generators,
+                        sigma_max=video_sigma_max,
+                        step_index=step_idx,
                     )
-                else:
-                    pred = self.predict_noise(
-                        blobs,
-                        sample=x,
-                        sigma=sigmas[step_idx],
-                        channel_cond=channel_cond,
-                    )
-                    audio_pred = None
-                x_next, log_prob, prev_mean = self.strategy.denoise(
-                    noise_pred=pred,
-                    sample=x,
-                    sigma=sigmas[step_idx],
-                    sigma_next=sigmas[step_idx + 1],
-                    eta=step_eta,
-                    generator=step_generators,
-                    sigma_max=video_sigma_max,
-                    step_index=step_idx,
-                )
                 x = x_next.to(dtype=self.trajectory_dtype)
                 audio_log_prob = None
                 if a is not None:
@@ -602,7 +609,8 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
                             n_audio=a[0].numel(),
                         )
                     sde_logp_list.append(log_prob.to(dtype=self.logprob_dtype))
-                    sde_means_list.append(prev_mean.detach())
+                    if getattr(self, "store_sde_means", True):
+                        sde_means_list.append(prev_mean.detach())
 
         cache_stats_factory = getattr(model, "cache_stats", None)
         if callable(cache_stats_factory):
@@ -626,7 +634,11 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
             sde_logp=torch.stack(sde_logp_list, dim=1) if sde_logp_list else None,
             sde_means=torch.stack(sde_means_list, dim=1) if sde_means_list else None,
             sde_indices=(torch.tensor(sde_sorted, dtype=torch.long, device=device) if sde_sorted else None),
-            initial_latents=initial_latents.detach().clone(),
+            initial_latents=(
+                initial_latents.detach().clone()
+                if getattr(self, "store_initial_latents", True)
+                else None
+            ),
             aux_latents=(torch.stack(stored_audio, dim=1) if stored_audio else None),
         )
 
@@ -680,14 +692,15 @@ class Leo2DiffusionStage(DiffusionStage[Leo2Conditions]):
                 a = segment.aux_latents_at(step_idx).to(self.bundle.device) if self.enable_audio else None
                 if channel_cond is None:
                     channel_cond = self._prep_channel_cond(blobs[0], x)
-                pred, audio_pred = self.predict_joint_noise(
-                    blobs,
-                    sample=x,
-                    sigma=sigmas[step_idx],
-                    channel_cond=channel_cond,
-                    audio_sample=a,
-                    audio_sigma=audio_sigmas[step_idx] if audio_sigmas is not None else None,
-                )
+                with profile_region("leo2.train.replay_forward", step=step_idx, batch_size=len(blobs)):
+                    pred, audio_pred = self.predict_joint_noise(
+                        blobs,
+                        sample=x,
+                        sigma=sigmas[step_idx],
+                        channel_cond=channel_cond,
+                        audio_sample=a,
+                        audio_sigma=audio_sigmas[step_idx] if audio_sigmas is not None else None,
+                    )
                 model_outputs.append(pred)
                 if audio_pred is not None:
                     aux_model_outputs.append(audio_pred)

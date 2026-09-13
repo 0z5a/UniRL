@@ -17,6 +17,7 @@ from unirl.types.noise_recipe import NoiseRecipe
 from unirl.types.primitives import Texts
 from unirl.types.sample import Sample
 from unirl.types.sample_id import branch_of
+from unirl.utils.profiling import emit_phase_profile, profile_region, tensor_tree_nbytes
 
 from .bundle import Leo2Bundle
 from .config import (
@@ -80,6 +81,8 @@ class Leo2Pipeline(Pipeline):
                 audio_shift=config.audio_shift,
                 audio_stochastic_rollout=config.audio_stochastic_rollout,
                 audio_joint_sde=config.audio_joint_sde,
+                store_sde_means=config.store_sde_means,
+                store_initial_latents=config.store_initial_latents,
             ),
             video_decode=Leo2VideoDecodeStage(bundle),
             audio_decode=Leo2AudioDecodeStage(bundle) if config.enable_audio else None,
@@ -208,91 +211,105 @@ class Leo2Pipeline(Pipeline):
             if self.config.native_rng_compat
             else [base_seed] * len(list(texts.texts))
         )
-        conditions = self.cond_stage.build(
-            texts,
-            height=int(params.height),
-            width=int(params.width),
-            num_frames=int(params.num_frames),
-            seeds=native_seeds,
-        )
+        with profile_region("leo2.rollout.condition_build", batch_size=gen.batch_size):
+            conditions = self.cond_stage.build(
+                texts,
+                height=int(params.height),
+                width=int(params.width),
+                num_frames=int(params.num_frames),
+                seeds=native_seeds,
+            )
+        emit_phase_profile("leo2.rollout.conditions", tensor_bytes=tensor_tree_nbytes(conditions))
 
         if os.environ.get("LEO2_DEBUG_HYMM_SAMPLE") and not getattr(self, "_hymm_ab_done", False):
             self._hymm_ab_done = True
             self._debug_hymm_sample(str(list(texts.texts)[0]), params, base_seed)
 
-        recipe = NoiseRecipe.from_sample(sample)
-        shape = self._latent_shape_from_conditions(conditions)
-        native_generators = None
-        if self.config.native_rng_compat and recipe.initial_latents is None:
-            native_generators = self._native_generators(
-                sample,
-                base_seed=base_seed,
-                same_noise=bool(params.init_same_noise),
-                device=self.bundle.device,
-            )
-            audio_generators = (
-                [generator.clone_state() for generator in native_generators]
-                if isinstance(native_generators, list)
-                else native_generators.clone_state()
-            )
-            video_noise = randn_tensor(
-                (gen.batch_size, *shape),
-                generator=native_generators,
-                device=self.bundle.device,
-                dtype=torch.float32,
-            )
-        else:
-            audio_generators = None
-            video_noise = recipe.resolve(device=self.bundle.device, latent_shape=shape)
-        require(
-            video_noise is not None,
-            "Leo2Pipeline.generate: no initial latents from the driver x_T recipe.",
-        )
-        audio_noise = None
-        if self.config.enable_audio:
-            audio_token_lengths = [blob.get("audio_token_length") for blob in conditions.hymm]
-            require(
-                all(type(length) is int and length > 0 for length in audio_token_lengths)
-                and len(set(audio_token_lengths)) == 1,
-                "Leo2Pipeline.generate: packed AV conditions require one shared positive "
-                f"audio_token_length, got {audio_token_lengths}",
-            )
-            audio_token_length = audio_token_lengths[0]
-            if audio_generators is not None:
-                audio_noise = randn_tensor(
-                    (gen.batch_size, LEO2_AUDIO_LATENT_CHANNELS, audio_token_length),
-                    generator=audio_generators,
+        with profile_region("leo2.rollout.noise_init", batch_size=gen.batch_size):
+            recipe = NoiseRecipe.from_sample(sample)
+            shape = self._latent_shape_from_conditions(conditions)
+            native_generators = None
+            if self.config.native_rng_compat and recipe.initial_latents is None:
+                native_generators = self._native_generators(
+                    sample,
+                    base_seed=base_seed,
+                    same_noise=bool(params.init_same_noise),
+                    device=self.bundle.device,
+                )
+                audio_generators = (
+                    [generator.clone_state() for generator in native_generators]
+                    if isinstance(native_generators, list)
+                    else native_generators.clone_state()
+                )
+                video_noise = randn_tensor(
+                    (gen.batch_size, *shape),
+                    generator=native_generators,
                     device=self.bundle.device,
                     dtype=torch.float32,
                 )
             else:
-                audio_noise = recipe.resolve(
-                    device=self.bundle.device,
-                    salt="audio",
-                    latent_shape=(LEO2_AUDIO_LATENT_CHANNELS, audio_token_length),
-                )
+                audio_generators = None
+                video_noise = recipe.resolve(device=self.bundle.device, latent_shape=shape)
             require(
-                audio_noise is not None,
-                "Leo2Pipeline.generate: no initial audio latents from the driver noise recipe",
+                video_noise is not None,
+                "Leo2Pipeline.generate: no initial latents from the driver x_T recipe.",
             )
+            audio_noise = None
+            if self.config.enable_audio:
+                audio_token_lengths = [blob.get("audio_token_length") for blob in conditions.hymm]
+                require(
+                    all(type(length) is int and length > 0 for length in audio_token_lengths)
+                    and len(set(audio_token_lengths)) == 1,
+                    "Leo2Pipeline.generate: packed AV conditions require one shared positive "
+                    f"audio_token_length, got {audio_token_lengths}",
+                )
+                audio_token_length = audio_token_lengths[0]
+                if audio_generators is not None:
+                    audio_noise = randn_tensor(
+                        (gen.batch_size, LEO2_AUDIO_LATENT_CHANNELS, audio_token_length),
+                        generator=audio_generators,
+                        device=self.bundle.device,
+                        dtype=torch.float32,
+                    )
+                else:
+                    audio_noise = recipe.resolve(
+                        device=self.bundle.device,
+                        salt="audio",
+                        latent_shape=(LEO2_AUDIO_LATENT_CHANNELS, audio_token_length),
+                    )
+                require(
+                    audio_noise is not None,
+                    "Leo2Pipeline.generate: no initial audio latents from the driver noise recipe",
+                )
 
-        segment = self.diffusion.generate(
-            conditions,
-            params=params,
-            sigmas=params.sigmas.to(dtype=torch.float32, device="cpu"),
-            initial_latents=video_noise,
-            initial_audio_latents=audio_noise,
-            sde_indices=list(params.sde_indices) if params.sde_indices is not None else None,
-            denoise_seed_keys=(
-                None
-                if self.config.native_rng_compat
-                else [str(sample_id) for sample_id in gen.sample_ids]
-            ),
-            denoise_base_seed=base_seed,
+        with profile_region("leo2.rollout.denoise", batch_size=gen.batch_size):
+            segment = self.diffusion.generate(
+                conditions,
+                params=params,
+                sigmas=params.sigmas.to(dtype=torch.float32, device="cpu"),
+                initial_latents=video_noise,
+                initial_audio_latents=audio_noise,
+                sde_indices=list(params.sde_indices) if params.sde_indices is not None else None,
+                denoise_seed_keys=(
+                    None
+                    if self.config.native_rng_compat
+                    else [str(sample_id) for sample_id in gen.sample_ids]
+                ),
+                denoise_base_seed=base_seed,
+            )
+        emit_phase_profile(
+            "leo2.rollout.trajectory",
+            tensor_bytes=tensor_tree_nbytes(segment),
+            latents_bytes=tensor_tree_nbytes(segment.latents),
+            initial_latents_bytes=tensor_tree_nbytes(segment.initial_latents),
+            sde_logp_bytes=tensor_tree_nbytes(segment.sde_logp),
+            sde_means_bytes=tensor_tree_nbytes(segment.sde_means),
+            aux_latents_bytes=tensor_tree_nbytes(segment.aux_latents),
         )
 
         final_latents = segment.latents_at(int(params.num_inference_steps))
-        videos = self.video_decode.decode(final_latents)
+        with profile_region("leo2.rollout.video_decode", batch_size=gen.batch_size):
+            videos = self.video_decode.decode(final_latents)
         primitives = {"video": videos}
         primitive_metadata = {}
         if self.config.enable_audio:
@@ -301,8 +318,10 @@ class Leo2Pipeline(Pipeline):
                 "Leo2Pipeline.generate: AV rollout produced no audio decoder/trajectory",
             )
             final_audio_latents = segment.aux_latents_at(int(params.num_inference_steps))
-            primitives["audio"] = self.audio_decode.decode(final_audio_latents)
+            with profile_region("leo2.rollout.audio_decode", batch_size=gen.batch_size):
+                primitives["audio"] = self.audio_decode.decode(final_audio_latents)
             primitive_metadata["audio"] = {"sample_rate": LEO2_AUDIO_SAMPLE_RATE}
+        emit_phase_profile("leo2.rollout.decoded", tensor_bytes=tensor_tree_nbytes(primitives))
 
         filled = gen.fill(
             segment=segment,

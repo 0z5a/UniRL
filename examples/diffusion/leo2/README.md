@@ -26,10 +26,12 @@ are propagated when the pending call is resolved.
 |---|---|
 | `unirl/models/leo2/` | model package and vendored gen-ar runtime: `bundle.py` (hymm bootstrap, DCP load, FSDP-ready placement), `sde.py`, `optimizer.py`, `vendor/`, `text_embed.py`, `diffusion.py`, `vae.py`, `pipeline.py`, `conditions.py`, `config.py` |
 | `examples/diffusion/leo2/leo2_t2v_trainside.yaml` | base recipe (FSDP2 + LoRA r64, FlowSDE, PickScore, FlowGRPO) |
+| `examples/diffusion/leo2/leo2_t2v_flowgrpo_profile.yaml` | bounded 64-GPU end-to-end profiling workload |
 | `examples/diffusion/leo2/leo2_t2v_native_parity.yaml` | deterministic 32×H20 CP4 profile matching the native MoE GRPO rollout geometry and schedule |
 | `examples/diffusion/leo2/scripts/` | portable launchers (`unirl_longrun*.sh`, `unirl_smoke.sh`), probes, artifact validation and performance helpers |
 | `examples/diffusion/leo2/docs/DESIGN.md` | decision log R1–R27 (every pitfall and its fix) |
 | `examples/diffusion/leo2/docs/R15_perf_report.html` | timing / memory / deployment measurements (with erratum) |
+| `examples/diffusion/leo2/docs/LEO2_RL_E2E_PROFILING_20260913.md` | 64-H20 end-to-end timing, memory ledger, and optimization A/B report |
 | `examples/diffusion/leo2/docs/CACHE_BENCHMARK_REPORT_20260903.md` | 8×H20、848×464×121 first-block cache 正式实验报告 |
 | `examples/diffusion/leo2/docs/QUALITY_EVALUATION_PLAN.md` | VBench 系列调研、已安装环境、评估协议与复现命令 |
 | `examples/diffusion/leo2/docs/results/acceleration_benchmark_20260903/README.md` | shift-9 Taylor、MagCache、FasterCache DFR 的速度、漂移和质量实测汇总 |

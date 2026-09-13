@@ -33,6 +33,7 @@ from unirl.train.configs import EmaFullConfig, EmaLoraConfig, FSDPConfig, LoraCo
 from unirl.train.ema import EMA, Shadow, inject_mirror, inject_nft, make_decay_fn
 from unirl.train.lora import inject_frozen_adapter, inject_lora, resolve_target_modules_pattern
 from unirl.train.optim import build_lr_scheduler, build_optimizer
+from unirl.utils.profiling import profile_region
 
 if TYPE_CHECKING:
     from torch.distributed.device_mesh import DeviceMesh
@@ -231,6 +232,7 @@ class BaseFSDP2Backend(Remote):
             optimizer=self.optimizer,
             actor=self._bundle,
         )
+        self._emit_memory_ledger()
 
         self._optimizer_step_count: int = 0
         self._eval_ema_active: bool = False
@@ -268,6 +270,38 @@ class BaseFSDP2Backend(Remote):
         self._defer_grad_sync = bool(fsdp_cfg.defer_grad_sync) and not bool(fsdp_cfg.reshard_after_forward)
         self._grad_sync_enabled = True
 
+    def _emit_memory_ledger(self) -> None:
+        """Record local model, trainable, gradient, and optimizer tensor bytes."""
+        from torch.distributed.tensor import DTensor
+
+        from unirl.utils.profiling import emit_phase_profile
+
+        def local_tensor(tensor: torch.Tensor) -> torch.Tensor:
+            return tensor.to_local() if isinstance(tensor, DTensor) else tensor
+
+        params = list(self.model.parameters())
+        trainable = [param for param in params if param.requires_grad]
+        optimizer_bytes = 0
+        for state in self.optimizer.state.values():
+            optimizer_bytes += sum(
+                local_tensor(value).numel() * local_tensor(value).element_size()
+                for value in state.values()
+                if isinstance(value, torch.Tensor)
+            )
+        emit_phase_profile(
+            "train.memory_ledger",
+            model_param_bytes=sum(local_tensor(param).numel() * local_tensor(param).element_size() for param in params),
+            trainable_param_bytes=sum(
+                local_tensor(param).numel() * local_tensor(param).element_size() for param in trainable
+            ),
+            gradient_bytes=sum(
+                local_tensor(param.grad).numel() * local_tensor(param.grad).element_size()
+                for param in trainable
+                if param.grad is not None
+            ),
+            optimizer_state_bytes=optimizer_bytes,
+        )
+
     def zero_grad(self) -> None:
         self.optimizer.zero_grad()
 
@@ -290,10 +324,12 @@ class BaseFSDP2Backend(Remote):
 
     def optimizer_step(self, *, max_grad_norm: float) -> float:
         """Clip (via the engine hook), optimizer step, scheduler step, EMA step."""
-        materialize_missing_grads = getattr(self.optimizer, "materialize_missing_grads", None)
-        if callable(materialize_missing_grads):
-            materialize_missing_grads()
-        clipped = self._clip_grad_norm(float(max_grad_norm))
+        with profile_region("optimizer.materialize_grads"):
+            materialize_missing_grads = getattr(self.optimizer, "materialize_missing_grads", None)
+            if callable(materialize_missing_grads):
+                materialize_missing_grads()
+        with profile_region("optimizer.clip_grad_norm"):
+            clipped = self._clip_grad_norm(float(max_grad_norm))
         grad_norm = float(clipped.item()) if isinstance(clipped, torch.Tensor) else float(clipped or 0.0)
 
         if not math.isfinite(grad_norm):
@@ -319,12 +355,16 @@ class BaseFSDP2Backend(Remote):
             self.optimizer.zero_grad(set_to_none=True)
             return grad_norm
 
-        self.optimizer.step()
+        with profile_region("optimizer.step"):
+            self.optimizer.step()
         if self.scheduler is not None:
-            self.scheduler.step()
+            with profile_region("optimizer.scheduler_step"):
+                self.scheduler.step()
         if self.ema is not None:
-            self.ema.step(self._optimizer_step_count)
+            with profile_region("optimizer.ema_step"):
+                self.ema.step(self._optimizer_step_count)
         self._optimizer_step_count += 1
+        self._emit_memory_ledger()
         return grad_norm
 
     def on_rollout_end(self) -> None:

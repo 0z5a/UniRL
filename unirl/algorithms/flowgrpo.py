@@ -13,6 +13,7 @@ import torch
 from unirl.config.require import require
 from unirl.types.conditions import Condition
 from unirl.types.segments.latent import LatentSegment
+from unirl.utils.profiling import profile_region
 
 from .base import (
     AlgorithmStepResult,
@@ -117,6 +118,8 @@ class FlowGRPO(StageAlgorithm):
             self.old_logp_source in ("rollout", "replay"),
             f"FlowGRPO: old_logp_source must be 'rollout' or 'replay'; got {old_logp_source!r}",
         )
+        if self.use_grpo_guard and not getattr(self.stage, "store_sde_means", True):
+            raise ValueError("FlowGRPO.use_grpo_guard=true requires Leo2 store_sde_means=true.")
         self.conditions_cls = conditions_cls
 
     def prepare_segment(
@@ -219,12 +222,13 @@ class FlowGRPO(StageAlgorithm):
     ) -> tuple[AlgorithmStepResult, torch.Tensor, torch.Tensor]:
         """Backpropagate one transition and return only detached log-probs and scalar diagnostics."""
         target_steps = [step_index]
-        replay_result = self.stage.replay(
-            typed_conds,
-            segment=segment,
-            params=self.params,
-            step_indices=target_steps,
-        )
+        with profile_region("flowgrpo.replay", step=step_index):
+            replay_result = self.stage.replay(
+                typed_conds,
+                segment=segment,
+                params=self.params,
+                step_indices=target_steps,
+            )
         new_logp = replay_result.log_probs
         new_means = replay_result.prev_sample_means
 
@@ -442,7 +446,8 @@ class FlowGRPO(StageAlgorithm):
             metrics["beta"] = float(self.beta)
             metrics["kl_ref_mean"] = float(kl_ref.detach().item())
 
-        (loss * loss_scale).backward()
+        with profile_region("flowgrpo.backward", step=step_index):
+            (loss * loss_scale).backward()
 
         result = AlgorithmStepResult(
             loss=float(loss.detach().item()),

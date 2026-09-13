@@ -138,6 +138,8 @@ class Leo2PipelineConfig:
     load_video_vae: bool = True
     # Forward timing forces CUDA synchronization and is benchmark-only.
     profile_forward: bool = False
+    store_sde_means: bool = True
+    store_initial_latents: bool = True
     vae_on_gpu: bool = True
     audio_vae_on_gpu: bool = True
     context_parallel_size: int = 1
@@ -169,6 +171,8 @@ class Leo2PipelineConfig:
             "native_rng_compat",
             "reproduce",
             "full_model_training",
+            "store_sde_means",
+            "store_initial_latents",
         ):
             value = getattr(self, name)
             if type(value) is not bool:

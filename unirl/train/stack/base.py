@@ -18,6 +18,7 @@ from unirl.train.backend.fsdp import FSDPBackend
 from unirl.train.stack.planner import CountPlanner, MicroPlanner, Plan, UpdatePlan, _positive_int
 from unirl.types.sample import Part
 from unirl.utils.metrics import aggregate_numeric_metrics
+from unirl.utils.profiling import profile_region, tensor_tree_nbytes
 
 logger = logging.getLogger(__name__)
 
@@ -350,14 +351,15 @@ class TrainStack(Remote):
                 "optimizer steps inside the window would re-step on partial gradients."
             )
         arranged = []
-        for part in window:
-            arranged.append(
-                self.micro_planner.arrange(
-                    part,
-                    num_updates=self.num_updates_per_batch,
-                    micro_batch_size=self.micro_batch_size,
+        with profile_region("train.arrange"):
+            for part in window:
+                arranged.append(
+                    self.micro_planner.arrange(
+                        part,
+                        num_updates=self.num_updates_per_batch,
+                        micro_batch_size=self.micro_batch_size,
+                    )
                 )
-            )
         window.clear()
         from unirl.utils.profiling import profile_mode
 
@@ -365,9 +367,12 @@ class TrainStack(Remote):
         with profiler.record("train_track") if profiler is not None else nullcontext():
             if len(arranged) == 1:
                 part, plans = arranged[0]
-                part = self._align_track_inputs(part)
-                part = self._prepare_for_training(part, plans=plans)
-                result = self._run_updates(part, plans=plans, training_progress=float(training_progress))
+                with profile_region("train.align_inputs", source_tensor_bytes=tensor_tree_nbytes(part)):
+                    part = self._align_track_inputs(part)
+                with profile_region("train.prepare", tensor_bytes=tensor_tree_nbytes(part)):
+                    part = self._prepare_for_training(part, plans=plans)
+                with profile_region("train.updates", num_updates=len(plans)):
+                    result = self._run_updates(part, plans=plans, training_progress=float(training_progress))
             else:
                 result = self._run_window(arranged, training_progress=float(training_progress))
         if profiler is not None:

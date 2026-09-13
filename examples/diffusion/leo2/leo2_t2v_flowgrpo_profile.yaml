@@ -1,0 +1,28 @@
+# @package _global_
+# Bounded 64-GPU profiling workload; preserve production topology and geometry.
+defaults:
+  - leo2_t2v_flowgrpo_cached
+  - _self_
+
+num_groups: 32
+group_size: 2
+batch_size: ${num_groups}
+rollout_chunk_prompts: ${num_groups}
+num_rollouts: 1
+
+sampling:
+  num_inference_steps: 4
+  sde_indices: [0, 1]
+  samples_per_prompt: ${group_size}
+
+stack:
+  micro_batch_size: 2
+  num_updates_per_batch: 1
+
+logging:
+  report_to_wandb: false
+  log_media: false
+  memory:
+    enabled: true
+    log_boundaries: true
+    empty_cache_at: []

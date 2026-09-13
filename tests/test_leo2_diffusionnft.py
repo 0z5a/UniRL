@@ -354,6 +354,50 @@ def test_leo2_av_generate_stores_audio_trajectory() -> None:
     torch.testing.assert_close(segment.aux_latents_at(1), torch.zeros(1, 96, 5))
 
 
+def test_leo2_generate_can_omit_optional_rollout_tensors() -> None:
+    class FakeModel:
+        training = False
+
+        @staticmethod
+        def cache_context(name):
+            return nullcontext()
+
+        @staticmethod
+        def cache_stats():
+            return {"method": "none"}
+
+    stage = object.__new__(Leo2DiffusionStage)
+    stage.bundle = SimpleNamespace(device=torch.device("cpu"), model=FakeModel())
+    stage.strategy = FlowSDEStrategy()
+    stage.trajectory_dtype = torch.float32
+    stage.logprob_dtype = torch.float32
+    stage.enable_audio = False
+    stage.audio_joint_sde = False
+    stage.store_sde_means = False
+    stage.store_initial_latents = False
+    stage.video_shift = 3.0
+    stage.audio_shift = 3.0
+    stage._mem_reported = True
+    stage._autocast = MethodType(lambda self: nullcontext(), stage)
+    stage._prep_channel_cond = MethodType(lambda self, blob, sample: (None, None), stage)
+    stage.predict_noise = MethodType(
+        lambda self, blob, **kwargs: torch.zeros_like(kwargs["sample"]),
+        stage,
+    )
+    segment = stage.generate(
+        SimpleNamespace(hymm=[{}]),
+        params=SimpleNamespace(num_inference_steps=2, eta=0.5),
+        sigmas=torch.tensor([0.8, 0.5, 0.2]),
+        initial_latents=torch.randn(1, 3, 2, 2),
+        sde_indices=[0, 1],
+    )
+
+    assert segment.initial_latents is None
+    assert segment.sde_means is None
+    assert segment.sde_logp is not None
+    assert tuple(segment.latents.shape) == (1, 3, 3, 2, 2)
+
+
 def test_leo2_bf16_av_rollout_log_probs_match_replay() -> None:
     torch.manual_seed(7)
     stage = object.__new__(Leo2DiffusionStage)
