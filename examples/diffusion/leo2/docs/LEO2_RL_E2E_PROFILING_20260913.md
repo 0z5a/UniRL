@@ -299,3 +299,48 @@ After every run, Ray and training Python processes were stopped and the
 original `gpu_occupy_force.py` process was relaunched on all eight nodes. Final
 verification must show 64/64 H20s at approximately 1199 MiB and 100%
 utilization before handoff.
+
+## Native Rollout Attribution Follow-up
+
+Date: 2026-09-15
+
+A low-overhead Native/UniRL A/B rerun used the real DCP checkpoint, CP4,
+64 H20s, identical conditions/noise, 480×848×121 geometry, and 30 denoising
+steps. CUDA events covered coarse regions only; model forward hooks were
+disabled because the earlier per-call hook instrumentation inflated each step
+from about 13 seconds to about 31 seconds.
+
+With decode disabled, Native and UniRL took 397.635 and 397.350 seconds
+respectively (`-0.07%` UniRL versus Native). Every trajectory latent, transition
+log probability, transition mean, and final AV latent was bitwise exact. The
+30 model-forward wrappers took 397.423 and 397.244 seconds, so the trainside
+denoising path itself has no measurable framework regression.
+
+The full decode A/B exposed the previous `+2.7%` result:
+
+| Phase | Native | UniRL before fix |
+|---|---:|---:|
+| Denoising/model region | 397.439 s | 398.149 s |
+| Video VAE decode | 9.525 s | 19.940 s |
+| Total | 407.206 s | 418.269 s |
+
+UniRL read `pipeline.vae_autocast_dtype`, but the cached-condition pipeline can
+be absent or carry `None`; the loaded VAE itself still declares the native FP16
+autocast dtype. The fallback was therefore missing and decode ran in FP32.
+`Leo2VideoDecodeStage` now falls back to `vae.autocast_dtype`.
+
+After the fix, the same full A/B took 407.119 seconds Native and 407.386 seconds
+UniRL (`+0.066%`). Video VAE decode was 9.525/9.523 seconds, and all compared
+rollout state, decoded audio, and decoded video tensors were bitwise exact.
+
+Raw summaries:
+
+```text
+/apdcephfs_gz44/share_305110755/aimicahchen/leo2-bitwise-align-20260911-v2/results/strict-phase-both-480p30-nodecode-v1/summary.json
+/apdcephfs_gz44/share_305110755/aimicahchen/leo2-bitwise-align-20260911-v2/results/strict-phase-both-480p30-decode-v1/summary.json
+/apdcephfs_gz44/share_305110755/aimicahchen/leo2-bitwise-align-20260911-v2/results/strict-phase-both-480p30-vaefix-v1/summary.json
+```
+
+This also clarifies the term *trainside*: it removes a separate inference
+service and weight synchronization, but it does not remove the 30 full 75B-MoE
+forwards, CP/FSDP communication, trajectory materialization, or VAE decode.
