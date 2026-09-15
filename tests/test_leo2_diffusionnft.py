@@ -211,6 +211,8 @@ def test_leo2_video_decode_preserves_native_output_dtype(monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "hymm.models.autoencoders", autoencoders)
 
     class FakeVideoVAE:
+        autocast_dtype = torch.float16
+
         def to(self, device):
             return self
 
@@ -230,7 +232,7 @@ def test_leo2_video_decode_preserves_native_output_dtype(monkeypatch) -> None:
         model=SimpleNamespace(
             model_dict={"vae": FakeVideoVAE()},
             diffusion_pipeline=SimpleNamespace(
-                vae_autocast_dtype=torch.float16,
+                vae_autocast_dtype=None,
                 video_processor=FakeVideoProcessor(),
             ),
         ),

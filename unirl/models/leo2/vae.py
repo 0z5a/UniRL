@@ -123,8 +123,10 @@ class Leo2VideoDecodeStage:
             )
         else:
             processor = pipeline.video_processor
-        vae_dtype = getattr(pipeline, "vae_autocast_dtype", None)
         with video_vae_ctx(self.bundle) as vae:
+            vae_dtype = getattr(pipeline, "vae_autocast_dtype", None)
+            if vae_dtype is None:
+                vae_dtype = getattr(vae, "autocast_dtype", None)
             latents = latents.to(device=self.bundle.device, dtype=torch.float32)
             latents = denormalize_vae_latents(vae, latents)
             with torch.autocast(
