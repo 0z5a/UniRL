@@ -48,3 +48,6 @@ configs/service.yaml
 
 # Runtime logs
 logs/
+
+# Full benchmark source results; commit compact comparison evidence instead.
+docs/benchmarks/raw/

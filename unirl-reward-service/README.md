@@ -234,6 +234,69 @@ python3 scripts/bench_concurrent.py \
 
 The output reports each request's min / mean / max latency plus p50/p90/p95/p99, throughput, transport errors, and server-side per-reward failure counts. The sweep and per-reward modes end with a side-by-side comparison table.
 
+For the CUDA MPS experiment proposed in
+[#463](https://github.com/Tencent-Hunyuan/UniRL/issues/463), run the same
+workload repeatedly against each independently launched deployment and label
+the result explicitly:
+
+```bash
+python3 scripts/bench_concurrent.py \
+    --url http://localhost:8080 --sweep 1 4 16 --total 100 \
+    --batch-sweep 1 4 8 --repetitions 3 --warmup-requests 2 \
+    --rewards clip,hpsv2,pickscore \
+    --deployment-mode dedicated --physical-gpu GPU-... --gpu-count 3 \
+    --gpu-sample-interval 0.5 \
+    --output outputs/benchmark/dedicated.json
+
+# Repeat after launching each deployment:
+#   --deployment-mode colocated-no-mps
+#   --deployment-mode colocated-mps
+#   --deployment-mode consolidated
+
+# Benchmark-only consolidated control for compatible CLIP/PickScore weights:
+CUDA_VISIBLE_DEVICES=0 python3 scripts/bench_consolidated_clip_server.py \
+    --weights /path/to/PickScore_v1 --dtype float16
+
+python3 scripts/bench_concurrent.py \
+    --compare-results outputs/benchmark/{dedicated,colocated-no-mps,colocated-mps,consolidated}.json \
+    --score-atol 1e-3 \
+    --output outputs/benchmark/mps-comparison.json
+```
+
+`--deployment-mode` records experiment metadata; it does not alter Ray
+placement or start MPS. Run the client on the service node to collect
+best-effort `nvidia-smi` samples for peak/steady device memory and average
+GPU/DRAM utilization. GPU sampling defaults to off, so invoking the legacy
+CLI without JSON output retains its previous measurement overhead.
+
+Qualify `CUDA_MPS_ACTIVE_THREAD_PERCENTAGE` separately from MPS itself. On the
+tested H20/driver-535 stack, a 50% limit made the float16 CLIP scorer return
+NaN even as a single direct MPS client; 100% produced finite, parity-safe
+scores with two concurrent clients. The published baseline therefore uses
+100%. Do not deploy a lower percentage for a scorer/dtype pair until its
+finite-output and score-parity checks pass.
+
+The JSON captures Python/package/driver versions, failures, full sorted score
+vectors, and reward-evaluations/GPU-hour. Comparison rejects mismatched
+prompts, image hashes, reward sets, request counts, sweeps, or duplicate
+baselines. It checks every score against the dedicated run using
+`--score-atol`, reports mean/stdev across repetitions, and exits non-zero on
+parity or same-card verification failure. `--mps-log-dir` can record explicit
+FAULT/OOM/restart string counts from job-scoped MPS logs.
+
+Latency is client-observed end-to-end time and therefore includes image
+encoding and HTTP overhead. Use the same client host and workload for every
+deployment. Tensor Core activity and reliable per-MPS-client attribution
+require an external profiler and are listed as unavailable rather than
+inferred from average GPU utilization.
+
+The first H20 four-way run is published in
+[`docs/benchmarks/H20_MPS_BASELINE.md`](docs/benchmarks/H20_MPS_BASELINE.md).
+It includes the active-thread-limit failure isolation and the passing MPS
+qualification result; see the report before interpreting the machine-readable
+measurements. The report links the exact dedicated and fractional-GPU
+benchmark configurations used for reproduction.
+
 ## Design conventions
 
 - `history` is a `list[(text, image)]`; T2I scorers look only at the last pair.
