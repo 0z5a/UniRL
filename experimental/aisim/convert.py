@@ -116,6 +116,15 @@ def to_dependency(manifest: Manifest, requests: Sequence[WorkloadRequest]) -> Co
     """Convert predecessor-driven requests, keeping measured service time out of the predictor input."""
     manifest.validate()
     validate_workload(requests)
+    if manifest.replay_contract != "dependency_arrival":
+        raise ValueError(
+            f"to_dependency: manifest.replay_contract is {manifest.replay_contract!r}; "
+            "a dependency conversion must not be run under an observed-arrival contract"
+        )
+    if manifest.capture_status == "incomplete":
+        raise ValueError(
+            "to_dependency: capture_status='incomplete' — an incomplete trace cannot produce a fidelity run"
+        )
     observed = [request.request_id for request in requests if request.arrival.kind == "observed"]
     if observed:
         raise ValueError(
