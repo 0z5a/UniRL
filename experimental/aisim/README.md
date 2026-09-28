@@ -11,7 +11,7 @@
 | --- | --- |
 | `schema.py` | Versioned trace contract: manifest, workload, measured outcomes. Stdlib only. |
 | `convert.py` | Workload envelope → upstream replay input. Reads no measured outcomes. |
-| `runner.py` | Not present. A runner is the only file allowed to import the simulator API, and it lands once a pinned simulator revision is confirmed. |
+| `runner.py` | Optional single-engine open-loop lowering and CPU replay, pinned to AISimulate `0.12.0.dev1`. |
 
 There is deliberately no `requirements.txt`: the adapter has no dependency of its own, and the
 simulator belongs to a separate environment (see the repository rule against adding
@@ -37,8 +37,26 @@ non-additive requirements under `experimental/`).
 
 ## Status of this package
 
-The UniRL-side contract, converters and their CPU tests are implemented. Everything that needs
-the simulator itself — locating the pinned trace parser, running the CLI, request-level result
-export, trajectory-slot admission and the collector barrier — is **NOT_RUN**: no AISimulate /
-Dynamo package is installed in the target environment, and the docs were only read. See the
-evidence directory's capability report for the exact probe results.
+The contract, converters and optional `runner.run_open_loop` are implemented. Install
+`aisimulate==0.12.0.dev1` in the separate replay environment and pass its validated
+`EnginePredictionConfig`, the manifest/workload, and a new output directory. Normal
+training does not import this optional runner.
+
+The runner requires a complete, frozen-policy capture, one aggregated engine, explicit
+KV block size, and disabled prefix caching. It rejects zero-output requests and dependency
+replay. Unique synthetic block IDs encode lengths only; they do not claim real prefix
+identity. One distinct single-turn session per request preserves the source ID in the
+published runtime's `session_id` output, without introducing dependencies between requests.
+The runtime's generated UUID and completion order are never used to guess source identity.
+
+The original manifest/workload, lowered trace, compiled replay specification and native
+request records are retained. A normalized result is written only after checking exact
+ID coverage, arrival/token semantics, completion status and finite ordered timestamps.
+Exceptions propagate. Existing output directories are not overwritten. This in-process
+entry point does not implement a wall-clock deadline or process supervision.
+
+External tests exercised the real native CPU runner with fixed synthetic timing, including
+reordered input and a context-length rejection. These establish parser/runner correctness,
+not H100/H20 fidelity or speedup. A matched hardware profile, real UniRL capture, timeout
+supervision and the GPU comparison remain pending. Fixed timing must not be reported as
+calibrated inference performance.
