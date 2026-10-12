@@ -109,7 +109,8 @@ every checked-in VeOmni recipe:
 
 v1 restrictions, all validated fail-fast in `_validate_fsdp_cfg`:
 `fsdp_mode='full'` only (HSDP stays on `FSDPBackend`), `mixed_precision` must
-stay enabled, and `cpu_offload` / `copy_engine_all_gather` are unsupported.
+stay enabled, and `cpu_offload` / `copy_engine_all_gather` / `expandable_segments` are
+unsupported.
 Separately, with `ep_size > 1`, full **DCP** checkpoints are rejected — the
 expert split is not encoded in the DTensor placements. This is checked at save
 and load time, not at startup, so a run with `checkpoint_format: dcp` fails at
@@ -211,6 +212,13 @@ use LoRA adapter mode. Formats and export live in
   `NCCL_CTA_POLICY` must stay unset or `2`. WORLD keeps the usual `cpu:gloo,cuda:nccl`
   pair, so in `hybrid` mode torch logs one `ProcessGroupGloo::split ... Falling back to
   default options` warning per process while splitting the gloo half; it is expected.
+- **`expandable_segments: true` is for trainside recipes near the memory ceiling** —
+  there, a large request such as an FSDP all-gather buffer that no cached block fits makes
+  the allocator free its cache and retry with a device sync (logged as `memory allocation
+  failed with OOM`). The switch is process-wide and keeps keys already set in
+  `PYTORCH_CUDA_ALLOC_CONF`. It is not validated with a dedicated rollout engine on the
+  trainer's workers: the sglang backends switch it back off, and CUDA IPC weight sync would
+  export expandable segments.
 - **`lora_cfg.frozen_adapters` (OPD teachers) have real weights only after
   `apply_deferred_ops`** — the adapter is injected pre-wrap so meta-init bundles work, but
   its weights load after materialization; reading a teacher earlier sees a null or
