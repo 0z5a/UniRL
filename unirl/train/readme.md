@@ -233,6 +233,9 @@ use LoRA adapter mode. Formats and export live in
   uninitialized adapter. Teachers must be plain LoRA deltas: unconverted base-rewriting
   inits (pissa, olora, ...), `modules_to_save`, `layer_replication`,
   `trainable_token_indices`, DoRA, and `bias != "none"` are rejected at startup.
+- **Every rank must read the same frozen teacher weights** — each rank loads its own shard
+  from its own copy of the path, so after injection the ranks compare each teacher's
+  content sha256 and raise on any difference instead of training against a mixed teacher.
 - **Adapter checkpoints exclude frozen teachers, and resume requires the same teachers** —
   teachers reload from their paths and the checkpoint pins each by a content sha256, so a
   different teacher set or different weights raises on `load`. A checkpoint trained without
