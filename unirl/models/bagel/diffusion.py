@@ -301,15 +301,7 @@ class BagelDiffusionStage(DiffusionStage[BagelDiffusionConditions]):
                 "raw material; prompt-only stored contexts (t2i/t2ti) cannot be "
                 "reproduced from the bare prompt.",
             )
-        if differentiable and conditions.input_images:
-            prompt, input_image, image_shape = conditions.single_prompt()
-            gen, cfg_text, cfg_img = self._build_contexts_from_prompt(
-                prompt,
-                input_image,
-                differentiable=True,
-            )
-            return gen, cfg_text, cfg_img, image_shape
-        if conditions.has_contexts() and not force_rebuild:
+        if conditions.has_contexts() and not force_rebuild and not (differentiable and conditions.input_images):
             return conditions.single()
         prompt, input_image, image_shape = conditions.single_prompt()
         gen, cfg_text, cfg_img = self._build_contexts_from_prompt(
@@ -317,6 +309,14 @@ class BagelDiffusionStage(DiffusionStage[BagelDiffusionConditions]):
             input_image,
             differentiable=differentiable,
         )
+        if conditions.layouts:
+            height, width = image_shape
+            rebuilt = {"kv_len": gen["kv_lens"][0], "rope": gen["ropes"][0], "height": height, "width": width}
+            require(
+                rebuilt == conditions.layouts[0],
+                "BagelDiffusionStage: rollout and replay built different token layouts for this sample: "
+                f"worker {conditions.layouts[0]}, trainer {rebuilt}.",
+            )
         return gen, cfg_text, cfg_img, image_shape
 
     def _build_generation_inputs(
