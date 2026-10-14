@@ -113,6 +113,7 @@ class SGLangDiffusionRolloutEngine(BaseRolloutEngine):
 
     def _generate_core(self, sample: Sample) -> Sample:
         """Synchronous generation for one whole ``Sample``."""
+        sample.reject_row_canvases(engine="SGLangDiffusionRolloutEngine")
         gen = sample.frontier_gen_part(DiffusionSamplingParams)
         require(
             int(gen.batch_size) > 0,

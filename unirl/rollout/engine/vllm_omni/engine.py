@@ -109,6 +109,8 @@ class VLLMOmniRolloutEngine(BaseRolloutEngine):
             "VLLMOmniRolloutEngine.generate: engine is offloaded or its last lifecycle transition failed "
             "(wake_up first).",
         )
+        if not self.adapter.supports_row_canvas:
+            sample.reject_row_canvases(engine=f"VLLMOmniRolloutEngine[{self.cfg.modality}]")
         self.adapter.validate_request(sample)
         if self.adapter.needs_sigmas:
             require(self.schedule_policy is not None, f"{type(self.adapter).__name__} has no sigma schedule policy")

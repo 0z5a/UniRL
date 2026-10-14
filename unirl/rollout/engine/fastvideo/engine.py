@@ -345,6 +345,7 @@ class FastVideoRolloutEngine(BaseRolloutEngine):
 
     def _generate_core(self, sample: Sample) -> Sample:
         """Generate and fill the frontier diffusion Part."""
+        sample.reject_row_canvases(engine="FastVideoRolloutEngine")
         require(
             not self._is_offloaded and self._generator is not None,
             "FastVideoRolloutEngine.generate: engine is offloaded (wake_up first).",
