@@ -90,26 +90,52 @@ class UnifiedModelTrainer(BaseTrainer):
                 f"UnifiedModelTrainer: batch_size ({batch_size}) must be a positive multiple of "
                 f"num_devices ({cfg.num_devices}); reward scoring and unified training scatter whole prompt trees."
             )
-        super().__init__(cfg=cfg, logging_cfg=logging_cfg)
-        self.batch_size = batch_size
-        self._enable_fsdp_offload = bool(enable_fsdp_offload)
         if rollout_pipeline_chunks < 1:
             raise ValueError(
                 f"UnifiedModelTrainer.rollout_pipeline_chunks must be >= 1; got {rollout_pipeline_chunks}."
             )
         self._rollout_pipeline_chunks = rollout_pipeline_chunks
-        if rollout_pipeline_chunks > 1 and rollout_cfg is not None:
-            raise ValueError(
-                "UnifiedModelTrainer.rollout_pipeline_chunks > 1 requires the two-engine "
-                "ar_rollout_cfg/dit_rollout_cfg rollout; the single-engine rollout_cfg path does not pipeline."
-            )
+        single_engine = rollout_cfg is not None
+        if single_engine:
+            if ar_rollout_cfg is not None or dit_rollout_cfg is not None:
+                raise ValueError(
+                    "UnifiedModelTrainer: pass either rollout_cfg (single-engine mode) or "
+                    "ar_rollout_cfg + dit_rollout_cfg (two-engine mode), not both."
+                )
+            if rollout_pipeline_chunks > 1:
+                raise ValueError(
+                    "UnifiedModelTrainer.rollout_pipeline_chunks > 1 requires the two-engine "
+                    "ar_rollout_cfg/dit_rollout_cfg rollout; the single-engine rollout_cfg path does not pipeline."
+                )
+            rollout_parsed = parse_hydra_cfg(rollout_cfg)
+            if "pipeline" not in inspect.signature(rollout_parsed["role_cls"]).parameters:
+                raise ValueError(
+                    "UnifiedModelTrainer: single-engine mode supports only the trainside direct-sampling engine; "
+                    "use ar_rollout + dit_rollout for dedicated rollout engines."
+                )
+            if sync_cfg is not None:
+                raise ValueError(
+                    "UnifiedModelTrainer: single-engine mode samples on the train actors and cannot use a `sync:` block."
+                )
+        else:
+            rollout_parsed = None
+            if ar_rollout_cfg is None or dit_rollout_cfg is None:
+                raise ValueError(
+                    "UnifiedModelTrainer: two-engine mode needs ar_rollout_cfg + dit_rollout_cfg; "
+                    "pass a single rollout_cfg for single-engine (M=1 / UniGRPO) mode."
+                )
+            if sync_cfg is None:
+                raise ValueError("UnifiedModelTrainer: two-engine dedicated rollout requires a `sync:` block.")
+        super().__init__(cfg=cfg, logging_cfg=logging_cfg)
+        self.batch_size = batch_size
+        self._enable_fsdp_offload = enable_fsdp_offload and not single_engine
 
-        self.eval_interval = int(eval_interval)
-        self.eval_num_prompts = int(eval_num_prompts)
-        self.eval_cfg_text_scale = float(eval_cfg_text_scale)
-        self.eval_eta = float(eval_eta)
+        self.eval_interval = eval_interval
+        self.eval_num_prompts = eval_num_prompts
+        self.eval_cfg_text_scale = eval_cfg_text_scale
+        self.eval_eta = eval_eta
 
-        self.dump_dir = str(dump_dir) if dump_dir else None
+        self.dump_dir = dump_dir or None
         self._dump_rollout_id = 0
         if self.dump_dir:
             os.makedirs(self.dump_dir, exist_ok=True)
@@ -140,30 +166,11 @@ class UnifiedModelTrainer(BaseTrainer):
                 image_algorithm=self.image_algorithm,
             )
 
-            self._single_engine = rollout_cfg is not None
             diffusion_params = self.sampling_params["diffusion"]
             self._shared_advantage = diffusion_params.samples_per_prompt == 1
-            self._rollout_is_trainside = False
-            if self._single_engine:
-                self.dp = 1
-                self.ar_rollouts = []
-                self.dit_rollouts = []
-                self.ar_rollout = None
-                self.dit_rollout = None
-                rollout_parsed = parse_hydra_cfg(rollout_cfg)
-                self._rollout_is_trainside = "pipeline" in inspect.signature(rollout_parsed["role_cls"]).parameters
-                if self._rollout_is_trainside:
-                    self.rollout = remote(**rollout_parsed, pipeline=self.pipeline)
-                    self._enable_fsdp_offload = False
-                else:
-                    self.rollout = remote(**rollout_parsed)
+            if single_engine:
+                self.rollout = remote(**rollout_parsed, pipeline=self.pipeline)
                 return
-
-            if ar_rollout_cfg is None or dit_rollout_cfg is None:
-                raise ValueError(
-                    "UnifiedModelTrainer: two-engine mode needs ar_rollout_cfg + dit_rollout_cfg; "
-                    "pass a single rollout_cfg for single-engine (M=1 / UniGRPO) mode."
-                )
 
             # Offload the frozen base before engine boot to avoid colocated OOMs.
             if self._enable_fsdp_offload:
@@ -190,14 +197,11 @@ class UnifiedModelTrainer(BaseTrainer):
                 dit = self._wire_engine(dit_rollout_cfg, anchor_device=base + 4)
                 dit.sleep()
                 self.dit_rollouts.append(dit)
-            self.ar_rollout = self.ar_rollouts[0]
-            self.dit_rollout = self.dit_rollouts[0]
 
-            if sync_cfg is not None:
-                self.weight_sync = remote_hydra(sync_cfg, backend=self.backend)
-                self.weight_sync.set_rollout_targets(
-                    [(eng.role_name, eng.workers) for eng in self.ar_rollouts + self.dit_rollouts]
-                )
+            self.weight_sync = remote_hydra(sync_cfg, backend=self.backend)
+            self.weight_sync.set_rollout_targets(
+                [(eng.role_name, eng.workers) for eng in self.ar_rollouts + self.dit_rollouts]
+            )
 
     def _wire_engine(self, cfg: DictConfig, *, anchor_device: int) -> Any:
         """Build ONE multi-GPU vLLM-Omni engine actor anchored on one worker."""
@@ -244,7 +248,7 @@ class UnifiedModelTrainer(BaseTrainer):
                 f"[input, ar_shell, image_shell]; got {len(sample.parts)} Parts with sampling types "
                 f"{[type(part.sampling_params).__name__ for part in sample.parts]}."
             )
-        if self._single_engine:
+        if self.weight_sync is None:
             return self.rollout.generate(sample)
 
         n = sample.parts[0].batch_size
@@ -383,10 +387,10 @@ class UnifiedModelTrainer(BaseTrainer):
     ) -> Tuple[Dict[str, TrainStepResult], float]:
         """One ``rollout → reward → credit-assign → advantage → step`` pass."""
         t0 = time.perf_counter()
-        if self._single_engine:
+        if self.weight_sync is None:
             sample = self.run_rollout(sample)
         else:
-            if sync_weights and self.weight_sync is not None:
+            if sync_weights:
                 if self._enable_fsdp_offload:
                     self.backend.onload()
                 self.weight_sync.extract()
@@ -395,7 +399,7 @@ class UnifiedModelTrainer(BaseTrainer):
             for _eng in self.ar_rollouts + self.dit_rollouts:
                 _eng.wake_up()
             try:
-                if sync_weights and self.weight_sync is not None:
+                if sync_weights:
                     self.weight_sync.push()
                 sample = self.run_rollout(sample)
             finally:
@@ -451,7 +455,7 @@ class UnifiedModelTrainer(BaseTrainer):
             extra_metrics={"sync_weights": float(bool(sync_weights))},
         )
 
-        if self._enable_fsdp_offload and not self._single_engine:
+        if self._enable_fsdp_offload:
             self.backend.offload()
         return results, mean_reward
 
@@ -526,7 +530,7 @@ class UnifiedModelTrainer(BaseTrainer):
             guidance_scale=self.eval_cfg_text_scale,
         )
         eval_sp = {**self.sampling_params, "diffusion": eval_diffusion}
-        if not self._single_engine and self.weight_sync is not None:
+        if self.weight_sync is not None:
             if self._enable_fsdp_offload:
                 self.backend.onload()
             self.weight_sync.extract()
@@ -573,7 +577,7 @@ class UnifiedModelTrainer(BaseTrainer):
         for start in range(0, usable, chunk):
             sub = all_inputs.slice(start, min(start + chunk, n_prompts))
             request = self._build_request_sample(sub, step, sampling=eval_sp)
-            if self._single_engine:
+            if self.weight_sync is None:
                 generated = self.run_rollout(request)
             else:
                 for eng in self.ar_rollouts + self.dit_rollouts:
