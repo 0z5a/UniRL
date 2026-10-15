@@ -425,7 +425,7 @@ class ARTrainer(BaseTrainer):
             allowed_primitives=self._allowed_input_primitives,
             caller="ARTrainer._build_request_sample",
         )
-        return request.fork(total_samples_per_prompt(sp), sampling_params=sp.get("ar"))
+        return request.fork(total_samples_per_prompt(sp), sampling_params=sp["ar"])
 
     def train_step(
         self,
@@ -498,7 +498,7 @@ class ARTrainer(BaseTrainer):
             result,
             sample,
             step_time_s=time.perf_counter() - t0,
-            trunc_len=getattr(self.sampling_params.get("ar"), "max_new_tokens", None),
+            trunc_len=self.sampling_params["ar"].max_new_tokens,
         )
         return result, mean_reward
 
@@ -512,7 +512,7 @@ class ARTrainer(BaseTrainer):
         import dataclasses
 
         eval_ar = dataclasses.replace(
-            self.sampling_params.get("ar"),
+            self.sampling_params["ar"],
             samples_per_prompt=self.eval_samples_per_prompt,
             temperature=self.eval_temperature,
         )
@@ -600,9 +600,7 @@ class ARTrainer(BaseTrainer):
         n = inputs.batch_size
         if n == 0:
             return inputs
-        rollout_dp = max(1, int(getattr(self.rollout, "dp_size", 1)))
-        reward_dp = max(1, int(getattr(self.reward, "dp_size", 1)))
-        multiple = math.lcm(rollout_dp, reward_dp)
+        multiple = math.lcm(self.rollout.dp_size, self.reward.dp_size)
         pad_n = (-n) % multiple
         if pad_n == 0:
             return inputs
@@ -644,7 +642,8 @@ class ARTrainer(BaseTrainer):
             cond = sample.conditioning()
             prompts = next((list(c.texts) for c in cond if isinstance(c, Texts)), [])
             part = sample.parts[-1]
-            outputs = getattr(part.primitives.get("text"), "texts", None) or []
+            text_prim = part.primitives.get("text")
+            outputs = list(text_prim.texts) if isinstance(text_prim, Texts) else []
             rewards = part.rewards.to(torch.float32).tolist() if part.rewards is not None else []
             os.makedirs(out_dir, exist_ok=True)
             path = os.path.join(out_dir, f"rollout_{int(rollout_id):04d}.jsonl")
