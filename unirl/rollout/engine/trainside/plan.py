@@ -10,7 +10,10 @@ def validate_group_chunks(group_ids: Sequence[str], forward_batch_size: int) -> 
     start = 0
     for group_id, rows in groupby(group_ids):
         if group_id in seen:
-            raise ValueError("Group-boundary validation requires contiguous prompt groups.")
+            raise ValueError(
+                f"Prompt group {group_id!r} reappears at row {start}; group-boundary validation "
+                "requires contiguous prompt groups."
+            )
         seen.add(group_id)
         size = sum(1 for _ in rows)
         end = start + size
